@@ -64,6 +64,7 @@
 		BB000000000000000000000E /* BabyTrackerWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BabyTrackerWidgets.entitlements; sourceTree = "<group>"; };
 		BB000000000000000000000F /* BabyTrackerWidgets-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "BabyTrackerWidgets-Info.plist"; sourceTree = "<group>"; };
 		DD0000000000000000000001 /* BabyTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabyTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		EE0000000000000000000001 /* Base.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Config/Base.xcconfig; sourceTree = "<group>"; };
 /* End PBXFileReference section */
 
 /* Begin PBXFileSystemSynchronizedRootGroup section */
@@ -133,6 +134,7 @@
 			isa = PBXGroup;
 			children = (
 				AA000000000000000000002B /* Apps */,
+				EE0000000000000000000001 /* Base.xcconfig */,
 				DD000000000000000000000A /* UITests */,
 				AA000000000000000000002C /* Packages */,
 				AA0000000000000000000003 /* Products */,
@@ -382,6 +384,7 @@
 /* Begin XCBuildConfiguration section */
 		AA000000000000000000000B /* Debug */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = EE0000000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -415,6 +418,7 @@
 		};
 		AA000000000000000000000C /* Release */ = {
 			isa = XCBuildConfiguration;
+			baseConfigurationReference = EE0000000000000000000001 /* Base.xcconfig */;
 			buildSettings = {
 				ALWAYS_SEARCH_USER_PATHS = NO;
 				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
@@ -444,11 +448,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerLiveActivityPush.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "$(BT_CODE_SIGN_IDENTITY)";
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TEAM123456;
+				DEVELOPMENT_TEAM = "$(BT_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Apps/BabyTracker-Info.plist";
@@ -466,7 +470,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "BabyTracker Development - TEAM123456";
+				PROVISIONING_PROFILE_SPECIFIER = "$(BT_APP_PROFILE)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -480,11 +484,11 @@
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerLiveActivityPush.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "$(BT_CODE_SIGN_IDENTITY)";
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TEAM123456;
+				DEVELOPMENT_TEAM = "$(BT_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
 				INFOPLIST_FILE = "Apps/BabyTracker-Info.plist";
@@ -502,7 +506,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "BabyTracker Development - TEAM123456";
+				PROVISIONING_PROFILE_SPECIFIER = "$(BT_APP_PROFILE)";
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_STRICT_CONCURRENCY = complete;
@@ -515,11 +519,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerWidgets.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "$(BT_CODE_SIGN_IDENTITY)";
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TEAM123456;
+				DEVELOPMENT_TEAM = "$(BT_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Apps/BabyTrackerWidgets-Info.plist";
@@ -533,7 +537,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "BabyTrackerWidgets Development - TEAM123456";
+				PROVISIONING_PROFILE_SPECIFIER = "$(BT_WIDGET_PROFILE)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -547,11 +551,11 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerWidgets.entitlements;
-				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "$(BT_CODE_SIGN_IDENTITY)";
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Manual;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TEAM123456;
+				DEVELOPMENT_TEAM = "$(BT_DEVELOPMENT_TEAM)";
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = NO;
 				INFOPLIST_FILE = "Apps/BabyTrackerWidgets-Info.plist";
@@ -565,7 +569,7 @@
 				MARKETING_VERSION = 1.0;
 				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker.widgets;
 				PRODUCT_NAME = "$(TARGET_NAME)";
-				PROVISIONING_PROFILE_SPECIFIER = "BabyTrackerWidgets Development - TEAM123456";
+				PROVISIONING_PROFILE_SPECIFIER = "$(BT_WIDGET_PROFILE)";
 				SKIP_INSTALL = YES;
 				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
 				SWIFT_EMIT_LOC_STRINGS = YES;
@@ -581,7 +585,7 @@
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TEAM123456;
+				DEVELOPMENT_TEAM = "$(BT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;
@@ -602,7 +606,7 @@
 				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
-				DEVELOPMENT_TEAM = TEAM123456;
+				DEVELOPMENT_TEAM = "$(BT_DEVELOPMENT_TEAM)";
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
 				MARKETING_VERSION = 1.0;

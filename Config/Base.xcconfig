@@ -1,0 +1,17 @@
+// Signing and the built-in sync server, with placeholders for a fresh checkout.
+//
+// Put real values in Config/Local.xcconfig (gitignored; copy
+// Local.xcconfig.example). It is included last, so it overrides these.
+// Simulator builds need none of them.
+
+BT_DEVELOPMENT_TEAM =
+BT_CODE_SIGN_IDENTITY = Apple Development
+BT_APP_PROFILE =
+BT_WIDGET_PROFILE =
+
+// The private server the app offers as its built-in choice. The host only:
+// "//" starts a comment in an xcconfig, so the scheme is added in code.
+BT_HOSTED_SERVER_HOST = baby-sync.example-tailnet.ts.net
+BT_HOSTED_SERVER_INSTANCE_ID = 11111111-2222-4333-8444-555555555555
+
+#include? "Local.xcconfig"

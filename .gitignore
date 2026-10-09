@@ -11,3 +11,6 @@ Packages/BabyTracker/.build/
 # Python source-generator bytecode
 __pycache__/
 *.py[cod]
+
+# Real signing and server values (see Config/Base.xcconfig)
+Config/Local.xcconfig

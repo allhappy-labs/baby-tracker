@@ -2,6 +2,10 @@
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
 <plist version="1.0">
 <dict>
+	<key>BTHostedServerHost</key>
+	<string>$(BT_HOSTED_SERVER_HOST)</string>
+	<key>BTHostedServerInstanceID</key>
+	<string>$(BT_HOSTED_SERVER_INSTANCE_ID)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Baby Tracker</string>
 	<key>UIPrefersShowingLanguageSettings</key>

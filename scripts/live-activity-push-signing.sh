@@ -108,7 +108,24 @@ pbx_config_ids() { # list-id
 }
 
 # One build setting of one configuration, quotes stripped; empty when unset.
+# A value that is exactly "$(NAME)" is resolved from the project's xcconfigs,
+# Config/Local.xcconfig first (it overrides Base), as Xcode would.
 pbx_setting() { # config-id key
+  local value name file line
+  value=$(pbx_raw_setting "$1" "$2")
+  if [[ $value =~ ^\$\(([A-Za-z0-9_]+)\)$ ]]; then
+    name=${BASH_REMATCH[1]}
+    for file in "$(dirname "$PROJECT")/../Config/Local.xcconfig" "$(dirname "$PROJECT")/../Config/Base.xcconfig"; do
+      [ -f "$file" ] || continue
+      line=$(grep -E "^[[:space:]]*$name[[:space:]]*=" "$file" | tail -1) || continue
+      value=$(printf '%s' "${line#*=}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      break
+    done
+  fi
+  printf '%s\n' "$value" | awk NF
+}
+
+pbx_raw_setting() { # config-id key
   awk -v id="$1" -v key="$2" '
     $0 ~ ("^\t\t" id " /\\*") { inside = 1; next }
     inside && /^\t\t\};$/ { inside = 0 }

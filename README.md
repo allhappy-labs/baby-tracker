@@ -55,6 +55,11 @@ make test-ui      # UI tests
 make server-test  # server tests; needs Go and Docker
 ```
 
+Simulator builds need no setup. To build for a device, copy
+`Config/Local.xcconfig.example` to `Config/Local.xcconfig` (gitignored) and fill
+in your signing team, identity and profiles, and your own sync server's host and
+instance ID.
+
 See [`HANDOFF.md`](HANDOFF.md) for project status and
 [`Server/README.md`](Server/README.md) for running the sync server.
 

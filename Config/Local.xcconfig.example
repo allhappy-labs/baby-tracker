@@ -1,0 +1,9 @@
+// Copy to Config/Local.xcconfig (gitignored) and fill in.
+
+BT_DEVELOPMENT_TEAM = ABCDE12345
+BT_CODE_SIGN_IDENTITY = Apple Development: you@example.com (ABCDE12345)
+BT_APP_PROFILE = BabyTracker Development - ABCDE12345
+BT_WIDGET_PROFILE = BabyTrackerWidgets Development - ABCDE12345
+
+BT_HOSTED_SERVER_HOST = baby-sync.your-tailnet.ts.net
+BT_HOSTED_SERVER_INSTANCE_ID = 00000000-0000-0000-0000-000000000000

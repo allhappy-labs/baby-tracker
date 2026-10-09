@@ -17,10 +17,18 @@ public enum FamilySyncComposition {
     /// The private Tailnet endpoint and immutable server identity allocated by
     /// the reviewed Unraid deployment. The selection screen still probes both
     /// values before confirmation; this constant is a pin, not automatic trust.
-    public static let hostedEndpoint: ConfirmedEndpoint? = try? ConfirmedEndpoint(
-        origin: ServerOrigin(validating: "https://baby-sync.example-tailnet.ts.net"),
-        serverInstanceID: UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
-    )
+    ///
+    /// Read from the app's Info.plist, which `Config/Local.xcconfig` fills in;
+    /// without it (a fresh checkout, the package tests) the placeholder pin
+    /// from `Config/Base.xcconfig` applies.
+    public static let hostedEndpoint: ConfirmedEndpoint? = {
+        let info = Bundle.main.infoDictionary ?? [:]
+        let host = (info["BTHostedServerHost"] as? String).flatMap { $0.isEmpty ? nil : $0 }
+            ?? "baby-sync.example-tailnet.ts.net"
+        let instance = (info["BTHostedServerInstanceID"] as? String).flatMap(UUID.init(uuidString:))
+            ?? UUID(uuidString: "11111111-2222-4333-8444-555555555555")!
+        return try? ConfirmedEndpoint(origin: ServerOrigin(validating: "https://\(host)"), serverInstanceID: instance)
+    }()
 
     public static func make(store: BabyStore, keychainAccessGroup: String? = nil, recoveryDiagnostics: @escaping (RefreshRecoveryEvent) -> Void = { _ in }, syncDiagnostics: (any SyncDiagnosticSink)? = nil) -> FamilySettingsViewModel {
         assemble(
