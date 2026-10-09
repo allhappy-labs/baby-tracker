@@ -1,0 +1,16 @@
+{
+  "TCP": {
+    "443": {
+      "HTTPS": true
+    }
+  },
+  "Web": {
+    "baby-sync.example-tailnet.ts.net:443": {
+      "Handlers": {
+        "/": {
+          "Proxy": "http://baby-tracker-sync-app-1:8080"
+        }
+      }
+    }
+  }
+}

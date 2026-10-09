@@ -1,0 +1,23 @@
+{
+  "request": {
+    "protocol_version": "v1",
+    "capabilities": ["identity-v1"],
+    "command_id": "30000000-0000-4000-8000-000000000002",
+    "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "identity_token": "fixture.identity.token",
+    "authorization_code": "",
+    "installation_id": "fixture-installation",
+    "profile": null,
+    "device_continuity": {"device_id":"40000000-0000-4000-8000-000000000001","credential":"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+  },
+  "response": {
+    "protocol_version": "v1",
+    "access_token": "FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFF",
+    "refresh_token": "GGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGGG",
+    "expires_at": "2026-09-20T12:10:00Z",
+    "reauthenticate_at": "2026-09-21T12:00:00Z",
+    "recovery_epoch": 7,
+    "device_id": "40000000-0000-4000-8000-000000000001",
+    "account": {"id":"30000000-0000-4000-8000-000000000001","display_name":"Parent","profile_required":false}
+  }
+}

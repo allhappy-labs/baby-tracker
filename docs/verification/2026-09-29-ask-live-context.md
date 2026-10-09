@@ -1,0 +1,6 @@
+# Ask live and recent context verification
+
+- Source and tests: live feed and sleep timers, current feeding step, completed in-progress steps, 48-hour source-linked timeline, cross-boundary sleep, date-range retrieval, pagination, selected-child isolation, prompt priority, and prompt-leak rejection have focused Swift tests. `make test` passed the repository's literal gate: `OK: 996 tests`.
+- `make build` passed for iPhone 17 Pro Simulator. A signed `generic/platform=iOS` Debug build succeeded. `codesign --verify --deep --strict` passed outside the compiler sandbox, and the provisioning profile includes both paired iPhones. App executable SHA-256: `61f7b9b981230a7465c04d1823b75d15a111e930267983a00b6c8638be3b1650`.
+- `devicectl device install app` succeeded on `Phone A` and `Phone B`. Read-only installed-app queries found `com.olhapi.babytracker` version 1.0, bundle version 1, on both. Neither app was launched; app data was not replaced.
+- The on-device Foundation Models runtime, its actual context capacity for the owner's logs, answer wording, and older-date tool-call behavior remain unverified because the installed apps were not launched. Prompt selection marks omitted recent details and gives the model a local retrieval path, but source and simulator checks alone cannot prove answer quality on the paired phones.

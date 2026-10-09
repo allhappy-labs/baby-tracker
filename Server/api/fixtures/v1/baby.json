@@ -1,0 +1,1 @@
+{"mutation_id":"01000000-0000-4000-8000-000000000001","entity_id":"10000000-0000-4000-8000-000000000001","entity_kind":"baby","operation":"create","payload_version":1,"observed_entity_version":0,"client_mutation_time":"2026-09-20T12:34:56.123456Z","import_id":null,"payload":{"name":"Élie","birth_date":"2026-01-12","sort_order":0}}

@@ -1,0 +1,120 @@
+<div id="feeding-history-options">
+  <div class="choices" role="tablist" aria-label="Feeding History layout options">
+    <button type="button" class="choice selected" role="tab" aria-selected="true" aria-controls="layout-a" id="choose-a">A · Timeline</button>
+    <button type="button" class="choice" role="tab" aria-selected="false" aria-controls="layout-b" id="choose-b">B · Session card</button>
+    <button type="button" class="choice" role="tab" aria-selected="false" aria-controls="layout-c" id="choose-c">C · Compact list</button>
+  </div>
+
+  <section class="phone" role="tabpanel" id="layout-a" aria-labelledby="choose-a">
+    <div class="phone-top"><span>20:05</span><span>●●● ◕ ▰</span></div>
+    <header><small>HISTORY</small><h2>Marc</h2><div class="filters"><span class="active">Feed ✓</span><span>Sleep ✓</span><span>Diaper ✓</span></div></header>
+    <main>
+      <div class="day">TODAY <span>Sep 29</span></div>
+      <div class="entry standalone"><div class="entry-icon">●</div><div class="entry-body"><div class="entry-heading"><strong>Bottle</strong><time>18:43</time></div><div class="entry-sub">50 ml · formula + breast milk</div><div class="entry-sub quieter">2 steps · 40 min elapsed</div></div><span class="chevron">›</span></div>
+      <div class="entry"><div class="entry-icon diaper">◈</div><div class="entry-body"><div class="entry-heading"><strong>Diaper</strong><time>18:37</time></div><div class="entry-sub">Mixed</div></div></div>
+      <div class="entry"><div class="entry-icon sleep">☾</div><div class="entry-body"><div class="entry-heading"><strong>Nap</strong><time>17:36</time></div><div class="entry-sub">25 min</div></div></div>
+      <button type="button" class="session-toggle" aria-expanded="true"><span class="entry-icon">●</span><span class="session-head"><span class="entry-heading"><strong>Feeding</strong><time>15:48–16:39</time></span><span class="entry-sub">70 ml · 22 min active · 2 feeds</span></span><span class="chevron fold">⌄</span></button>
+      <div class="steps">
+        <div class="step"><div class="rail"><span class="dot"></span></div><div class="step-body"><div class="entry-heading"><strong>Formula bottle</strong><time>15:48</time></div><div class="entry-sub">20 ml · 10 min</div></div><span class="step-action">⋯</span></div>
+        <div class="step"><div class="rail"><span class="dot"></span></div><div class="step-body"><div class="entry-heading"><strong>Formula bottle</strong><time>16:10</time></div><div class="entry-sub">50 ml · 3 pours · 12 min</div></div><span class="step-action">⋯</span></div>
+      </div>
+      <div class="entry"><div class="entry-icon sleep">☾</div><div class="entry-body"><div class="entry-heading"><strong>Nap</strong><time>14:19</time></div><div class="entry-sub">38 min</div></div></div>
+    </main>
+    <nav><span>⌂<small>Home</small></span><span class="current">≡<small>History</small></span><span>✦<small>Ask</small></span><span>▥<small>Insights</small></span><span>⚙<small>Settings</small></span></nav>
+  </section>
+
+  <section class="phone" role="tabpanel" id="layout-b" aria-labelledby="choose-b" hidden>
+    <div class="phone-top"><span>20:05</span><span>●●● ◕ ▰</span></div>
+    <header><small>HISTORY</small><h2>Marc</h2><div class="filters"><span class="active">Feed ✓</span><span>Sleep ✓</span><span>Diaper ✓</span></div></header>
+    <main>
+      <div class="day">TODAY <span>Sep 29</span></div>
+      <div class="receipt"><div class="entry-heading"><strong>Bottle</strong><time>18:43</time></div><div class="receipt-total">50 ml <span>· 2 steps</span></div><hr><div class="receipt-line"><span>18:43</span><span>Formula</span><strong>20 ml</strong></div><div class="receipt-line"><span>18:51</span><span>Breast milk</span><strong>30 ml</strong></div><button type="button" class="detail-button">View and edit steps ›</button></div>
+      <div class="receipt"><div class="entry-heading"><strong>Feeding session</strong><time>15:48–16:39</time></div><div class="receipt-total">70 ml <span>· 22 min active</span></div><hr><div class="receipt-line"><span>15:48</span><span>Formula bottle</span><strong>20 ml</strong></div><div class="receipt-line"><span>16:10</span><span>Formula bottle</span><strong>50 ml</strong></div><button type="button" class="detail-button">View and edit steps ›</button></div>
+    </main>
+    <nav><span>⌂<small>Home</small></span><span class="current">≡<small>History</small></span><span>✦<small>Ask</small></span><span>▥<small>Insights</small></span><span>⚙<small>Settings</small></span></nav>
+  </section>
+
+  <section class="phone" role="tabpanel" id="layout-c" aria-labelledby="choose-c" hidden>
+    <div class="phone-top"><span>20:05</span><span>●●● ◕ ▰</span></div>
+    <header><small>HISTORY</small><h2>Marc</h2><div class="filters"><span class="active">Feed ✓</span><span>Sleep ✓</span><span>Diaper ✓</span></div></header>
+    <main>
+      <div class="day">TODAY <span>Sep 29</span></div>
+      <div class="entry"><div class="entry-icon">●</div><div class="entry-body"><div class="entry-heading"><strong>Bottle · 50 ml</strong><time>18:43</time></div><div class="entry-sub">Formula + breast milk</div></div><span class="chevron">›</span></div>
+      <div class="entry"><div class="entry-icon diaper">◈</div><div class="entry-body"><div class="entry-heading"><strong>Diaper</strong><time>18:37</time></div><div class="entry-sub">Mixed</div></div></div>
+      <div class="entry"><div class="entry-icon sleep">☾</div><div class="entry-body"><div class="entry-heading"><strong>Nap</strong><time>17:36</time></div><div class="entry-sub">25 min</div></div></div>
+      <div class="entry"><div class="entry-icon">●</div><div class="entry-body"><div class="entry-heading"><strong>Feeding · 70 ml</strong><time>15:48</time></div><div class="entry-sub">2 bottles · 22 min active · 51 min elapsed</div></div><span class="chevron">›</span></div>
+      <div class="entry"><div class="entry-icon sleep">☾</div><div class="entry-body"><div class="entry-heading"><strong>Nap</strong><time>14:19</time></div><div class="entry-sub">38 min</div></div></div>
+    </main>
+    <nav><span>⌂<small>Home</small></span><span class="current">≡<small>History</small></span><span>✦<small>Ask</small></span><span>▥<small>Insights</small></span><span>⚙<small>Settings</small></span></nav>
+  </section>
+</div>
+<style>
+#feeding-history-options{font-family:-apple-system,BlinkMacSystemFont,"SF Pro Text",sans-serif;color:light-dark(#121418,#f4f4f5);color-scheme:light dark;display:flex;flex-direction:column;align-items:center;gap:12px}
+#feeding-history-options *{box-sizing:border-box}
+#feeding-history-options .choices{display:flex;gap:6px;max-width:390px;width:100%;overflow-x:auto;padding:2px}
+#feeding-history-options .choice{border:1px solid light-dark(#d8dbe1,#45484d);background:light-dark(#f3f4f6,#232428);color:inherit;border-radius:999px;padding:8px 11px;white-space:nowrap;font:600 12px inherit;cursor:pointer}
+#feeding-history-options .choice.selected{border-color:light-dark(#c8812e,#e7a14f);background:light-dark(#fff0dc,#473420)}
+#feeding-history-options .phone{width:min(390px,100%);height:690px;overflow:hidden;position:relative;border-radius:31px;border:1px solid light-dark(#cbd0d6,#3a3c40);background:light-dark(#f5f5f7,#111113);box-shadow:0 12px 32px #0003}
+#feeding-history-options .phone[hidden]{display:none}
+#feeding-history-options .phone-top{height:42px;padding:17px 23px 0;display:flex;justify-content:space-between;font-size:14px;font-weight:700}
+#feeding-history-options header{padding:17px 16px 9px;border-bottom:1px solid light-dark(#dedfe2,#292a2e)}
+#feeding-history-options header small{font-size:11px;font-weight:750;letter-spacing:2px;color:light-dark(#666c80,#9fa9c3)}
+#feeding-history-options h2{font-size:24px;line-height:1.2;margin:5px 0 14px}
+#feeding-history-options .filters{display:flex;gap:7px;overflow:hidden;white-space:nowrap}
+#feeding-history-options .filters span{border-radius:999px;padding:7px 10px;background:light-dark(#e8e9ec,#26282b);font-size:12px;font-weight:650}
+#feeding-history-options .filters .active{background:light-dark(#fce8cf,#493521);color:light-dark(#8b4f0d,#ffc276)}
+#feeding-history-options main{height:487px;overflow:hidden;padding:11px 14px 0}
+#feeding-history-options .day{font-size:11px;font-weight:750;letter-spacing:1px;color:light-dark(#64676c,#a5a6aa);padding:5px 4px 9px;display:flex;justify-content:space-between}
+#feeding-history-options .day span{font-weight:500;letter-spacing:0}
+#feeding-history-options .entry,#feeding-history-options .session-toggle{display:flex;align-items:flex-start;gap:10px;width:100%;padding:12px 4px;border:0;border-bottom:1px solid light-dark(#dddee2,#303135);background:transparent;color:inherit;text-align:left}
+#feeding-history-options .entry-icon{width:22px;flex:0 0 22px;color:light-dark(#c47727,#f2af5d);font-size:20px;line-height:22px;text-align:center}
+#feeding-history-options .entry-icon.diaper{color:light-dark(#1b9b8a,#62d3c5)}
+#feeding-history-options .entry-icon.sleep{color:light-dark(#647ac7,#94a5fb)}
+#feeding-history-options .entry-body,#feeding-history-options .session-head,#feeding-history-options .step-body{min-width:0;flex:1}
+#feeding-history-options .entry-heading{display:flex;align-items:baseline;justify-content:space-between;gap:8px;min-width:0}
+#feeding-history-options .entry-heading strong{font-size:15px;line-height:1.2;min-width:0}
+#feeding-history-options time{font-size:12px;white-space:nowrap;color:light-dark(#71747b,#aaabb0);font-variant-numeric:tabular-nums}
+#feeding-history-options .entry-sub{font-size:12px;line-height:1.35;color:light-dark(#676970,#b1b1b5);margin-top:4px}
+#feeding-history-options .entry-sub.quieter{color:light-dark(#898a8f,#85868b)}
+#feeding-history-options .chevron{font-size:20px;color:light-dark(#777b80,#b4b6ba);line-height:17px}
+#feeding-history-options .session-toggle{cursor:pointer;padding-top:14px;padding-bottom:13px}
+#feeding-history-options .session-toggle .entry-heading strong{font-size:16px}
+#feeding-history-options .steps{margin-left:15px;border-bottom:1px solid light-dark(#dddee2,#303135);padding-left:11px}
+#feeding-history-options .steps[hidden]{display:none}
+#feeding-history-options .step{display:flex;align-items:flex-start;gap:9px;min-height:57px;padding:9px 0}
+#feeding-history-options .rail{width:7px;flex:0 0 7px;align-self:stretch;border-left:1px solid light-dark(#d3b591,#715638);position:relative;margin-left:3px}
+#feeding-history-options .dot{width:7px;height:7px;border-radius:50%;background:light-dark(#bc752e,#efa857);position:absolute;left:-4px;top:5px}
+#feeding-history-options .step-action{width:28px;text-align:center;font-size:20px;line-height:20px;color:light-dark(#367dbf,#5eb2ff)}
+#feeding-history-options nav{position:absolute;bottom:7px;left:10px;right:10px;height:63px;border-radius:32px;background:light-dark(#e9e9eb,#2c2d30);border:1px solid light-dark(#d2d2d6,#55565a);display:flex;align-items:center;justify-content:space-around;box-shadow:0 8px 18px #0002}
+#feeding-history-options nav span{display:flex;flex-direction:column;align-items:center;gap:1px;min-width:54px;font-size:20px;line-height:22px}
+#feeding-history-options nav small{font-size:10px}
+#feeding-history-options nav .current{color:light-dark(#247bc6,#55b1ff);font-weight:700}
+#feeding-history-options .receipt{background:light-dark(#fff,#222326);border:1px solid light-dark(#dedfe2,#393a3e);border-radius:16px;padding:15px;margin-bottom:12px}
+#feeding-history-options .receipt-total{font-size:24px;font-weight:750;margin:10px 0}
+#feeding-history-options .receipt-total span{font-size:12px;font-weight:400;color:light-dark(#676970,#b1b1b5)}
+#feeding-history-options hr{border:0;border-top:1px solid light-dark(#e6e6e9,#3b3c40);margin:11px 0}
+#feeding-history-options .receipt-line{display:grid;grid-template-columns:40px 1fr auto;gap:6px;font-size:12px;padding:6px 0;color:light-dark(#676970,#b1b1b5)}
+#feeding-history-options .receipt-line strong{color:light-dark(#121418,#f4f4f5)}
+#feeding-history-options .detail-button{border:0;background:transparent;color:light-dark(#1669ac,#65b7ff);font:600 12px inherit;padding:12px 0 0;cursor:pointer}
+</style>
+<script>
+(() => {
+  const root = document.getElementById('feeding-history-options');
+  const tabs = [...root.querySelectorAll('[role="tab"]')];
+  tabs.forEach(tab => tab.addEventListener('click', () => {
+    tabs.forEach(item => {
+      const active = item === tab;
+      item.setAttribute('aria-selected', String(active));
+      item.classList.toggle('selected', active);
+      root.querySelector('#' + item.getAttribute('aria-controls')).hidden = !active;
+    });
+  }));
+  const toggle = root.querySelector('.session-toggle');
+  toggle.addEventListener('click', () => {
+    const open = toggle.getAttribute('aria-expanded') !== 'true';
+    toggle.setAttribute('aria-expanded', String(open));
+    root.querySelector('.steps').hidden = !open;
+    toggle.querySelector('.fold').textContent = open ? '⌄' : '›';
+  });
+})();
+</script>

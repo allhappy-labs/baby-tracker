@@ -1,0 +1,27 @@
+{
+  "version": "v1",
+  "algorithm": "sha256",
+  "files": {
+    "baby.json": "94c1cc7c9a11ccbe2255a8a8a07fbfd6e2ffdf3f05976cb07b28f95d5e4cf1b7",
+    "canonical-vectors.json": "a755b57c5aff0bb26cf154bb63ff4c2d0953d99a4e13bc07978fe5339cd62edf",
+    "diaper.json": "34833e60dd9071fed337639342e21093e78fde5feef94772813c2ddcafd5bf84",
+    "errors.json": "237fa6ed6ed32ab2e165e6d05f30a3847c3d225235b2cb4687f9b6b717833e52",
+    "feed-bottle.json": "44d4c333bcc9dc621cef966224bd359820c59ba83079d7147b48c60d2bc04071",
+    "feed-breast.json": "fe3d72517e422fd7bbfca39079b045c7af6043b751490ea119f57cf3da9e4e69",
+    "feed-combination.json": "843976c94bbd3bebd5c74cde14d4ff5f6dcc9f62434239abcfefae052f1a4f5b",
+    "feed-solids.json": "9a7f1afcdb34888dcb1a3b50139a1325c567c5b9f063dd91b2965fce8834925d",
+    "import-conflict.json": "c7f698a296066ccb00f38d7bb1c6bcd03769e298772cd3ab45c17202d40e5c21",
+    "import-resolve.json": "a2ded74db639e1545e95567cc092d85c51be467da8c1bd7bc7d8f7669d0c20b2",
+    "live-hint.json": "97451dea62c75823f9e1ea359c341d4735b249febaca310f77f337e0db076183",
+    "mutations.json": "70cd1fcc909d8486ae38abd6273c4fc36159b0c1856dfdb837582f3751746525",
+    "outcomes.json": "e218949106e940f99c7ea516763ae7f8cad45d919327b0f09d0b797d90d424fe",
+    "sleep.json": "996b296c07a0737012e0f266e34819cfb6e81c94cf971fd3fd0f1e9d84d0f353",
+    "snapshot-page.json": "a4af072a10c4d64a53f89b48742acda14534e7c86d88c71dfdf44bbd640fc6c7",
+    "sync-page.json": "c2a2ddc355aca0175b70d04181cd90511e885ef536c9ffd4bec26300c434381e",
+    "timer-feed.json": "73126a0274e7888827fa2d585f0c892c05b609c5f33cccf6db7c8d274fcc0ac7",
+    "timer-sleep.json": "25d9d76bb0a117e1732e416e26925fcdd8e07c4609be6120836f0f9da0d149b8",
+    "supplement.json": "ab787587adc859aae8abaa390cbb9c623c530c0d12c0b567f4f50cf1b6d09e8f",
+    "growth-profile.json": "dcb4af7d11c92d0530b4ab0f9fd50651086700e942e1b2de42137b919128764f",
+    "measurement.json": "121ea2b5865b994e614613d195c706faf394bd8982b180d84b98cd3d15708c25"
+  }
+}

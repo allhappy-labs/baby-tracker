@@ -1,0 +1,13 @@
+.DS_Store
+build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.worktrees/
+
+# Swift Package Manager
+Packages/BabyTracker/.build/
+
+# Python source-generator bytecode
+__pycache__/
+*.py[cod]

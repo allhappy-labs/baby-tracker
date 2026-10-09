@@ -1,0 +1,11 @@
+{
+  "id": "c1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "family_id": "b1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "creator_account_id": "d1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "media_type": "image/jpeg",
+  "byte_size": 12345,
+  "sha256": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+  "lifecycle": "pending",
+  "created_at": "2026-09-20T12:00:00Z",
+  "baby_id": "e1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+}

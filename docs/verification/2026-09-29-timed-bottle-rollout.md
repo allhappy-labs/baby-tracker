@@ -1,0 +1,11 @@
+# Timed bottle rollout — 2026-09-29
+
+The reviewed local `main` commit `20f24815858d9d187d7b28e90dbf33a5bd61e4d7` was deployed after explicit approval. There is no Git remote configured.
+
+- Before cutover, the live server ran revision `6aa153dce4ff9208ee018593ca98d406dfc4f90c` at schema 20. Private health/readiness and socket checks passed. The server instance ID was `<instance-uuid>`.
+- A restricted pre-rollout dump (`backup.pre-20f2481.dump`, SHA-256 `787bd807d4367030942364b5e30c42c25aa8e01e3eb603acc2572a22fef03c4c`) and source/configuration rollback copies were saved under `/mnt/user/appdata/baby-tracker-sync`. After stopping the app, a consistent second dump (`backup.cutover-20f2481.dump`, SHA-256 `b8b9097ad83c4abe66a187c41e44ddd784d0757cb8bec60a630691cb90ba3752`) was verified with `pg_restore --list`.
+- The transferred source archive matched SHA-256 `529b67d21afd44d44477cf5ea2129a8956ac4abc5ab47ac2578833007c43e3da`. The staged image and Compose configuration validated before cutover. Migration 21 completed, and the running image's revision label matches `20f24815858d9d187d7b28e90dbf33a5bd61e4d7`.
+- `verify-unraid-deployment.sh verify` passed after cutover and after phone installation: private HTTPS health/readiness 200, socket upgrade reached the app (401 for a bogus bearer), zero published host ports, and unrelated-container snapshot unchanged. The schema is 21; `current_bottle_started_at` exists; `/v1/server` advertises `timed-bottle-v1` and retains the same instance ID. Record counts stayed at 1 family, 2 memberships, 64 feeds, 29 sleeps, 19 diapers, 2 supplements, and 54 active-timer rows. The bounded 10-minute app log check found zero WARN/ERROR lines.
+- A signed generic iOS device build from this commit passed `codesign --verify --deep --strict`; its provisioning profile includes both paired iPhones. The app executable SHA-256 is `b67e93dc7e2ed858beebe00d465768a014064aaaf9d8df0c1f5565cbb5c0fba3`. `devicectl device install app` succeeded on `Phone A` and `Phone B`; installed-app queries found `com.olhapi.babytracker` version 1.0 on both. Neither physical app was launched.
+
+Physical UI, local SwiftData migration on the installed phones, and actual caregiver sync after launch remain unverified by request.

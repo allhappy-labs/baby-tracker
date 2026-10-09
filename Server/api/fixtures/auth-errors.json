@@ -1,0 +1,17 @@
+{
+  "invalid_request": {
+    "error": {"code":"invalid_request","message":"Invalid request","request_id":"","retryable":false}
+  },
+  "unsupported_capability": {
+    "error": {"code":"unsupported_capability","message":"Unsupported capability","request_id":"","retryable":false}
+  },
+  "not_ready": {
+    "error": {"code":"not_ready","message":"Service is not ready","request_id":"","retryable":true}
+  },
+  "rate_limited": {
+    "error": {"code":"rate_limited","message":"Rate limit exceeded","request_id":"","retryable":true,"retry_after_seconds":61}
+  },
+  "rate_limit_unavailable": {
+    "error": {"code":"rate_limit_unavailable","message":"Rate limit service is unavailable","request_id":"","retryable":true}
+  }
+}

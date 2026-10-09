@@ -1,0 +1,136 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>history-layout.html</title><style>body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px}.subtitle{opacity:.7}</style>
+<style>
+  .phones{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;margin-top:18px}
+  .pick{display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;border-radius:22px;padding:10px;border:2px solid transparent}
+  .pick.selected{border-color:#6c8cff}
+  .pick h3{margin:0}
+  .pick p{margin:0;max-width:300px;font-size:13px;opacity:.8;text-align:center}
+  .ph{width:300px;height:640px;border-radius:40px;background:#0B1020;position:relative;overflow:hidden;
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 7px #1d2233,0 18px 40px rgba(0,0,0,.45)}
+  .sb{display:flex;justify-content:space-between;padding:14px 26px 0;font-size:12px;font-weight:600}
+  .hd{display:flex;align-items:center;justify-content:space-between;padding:12px 18px 2px}
+  .name{font-size:22px;font-weight:700}
+  .fbtn{width:34px;height:34px;border-radius:17px;background:rgba(255,255,255,.07);display:flex;align-items:center;justify-content:center;color:#8B93AD}
+  .tabs{position:absolute;bottom:10px;left:12px;right:12px;height:50px;border-radius:25px;background:rgba(20,24,40,.92);
+        display:flex;justify-content:space-around;align-items:center;font-size:9px;color:#8B93AD}
+  .tabs div{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .tabs .on{color:#EEF1FA}
+  .tabs i{width:18px;height:18px;border-radius:5px;background:currentColor;opacity:.8;display:block}
+  svg.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  svg.sm{width:14px;height:14px}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}.supp{color:#C4A6F5}
+  .num{font-variant-numeric:tabular-nums;font-weight:700}
+  .mut{color:#8B93AD}
+  .day{display:flex;align-items:baseline;justify-content:space-between;padding:14px 18px 6px}
+  .day b{font-size:15px}
+  .tot{display:flex;gap:10px;font-size:12px;align-items:center}
+  .tot span{display:flex;align-items:center;gap:3px}
+  .list{padding:0 12px}
+  .row{display:flex;align-items:center;gap:10px;padding:9px 8px;border-radius:12px}
+  .t{width:42px;font-size:13px;font-variant-numeric:tabular-nums;color:#C9CEDF}
+  .main{flex:1;min-width:0;font-size:14px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .dur{font-size:13px;font-variant-numeric:tabular-nums;color:#C9CEDF}
+  .chip{display:inline-flex;align-items:center;gap:3px;padding:2px 7px;border-radius:9px;background:rgba(255,255,255,.07);font-size:12px;margin-right:4px}
+  .card{background:rgba(255,255,255,.045);border-radius:16px;margin:4px 0}
+  .sub{display:flex;align-items:center;gap:10px;padding:6px 8px 6px 18px;font-size:13px;position:relative}
+  .sub:before{content:"";position:absolute;left:25px;top:0;bottom:0;border-left:1.5px solid rgba(255,255,255,.12)}
+  .dot{width:8px;height:8px;border-radius:4px;background:currentColor;position:relative;z-index:1;flex:none;margin-left:3px}
+  .gap{font-size:11px;padding:0 8px 0 60px;color:#5f6683}
+  .rail{position:absolute;left:12px;top:0;bottom:0;width:4px;border-radius:2px}
+  .thumb{position:absolute;left:0;right:0;bottom:0;height:46%;background:linear-gradient(to top,rgba(108,140,255,.08),transparent);
+         pointer-events:none;border-top:1px dashed rgba(108,140,255,.3)}
+</style>
+
+<h2>History: which list layout reads best?</h2>
+<p class="subtitle">Same morning in all three. No "HISTORY" label and no ⋯ buttons: tap any row → edit sheet (times, details, Delete, Combine, Separate); swipe left → delete. The funnel at top right holds the filters. Icons are the approved set.</p>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="drop" viewBox="0 0 24 24"><path d="M12 2.8c3.9 4.6 6.6 8.2 6.6 11.6a6.6 6.6 0 0 1-13.2 0c0-3.4 2.7-7 6.6-11.6z"/></symbol>
+  <symbol id="bottle" viewBox="0 0 24 24"><path d="M10.4 2.6h3.2"/><path d="M9.6 6.2 10.4 2.6h3.2l.8 3.6z"/><rect x="7.2" y="6.2" width="9.6" height="15" rx="3"/><path d="M7.2 11h3.4M7.2 14.4h3.4M7.2 17.8h3.4"/></symbol>
+  <symbol id="moon" viewBox="0 0 24 24"><path d="M19.8 14.8A8.2 8.2 0 0 1 9.2 4.2a8.2 8.2 0 1 0 10.6 10.6z"/><path d="M16 3.5v3M14.5 5h3"/></symbol>
+  <symbol id="diaper" viewBox="0 0 24 24"><path d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path d="M2.8 6.8H1.2M21.2 6.8h1.6"/><rect x="9.6" y="7.6" width="4.8" height="3.2" rx="1"/></symbol>
+  <symbol id="med" viewBox="0 0 24 24"><rect x="2.6" y="8" width="13.5" height="6.4" rx="3.2" transform="rotate(-40 9.35 11.2)"/><path d="m7.2 9.1 4.4 4"/><path d="M18 13.2c1.8 2.1 3 3.7 3 5.1a3 3 0 0 1-6 0c0-1.4 1.2-3 3-5.1z"/></symbol>
+  <symbol id="funnel" viewBox="0 0 24 24"><path d="M4 5h16l-6 7.5V19l-4-2v-4.5z"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m9 6 6 6-6 6"/></symbol>
+</defs></svg>
+
+<div class="phones">
+
+<!-- ============ A: one row per session ============ -->
+<div class="pick" data-choice="a" onclick="toggleSelect(this)">
+  <div class="ph">
+    <div class="sb"><span>11:52</span><span>●●● ▮</span></div>
+    <div class="hd"><div class="name">Mila</div><div class="fbtn"><svg class="ic sm"><use href="#funnel"/></svg></div></div>
+    <div class="day"><b>Today</b>
+      <div class="tot mut"><span><svg class="ic sm feed"><use href="#drop"/></svg><b class="num" style="color:#EEF1FA">3</b></span><span><svg class="ic sm sleep"><use href="#moon"/></svg><b class="num" style="color:#EEF1FA">5h 27m</b></span><span><svg class="ic sm diaper"><use href="#diaper"/></svg><b class="num" style="color:#EEF1FA">2</b></span></div></div>
+    <div class="list">
+      <div class="row"><span class="t">10:23</span><svg class="ic feed"><use href="#drop"/></svg><span class="main"><span class="chip">L 12m</span><span class="chip">R 15m</span><span class="chip">60 ml</span></span></div>
+      <div class="row"><span class="t">08:40</span><svg class="ic sleep"><use href="#moon"/></svg><span class="main">2h 9m <span class="mut" style="font-size:12px">· 1 wake</span></span><span class="dur">→ 10:49</span></div>
+      <div class="row"><span class="t">08:15</span><svg class="ic diaper"><use href="#diaper"/></svg><span class="main">Wet</span></div>
+      <div class="row"><span class="t">07:30</span><svg class="ic feed"><use href="#drop"/></svg><span class="main"><span class="chip">L 10m</span><span class="chip">R 12m</span></span></div>
+      <div class="row"><span class="t">07:20</span><svg class="ic supp"><use href="#med"/></svg><span class="main">Vitamin D</span></div>
+      <div class="row"><span class="t">04:02</span><svg class="ic sleep"><use href="#moon"/></svg><span class="main">3h 18m</span><span class="dur">→ 07:20</span></div>
+      <div class="row"><span class="t">03:12</span><svg class="ic feed"><use href="#drop"/></svg><span class="main"><span class="chip">L 9m</span><span class="chip">90 ml</span></span></div>
+    </div>
+    <div class="tabs"><div><i></i>Home</div><div class="on"><i></i>History</div><div><i></i>Ask</div><div><i></i>Insights</div><div><i></i>Settings</div></div>
+  </div>
+  <h3>A · One row per session</h3>
+  <p>The densest. A session is a single row: its parts are small chips (L 12m · R 15m · 60 ml). Tapping opens the session sheet, which lists the parts so you can edit each one, plus Separate or Combine.</p>
+</div>
+
+<!-- ============ B: session card with parts ============ -->
+<div class="pick" data-choice="b" onclick="toggleSelect(this)">
+  <div class="ph">
+    <div class="sb"><span>11:52</span><span>●●● ▮</span></div>
+    <div class="hd"><div class="name">Mila</div><div class="fbtn"><svg class="ic sm"><use href="#funnel"/></svg></div></div>
+    <div class="day"><b>Today</b>
+      <div class="tot mut"><span><svg class="ic sm feed"><use href="#drop"/></svg><b class="num" style="color:#EEF1FA">3</b></span><span><svg class="ic sm sleep"><use href="#moon"/></svg><b class="num" style="color:#EEF1FA">5h 27m</b></span><span><svg class="ic sm diaper"><use href="#diaper"/></svg><b class="num" style="color:#EEF1FA">2</b></span></div></div>
+    <div class="list">
+      <div class="card">
+        <div class="row"><span class="t">10:23</span><svg class="ic feed"><use href="#drop"/></svg><span class="main">Feed</span><span class="dur">27m · 60 ml</span></div>
+        <div class="sub feed"><span class="dot"></span><span style="flex:1;color:#EEF1FA">Left</span><span class="mut">10:23 · 12m</span></div>
+        <div class="sub feed"><span class="dot"></span><span style="flex:1;color:#EEF1FA">Right</span><span class="mut">10:38 · 15m</span></div>
+        <div class="sub feed" style="padding-bottom:10px"><span class="dot"></span><span style="flex:1;color:#EEF1FA">Formula 60 ml</span><span class="mut">11:40</span></div>
+      </div>
+      <div class="card">
+        <div class="row"><span class="t">08:40</span><svg class="ic sleep"><use href="#moon"/></svg><span class="main">Sleep</span><span class="dur">2h 9m</span></div>
+        <div class="sub sleep"><span class="dot"></span><span style="flex:1;color:#EEF1FA">1h 2m</span><span class="mut">08:40</span></div>
+        <div class="sub sleep" style="padding-bottom:10px"><span class="dot"></span><span style="flex:1;color:#EEF1FA">1h 1m</span><span class="mut">09:48</span></div>
+      </div>
+      <div class="row"><span class="t">08:15</span><svg class="ic diaper"><use href="#diaper"/></svg><span class="main">Wet</span></div>
+      <div class="row"><span class="t">07:30</span><svg class="ic feed"><use href="#drop"/></svg><span class="main">Feed</span><span class="dur">22m</span></div>
+      <div class="row"><span class="t">07:20</span><svg class="ic supp"><use href="#med"/></svg><span class="main">Vitamin D</span></div>
+    </div>
+    <div class="tabs"><div><i></i>Home</div><div class="on"><i></i>History</div><div><i></i>Ask</div><div><i></i>Insights</div><div><i></i>Settings</div></div>
+  </div>
+  <h3>B · Session card with its parts</h3>
+  <p>Every part is visible and tappable straight from the list. Sessions take more height, so less of the day fits on screen. The newest session is open; older ones are collapsed to their header row (the 07:30 feed).</p>
+</div>
+
+<!-- ============ C: rows + sleep rail ============ -->
+<div class="pick" data-choice="c" onclick="toggleSelect(this)">
+  <div class="ph">
+    <div class="sb"><span>11:52</span><span>●●● ▮</span></div>
+    <div class="hd"><div class="name">Mila</div><div class="fbtn"><svg class="ic sm"><use href="#funnel"/></svg></div></div>
+    <div class="day"><b>Today</b>
+      <div class="tot mut"><span><svg class="ic sm feed"><use href="#drop"/></svg><b class="num" style="color:#EEF1FA">3</b></span><span><svg class="ic sm sleep"><use href="#moon"/></svg><b class="num" style="color:#EEF1FA">5h 27m</b></span><span><svg class="ic sm diaper"><use href="#diaper"/></svg><b class="num" style="color:#EEF1FA">2</b></span></div></div>
+    <div class="list" style="position:relative;padding-left:24px">
+      <div class="row"><span class="t">10:23</span><svg class="ic feed"><use href="#drop"/></svg><span class="main">L 12m · R 15m · 60 ml</span><span class="dur">27m</span></div>
+      <div class="gap">awake 34m</div>
+      <div class="row" style="position:relative"><span class="rail" style="background:#8A9BF0;left:-14px;top:6px;bottom:6px"></span><span class="t">08:40</span><svg class="ic sleep"><use href="#moon"/></svg><span class="main">Sleep · 1 wake</span><span class="dur">2h 9m</span></div>
+      <div class="row"><span class="t">08:15</span><svg class="ic diaper"><use href="#diaper"/></svg><span class="main">Wet</span></div>
+      <div class="row"><span class="t">07:30</span><svg class="ic feed"><use href="#drop"/></svg><span class="main">L 10m · R 12m</span><span class="dur">22m</span></div>
+      <div class="row"><span class="t">07:20</span><svg class="ic supp"><use href="#med"/></svg><span class="main">Vitamin D</span></div>
+      <div class="gap">awake 0m</div>
+      <div class="row" style="position:relative"><span class="rail" style="background:#8A9BF0;left:-14px;top:6px;bottom:6px"></span><span class="t">04:02</span><svg class="ic sleep"><use href="#moon"/></svg><span class="main">Sleep</span><span class="dur">3h 18m</span></div>
+      <div class="gap">feed gap 50m</div>
+      <div class="row"><span class="t">03:12</span><svg class="ic feed"><use href="#drop"/></svg><span class="main">L 9m · 90 ml</span><span class="dur">43m</span></div>
+    </div>
+    <div class="tabs"><div><i></i>Home</div><div class="on"><i></i>History</div><div><i></i>Ask</div><div><i></i>Insights</div><div><i></i>Settings</div></div>
+  </div>
+  <h3>C · Rows, sleep rail and gaps</h3>
+  <p>Like A, but parts are plain text instead of chips, a blue rail marks each sleep, and small grey notes show the gaps (awake 34m) between entries. Tapping opens the same session sheet as A.</p>
+</div>
+
+</div>

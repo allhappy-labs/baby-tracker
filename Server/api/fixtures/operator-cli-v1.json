@@ -1,0 +1,25 @@
+{
+  "version": "v1",
+  "operator_id": "90000000-0000-4000-8000-000000000001",
+  "clock": "2026-09-20T12:00:00Z",
+  "examples": [
+    {
+      "name": "ownership-recover",
+      "expected_digest": "0e9030b6119c2f6834643fc0c17f5681d1ea044ab618e841d2c652b6f02ae37a",
+      "prepare_args": ["ownership-recover", "prepare", "--command-id", "30000000-0000-4000-8000-000000000061", "--family-id", "20000000-0000-4000-8000-000000000001", "--old-owner-id", "10000000-0000-4000-8000-000000000001", "--new-owner-id", "10000000-0000-4000-8000-000000000002", "--policy-id", "owner-policy-test-v1", "--evidence-reference", "case_test_0001", "--expected-revision", "42", "--reason-code", "owner_identity_unavailable"],
+      "commit_args": ["ownership-recover", "commit", "--command-id", "30000000-0000-4000-8000-000000000061", "--family-id", "20000000-0000-4000-8000-000000000001", "--old-owner-id", "10000000-0000-4000-8000-000000000001", "--new-owner-id", "10000000-0000-4000-8000-000000000002", "--policy-id", "owner-policy-test-v1", "--evidence-reference", "case_test_0001", "--expected-revision", "42", "--reason-code", "owner_identity_unavailable", "--confirmation-digest", "0e9030b6119c2f6834643fc0c17f5681d1ea044ab618e841d2c652b6f02ae37a", "--confirmation-expires-at", "2026-09-20T12:05:00Z"]
+    },
+    {
+      "name": "entitlement-grant",
+      "expected_digest": "35c9bfa1a62100f8cc06d8d04f74feafd46cde8b944b40826e2e1d5b402f3e82",
+      "prepare_args": ["entitlement", "grant", "prepare", "--command-id", "30000000-0000-4000-8000-000000000062", "--family-id", "20000000-0000-4000-8000-000000000001", "--key", "family_sync", "--source", "hosted_beta", "--expires-at", "2027-09-20T12:00:00Z", "--policy-id", "entitlement-policy-test-v1", "--evidence-reference", "entitlement_test_0001", "--expected-revision", "42", "--reason-code", "beta_extension"],
+      "commit_args": ["entitlement", "grant", "commit", "--command-id", "30000000-0000-4000-8000-000000000062", "--family-id", "20000000-0000-4000-8000-000000000001", "--key", "family_sync", "--source", "hosted_beta", "--expires-at", "2027-09-20T12:00:00Z", "--policy-id", "entitlement-policy-test-v1", "--evidence-reference", "entitlement_test_0001", "--expected-revision", "42", "--reason-code", "beta_extension", "--confirmation-digest", "35c9bfa1a62100f8cc06d8d04f74feafd46cde8b944b40826e2e1d5b402f3e82", "--confirmation-expires-at", "2026-09-20T12:05:00Z"]
+    },
+    {
+      "name": "entitlement-suspend",
+      "expected_digest": "5ff8150ff438cc3a471ccba9b6bb23529de13080e19d97339518c9b519065dcc",
+      "prepare_args": ["entitlement", "suspend", "prepare", "--command-id", "30000000-0000-4000-8000-000000000063", "--family-id", "20000000-0000-4000-8000-000000000001", "--key", "family_sync", "--source", "hosted_beta", "--expires-at", "2027-09-20T12:00:00Z", "--policy-id", "entitlement-policy-test-v1", "--evidence-reference", "entitlement_test_0002", "--expected-revision", "42", "--reason-code", "abuse_suspension"],
+      "commit_args": ["entitlement", "suspend", "commit", "--command-id", "30000000-0000-4000-8000-000000000063", "--family-id", "20000000-0000-4000-8000-000000000001", "--key", "family_sync", "--source", "hosted_beta", "--expires-at", "2027-09-20T12:00:00Z", "--policy-id", "entitlement-policy-test-v1", "--evidence-reference", "entitlement_test_0002", "--expected-revision", "42", "--reason-code", "abuse_suspension", "--confirmation-digest", "5ff8150ff438cc3a471ccba9b6bb23529de13080e19d97339518c9b519065dcc", "--confirmation-expires-at", "2026-09-20T12:05:00Z"]
+    }
+  ]
+}

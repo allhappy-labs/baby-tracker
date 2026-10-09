@@ -1,0 +1,19 @@
+{
+  "request": {
+    "protocol_version": "v1",
+    "capabilities": ["identity-v1"]
+  },
+  "response": {
+    "protocol_version": "v1",
+    "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "canonical_origin": "https://sync.example.test",
+    "expires_at": "2026-09-20T12:05:00Z"
+  },
+  "reserved_capabilities": [
+    "identity-v1",
+    "family-lifecycle-v1",
+    "recovery-v1",
+    "device-continuity-v1"
+  ]
+}

@@ -1,0 +1,138 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>icons-v3</title><style>body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px}.subtitle{opacity:.7}.option,.pick{border:1px solid #333;border-radius:14px;padding:12px;margin:10px 0}.letter{display:inline-block;padding:2px 8px;background:#333;border-radius:6px;margin-right:8px}</style>
+<style>
+  .row{display:flex;gap:14px;flex-wrap:wrap;margin:10px 0 4px}
+  .cell{width:92px;display:flex;flex-direction:column;align-items:center;gap:8px;font-size:12px;opacity:.9}
+  .tile{width:64px;height:64px;border-radius:20px;display:grid;place-items:center}
+  .night{background:#0B1020;border-radius:22px;padding:18px 18px 14px;margin-top:8px}
+  svg.l{width:38px;height:38px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  svg.f{width:38px;height:38px;stroke:currentColor;stroke-width:1.6;stroke-linecap:round;stroke-linejoin:round}
+  svg.f{--fill:currentColor;--fo:.35}
+  .fill{fill:var(--fill,none);fill-opacity:var(--fo,1)}
+  .mark{fill:currentColor;stroke:none}
+  .ln{fill:none}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}.supp{color:#C4A6F5}.solid{color:#E89A7B}.grow{color:#9FD27A}
+  .bgF{background:rgba(242,176,97,.14)}.bgS{background:rgba(138,155,240,.14)}.bgD{background:rgba(95,211,196,.14)}
+  .bgP{background:rgba(196,166,245,.14)}.bgO{background:rgba(232,154,123,.14)}.bgG{background:rgba(159,210,122,.14)}
+  .lbl{color:#EEF1FA}
+  .small{display:flex;gap:16px;align-items:center;margin-top:12px;color:#8B93AD;font-size:11px}
+  .small svg{width:18px!important;height:18px!important}
+  .dvar{display:flex;gap:18px}
+  .dvar .tile{width:84px;height:84px;border-radius:24px}
+  .dvar svg{width:50px!important;height:50px!important}
+  .opt-inner{display:flex;flex-direction:column;gap:10px}
+</style>
+
+<h2>Icons: which style, and which diaper?</h2>
+<p class="subtitle">Shown on the dark background at real-ish size, plus tiny (18pt) like in the status line. Breast sides carry the letter inside the drop, so L/R is readable at a glance. Pick a style (A or B) and a diaper (1, 2 or 3).</p>
+
+<svg width="0" height="0" style="position:absolute">
+<defs>
+  <!-- breast drop with letter -->
+  <symbol id="drop" viewBox="0 0 24 24"><path class="fill" d="M12 2.8c3.9 4.6 6.6 8.2 6.6 11.6a6.6 6.6 0 0 1-13.2 0c0-3.4 2.7-7 6.6-11.6z"/></symbol>
+  <!-- bottle -->
+  <symbol id="bottle" viewBox="0 0 24 24"><path class="ln" d="M10.4 2.6h3.2"/><path class="fill" d="M9.6 6.2 10.4 2.6h3.2l.8 3.6z"/><rect class="fill" x="7.2" y="6.2" width="9.6" height="15" rx="3"/><path class="ln" d="M7.2 11h3.4M7.2 14.4h3.4M7.2 17.8h3.4"/></symbol>
+  <!-- sleep -->
+  <symbol id="moon" viewBox="0 0 24 24"><path class="fill" d="M19.8 14.8A8.2 8.2 0 0 1 9.2 4.2a8.2 8.2 0 1 0 10.6 10.6z"/><path class="ln" d="M16 3.5v3M14.5 5h3"/></symbol>
+  <!-- solids: bowl + spoon -->
+  <symbol id="bowl" viewBox="0 0 24 24"><path class="fill" d="M3.5 12h17a8.5 7.5 0 0 1-17 0z"/><path class="ln" d="M9 19.5h6M14.5 9.5 19 3.5"/></symbol>
+  <!-- supplement: dropper -->
+  <symbol id="dropper" viewBox="0 0 24 24"><path class="fill" d="M13.2 6.6l4.2 4.2-7.6 7.6-3.3.9.9-3.3z"/><path class="ln" d="M12.4 5.8l5.8 5.8M15.6 4.4a2.1 2.1 0 0 1 3 3l-1.2 1.2-3-3z"/><path class="ln" d="M5 21.2c-.9 0-1.6-.7-1.6-1.5 0-.8 1.6-2.6 1.6-2.6s1.6 1.8 1.6 2.6c0 .8-.7 1.5-1.6 1.5z"/></symbol>
+  <!-- growth: baby scale -->
+  <symbol id="scale" viewBox="0 0 24 24"><path class="fill" d="M4 20.5h16l-1.6-9H5.6z"/><path class="ln" d="M3 8.5c3-2.8 15-2.8 18 0M12 11.5V7"/></symbol>
+
+  <!-- diaper v1: briefs with tape tabs -->
+  <symbol id="d1" viewBox="0 0 24 24"><path class="fill" d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path class="ln" d="M2.8 6.8H1.2M21.2 6.8h1.6"/><rect class="ln" x="9.6" y="7.6" width="4.8" height="3.2" rx="1"/></symbol>
+  <!-- diaper v2: front view, rounded bottom, waistband line -->
+  <symbol id="d2" viewBox="0 0 24 24"><path class="fill" d="M3.2 4.8h17.6v4c0 6.6-3.9 11-8.8 11s-8.8-4.4-8.8-11z"/><path class="ln" d="M3.2 8.2h17.6M3.2 6.2H1.4M20.8 6.2h1.8"/><rect class="ln" x="9.6" y="10.4" width="4.8" height="3.4" rx="1"/></symbol>
+  <!-- diaper v3: folded diaper, triangular with pin-like tabs -->
+  <symbol id="d3" viewBox="0 0 24 24"><path class="fill" d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path class="ln" d="M5.2 9.6c1.9 1.2 3 3.6 3.4 7.4M18.8 9.6c-1.9 1.2-3 3.6-3.4 7.4"/></symbol>
+
+  <!-- diaper contents marks -->
+  <symbol id="wet" viewBox="0 0 24 24"><path class="mark" d="M12 4c2.6 3.1 4.4 5.5 4.4 7.8a4.4 4.4 0 0 1-8.8 0C7.6 9.5 9.4 7.1 12 4z"/></symbol>
+  <symbol id="dirty" viewBox="0 0 24 24"><circle class="mark" cx="12" cy="12" r="5"/></symbol>
+</defs>
+</svg>
+
+<div class="options">
+
+<div class="option" data-choice="style-a" onclick="toggleSelect(this)">
+  <div class="letter">A</div>
+  <div class="content opt-inner">
+    <h3>Line — clean outlines, like iOS SF Symbols "regular"</h3>
+    <div class="night">
+      <div class="row">
+        <div class="cell"><div class="tile bgF feed"><svg class="l" viewBox="0 0 24 24"><use href="#drop"/><text x="12" y="17.6" text-anchor="middle" font-size="9" font-weight="800" fill="currentColor" stroke="none" font-family="-apple-system,sans-serif">L</text></svg></div><span class="lbl">Left</span></div>
+        <div class="cell"><div class="tile bgF feed"><svg class="l" viewBox="0 0 24 24"><use href="#drop"/><text x="12" y="17.6" text-anchor="middle" font-size="9" font-weight="800" fill="currentColor" stroke="none" font-family="-apple-system,sans-serif">R</text></svg></div><span class="lbl">Right</span></div>
+        <div class="cell"><div class="tile bgF feed"><svg class="l"><use href="#bottle"/></svg></div><span class="lbl">Bottle</span></div>
+        <div class="cell"><div class="tile bgS sleep"><svg class="l"><use href="#moon"/></svg></div><span class="lbl">Sleep</span></div>
+        <div class="cell"><div class="tile bgD diaper"><svg class="l"><use href="#d1"/></svg></div><span class="lbl">Diaper</span></div>
+        <div class="cell"><div class="tile bgO solid"><svg class="l"><use href="#bowl"/></svg></div><span class="lbl">Solids</span></div>
+        <div class="cell"><div class="tile bgP supp"><svg class="l"><use href="#dropper"/></svg></div><span class="lbl">Vitamin D</span></div>
+        <div class="cell"><div class="tile bgG grow"><svg class="l"><use href="#scale"/></svg></div><span class="lbl">Growth</span></div>
+      </div>
+      <div class="small">
+        <svg class="l feed" viewBox="0 0 24 24"><use href="#drop"/></svg><span>2h 10m</span>
+        <svg class="l sleep"><use href="#moon"/></svg><span>40m</span>
+        <svg class="l diaper"><use href="#d1"/></svg><span>1h 5m</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+<div class="option" data-choice="style-b" onclick="toggleSelect(this)">
+  <div class="letter">B</div>
+  <div class="content opt-inner">
+    <h3>Filled tint — outline plus a soft fill; heavier, easier to spot half-asleep</h3>
+    <div class="night">
+      <div class="row">
+        <div class="cell"><div class="tile bgF feed"><svg class="f" viewBox="0 0 24 24"><use href="#drop"/><text x="12" y="17.6" text-anchor="middle" font-size="9" font-weight="800" fill="#0B1020" stroke="none" font-family="-apple-system,sans-serif">L</text></svg></div><span class="lbl">Left</span></div>
+        <div class="cell"><div class="tile bgF feed"><svg class="f" viewBox="0 0 24 24"><use href="#drop"/><text x="12" y="17.6" text-anchor="middle" font-size="9" font-weight="800" fill="#0B1020" stroke="none" font-family="-apple-system,sans-serif">R</text></svg></div><span class="lbl">Right</span></div>
+        <div class="cell"><div class="tile bgF feed"><svg class="f"><use href="#bottle"/></svg></div><span class="lbl">Bottle</span></div>
+        <div class="cell"><div class="tile bgS sleep"><svg class="f"><use href="#moon"/></svg></div><span class="lbl">Sleep</span></div>
+        <div class="cell"><div class="tile bgD diaper"><svg class="f"><use href="#d1"/></svg></div><span class="lbl">Diaper</span></div>
+        <div class="cell"><div class="tile bgO solid"><svg class="f"><use href="#bowl"/></svg></div><span class="lbl">Solids</span></div>
+        <div class="cell"><div class="tile bgP supp"><svg class="f"><use href="#dropper"/></svg></div><span class="lbl">Vitamin D</span></div>
+        <div class="cell"><div class="tile bgG grow"><svg class="f"><use href="#scale"/></svg></div><span class="lbl">Growth</span></div>
+      </div>
+      <div class="small">
+        <svg class="f feed" viewBox="0 0 24 24"><use href="#drop"/></svg><span>2h 10m</span>
+        <svg class="f sleep"><use href="#moon"/></svg><span>40m</span>
+        <svg class="f diaper"><use href="#d1"/></svg><span>1h 5m</span>
+      </div>
+    </div>
+  </div>
+</div>
+
+</div>
+
+<h3 style="margin-top:26px">Diaper shape</h3>
+<p class="subtitle">Shown in style B with the "wet / dirty" marks the Diaper sheet and History would use.</p>
+<div class="options">
+  <div class="option" data-choice="diaper-1" onclick="toggleSelect(this)">
+    <div class="letter">1</div>
+    <div class="content"><div class="night dvar">
+      <div class="tile bgD diaper"><svg class="f"><use href="#d1"/></svg></div>
+      <div class="tile bgD diaper" style="position:relative"><svg class="f"><use href="#d1"/></svg><svg class="f" style="position:absolute;right:4px;bottom:4px;width:26px!important;height:26px!important;color:#7FD8FF;background:#0B1020;border-radius:13px"><use href="#wet"/></svg></div>
+      <div class="tile bgD diaper" style="position:relative"><svg class="f"><use href="#d1"/></svg><svg class="f" style="position:absolute;right:4px;bottom:4px;width:26px!important;height:26px!important;color:#C9A27A;background:#0B1020;border-radius:13px"><use href="#dirty"/></svg></div>
+      <div style="align-self:center;color:#8B93AD;font-size:12px;max-width:180px">Disposable with tape tabs and the front patch — closest to the real thing.</div>
+    </div></div>
+  </div>
+  <div class="option" data-choice="diaper-2" onclick="toggleSelect(this)">
+    <div class="letter">2</div>
+    <div class="content"><div class="night dvar">
+      <div class="tile bgD diaper"><svg class="f"><use href="#d2"/></svg></div>
+      <div class="tile bgD diaper" style="position:relative"><svg class="f"><use href="#d2"/></svg><svg class="f" style="position:absolute;right:4px;bottom:4px;width:26px!important;height:26px!important;color:#7FD8FF;background:#0B1020;border-radius:13px"><use href="#wet"/></svg></div>
+      <div class="tile bgD diaper" style="position:relative"><svg class="f"><use href="#d2"/></svg><svg class="f" style="position:absolute;right:4px;bottom:4px;width:26px!important;height:26px!important;color:#C9A27A;background:#0B1020;border-radius:13px"><use href="#dirty"/></svg></div>
+      <div style="align-self:center;color:#8B93AD;font-size:12px;max-width:180px">Rounded "nappy" with waistband, tabs and front patch — softer, friendlier.</div>
+    </div></div>
+  </div>
+  <div class="option" data-choice="diaper-3" onclick="toggleSelect(this)">
+    <div class="letter">3</div>
+    <div class="content"><div class="night dvar">
+      <div class="tile bgD diaper"><svg class="f"><use href="#d3"/></svg></div>
+      <div class="tile bgD diaper" style="position:relative"><svg class="f"><use href="#d3"/></svg><svg class="f" style="position:absolute;right:4px;bottom:4px;width:26px!important;height:26px!important;color:#7FD8FF;background:#0B1020;border-radius:13px"><use href="#wet"/></svg></div>
+      <div class="tile bgD diaper" style="position:relative"><svg class="f"><use href="#d3"/></svg><svg class="f" style="position:absolute;right:4px;bottom:4px;width:26px!important;height:26px!important;color:#C9A27A;background:#0B1020;border-radius:13px"><use href="#dirty"/></svg></div>
+      <div style="align-self:center;color:#8B93AD;font-size:12px;max-width:180px">Leg-cuff lines instead of the patch — cleaner at small sizes.</div>
+    </div></div>
+  </div>
+</div>

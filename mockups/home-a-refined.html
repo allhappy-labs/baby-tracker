@@ -1,0 +1,531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baby Tracker — Direction A refined</title>
+<style>
+  :root {
+    --sf: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --sfr: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+    --feed: #f2b061;
+    --sleep: #8a9bf0;
+    --diaper: #5fd3c4;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #17181c; color: #e8e6e3; font-family: var(--sf);
+    padding: 56px 32px 96px; -webkit-font-smoothing: antialiased;
+  }
+  .page-head { max-width: 1500px; margin: 0 auto 52px; }
+  .page-head h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 8px; }
+  .page-head p { color: #8e8d8a; font-size: 15px; max-width: 66ch; line-height: 1.55; }
+  .rack { display: flex; gap: 64px; justify-content: center; flex-wrap: wrap; max-width: 1500px; margin: 0 auto; }
+  .slot { width: 393px; }
+  .slot-head { margin-bottom: 20px; }
+  .slot-letter { font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+                 color: #6f6e6b; text-transform: uppercase; display: block; margin-bottom: 6px; }
+  .slot-head h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .slot-head p { font-size: 13.5px; color: #8e8d8a; line-height: 1.5; margin-top: 7px; }
+
+  .phone {
+    width: 393px; height: 852px; border-radius: 56px; position: relative; overflow: hidden;
+    border: 10px solid #000; box-shadow: 0 30px 70px rgba(0,0,0,.55), 0 0 0 1px #34343a;
+  }
+  .screen {
+    position: absolute; inset: 0; overflow: hidden; color: #e9ecf7;
+    background: radial-gradient(120% 70% at 50% 0%, #1b2547 0%, #0d1224 46%, #080b16 100%);
+  }
+  .island { position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+            width: 122px; height: 35px; background: #000; border-radius: 20px; z-index: 60; }
+  .statusbar { position: absolute; top: 0; left: 0; right: 0; height: 59px; z-index: 55;
+               display: flex; align-items: center; justify-content: space-between;
+               padding: 18px 32px 0; font-size: 15px; font-weight: 600; }
+  .statusbar .glyphs { display: flex; gap: 5px; align-items: center; opacity: .95; }
+  .bar { width: 3px; border-radius: 1px; background: currentColor; }
+  .home-ind { position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+              width: 140px; height: 5px; border-radius: 3px; background: currentColor;
+              opacity: .3; z-index: 60; }
+
+  .content { position: absolute; inset: 59px 0 0; padding: 6px 20px 0; }
+
+  .topline { display: flex; align-items: center; justify-content: space-between; padding: 0 2px 20px; }
+  .topline h1 { font-family: var(--sfr); font-size: 28px; font-weight: 700;
+                letter-spacing: -0.022em; color: #f3f5fd; }
+  .switcher { width: 34px; height: 34px; border-radius: 50%; display: grid; place-items: center;
+              background: rgba(255,255,255,.08); border: 1px solid rgba(255,255,255,.1);
+              color: #aab3d4; }
+  .switcher svg { width: 19px; height: 19px; }
+
+  .ic svg { width: 1em; height: 1em; display: block; }
+  .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  /* ---------- shared: quick-log dock + tab bar ---------- */
+  .dock {
+    position: absolute; left: 16px; right: 16px; bottom: 96px; z-index: 40;
+    display: flex; gap: 9px; padding: 9px; border-radius: 30px;
+    background: rgba(28,36,66,.55); border: 1px solid rgba(255,255,255,.1);
+    backdrop-filter: blur(34px) saturate(170%); -webkit-backdrop-filter: blur(34px) saturate(170%);
+    box-shadow: 0 16px 40px rgba(0,0,0,.45);
+  }
+  .dbtn { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 7px;
+          padding: 17px 0 15px; border-radius: 22px;
+          background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.08); }
+  .dbtn .ic { font-size: 23px; line-height: 1; }
+  .dbtn .tx { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+  .dbtn.feed   { background: rgba(242,176,97,.17); border-color: rgba(242,176,97,.3);  color: #f6c98d; }
+  .dbtn.sleep  { background: rgba(138,155,240,.15); border-color: rgba(138,155,240,.28); color: #b3bdf7; }
+  .dbtn.diaper { background: rgba(95,211,196,.14); border-color: rgba(95,211,196,.26); color: #8fe4d8; }
+
+  .tabs { position: absolute; left: 0; right: 0; bottom: 0; height: 84px; z-index: 50;
+          display: flex; align-items: flex-start; padding-top: 11px;
+          background: rgba(12,17,36,.6); border-top: 1px solid rgba(255,255,255,.07);
+          backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px); }
+  .tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+         font-size: 10.5px; font-weight: 500; color: #6d769b; }
+  .tab .ic { font-size: 21px; }
+  .tab.on { color: #f0c592; }
+
+  /* ============ IDLE — variant 1: three equal cards ============ */
+  .cards { display: flex; flex-direction: column; gap: 13px; }
+  .card {
+    border-radius: 26px; padding: 20px 21px;
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.075);
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  }
+  .card-top { display: flex; align-items: center; gap: 10px; margin-bottom: 13px; }
+  .card-top .ic { font-size: 18px; line-height: 1; }
+  .card-key { font-size: 13px; font-weight: 700; letter-spacing: .07em; text-transform: uppercase; }
+  .card-when {
+    font-family: var(--sfr); font-size: 40px; font-weight: 700; letter-spacing: -0.035em;
+    line-height: 1; color: #f0f2fb; font-variant-numeric: tabular-nums;
+  }
+  .card-when .ago { font-size: 17px; font-weight: 600; color: #8f9ac2; letter-spacing: 0; margin-left: 6px; }
+  .card-detail { font-size: 14.5px; font-weight: 550; color: #9aa4c9; margin-top: 9px; }
+  .c-feed .card-key, .c-feed .card-top .ic { color: var(--feed); }
+  .c-sleep .card-key, .c-sleep .card-top .ic { color: var(--sleep); }
+  .c-diaper .card-key, .c-diaper .card-top .ic { color: var(--diaper); }
+
+  /* ============ IDLE — variant 2: rows + today ============ */
+  .rows { display: flex; flex-direction: column; gap: 11px; }
+  .row {
+    display: flex; align-items: center; gap: 15px; padding: 18px 19px; border-radius: 24px;
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.075);
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  }
+  .row .badge { width: 42px; height: 42px; border-radius: 14px; display: grid; place-items: center;
+                font-size: 20px; flex: none; }
+  .row .mid { flex: 1; min-width: 0; }
+  .row .lab { font-size: 15.5px; font-weight: 650; color: #e6e9f7; letter-spacing: -0.01em; }
+  .row .sub { font-size: 13.5px; color: #8f9ac2; font-weight: 500; margin-top: 3px; }
+  .row .when {
+    font-family: var(--sfr); font-size: 25px; font-weight: 700; letter-spacing: -0.03em;
+    color: #f0f2fb; font-variant-numeric: tabular-nums; text-align: right; line-height: 1;
+  }
+  .row .when small { display: block; font-size: 11px; font-weight: 600; color: #7c86ad;
+                     letter-spacing: .06em; text-transform: uppercase; margin-top: 5px; }
+  .r-feed .badge   { background: rgba(242,176,97,.18); color: var(--feed); }
+  .r-sleep .badge  { background: rgba(138,155,240,.18); color: var(--sleep); }
+  .r-diaper .badge { background: rgba(95,211,196,.16); color: var(--diaper); }
+
+  .today-head {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 30px 6px 13px;
+  }
+  .today-head .t { font-size: 12px; font-weight: 700; letter-spacing: .1em;
+                   text-transform: uppercase; color: #7c86ad; }
+  .today-head .m { font-size: 12.5px; font-weight: 600; color: #6d769b; }
+  .today { display: flex; gap: 10px; }
+  .tcell { flex: 1; padding: 15px 14px; border-radius: 20px;
+           background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
+  .tcell .v { font-family: var(--sfr); font-size: 24px; font-weight: 700;
+              letter-spacing: -0.03em; font-variant-numeric: tabular-nums; }
+  .tcell .k { font-size: 11.5px; font-weight: 600; color: #7c86ad; margin-top: 4px; }
+
+  /* ============ ACTIVE — running timer ============ */
+  .dial-wrap { display: flex; justify-content: center; margin: 14px 0 26px; }
+  .dial { position: relative; width: 252px; height: 252px; }
+  .dial svg.ring { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .dial-glow {
+    position: absolute; inset: 26px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(242,176,97,.16) 0%, rgba(242,176,97,0) 68%);
+    animation: breathe 5.5s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%,100% { opacity: .5; transform: scale(.97); }
+    50%     { opacity: 1;  transform: scale(1.03); }
+  }
+  .dial-face { position: absolute; inset: 0; display: flex; flex-direction: column;
+               align-items: center; justify-content: center; }
+  .dial-eyebrow { font-size: 11.5px; font-weight: 700; letter-spacing: .11em;
+                  text-transform: uppercase; color: var(--feed); }
+  .dial-value { font-family: var(--sfr); font-size: 66px; font-weight: 700;
+                letter-spacing: -0.04em; color: #f8dcb2; line-height: 1;
+                font-variant-numeric: tabular-nums; margin-top: 7px; }
+  .dial-sub { font-size: 14.5px; color: #9aa4c9; font-weight: 550; margin-top: 8px; }
+
+  .side-toggle { display: flex; gap: 9px; margin-bottom: 13px; }
+  .side {
+    flex: 1; text-align: center; padding: 15px 0; border-radius: 20px;
+    font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em;
+    background: rgba(255,255,255,.055); border: 1px solid rgba(255,255,255,.08);
+    color: #9aa4c9;
+  }
+  .side.on { background: rgba(242,176,97,.2); border-color: rgba(242,176,97,.42); color: #f8cd93; }
+  .side small { display: block; font-size: 11.5px; font-weight: 600; opacity: .72; margin-top: 4px; }
+
+  .stop {
+    display: block; text-align: center; padding: 19px 0; border-radius: 24px;
+    font-size: 17.5px; font-weight: 700; letter-spacing: -0.01em;
+    background: rgba(242,176,97,.94); color: #241703;
+    box-shadow: 0 10px 28px rgba(242,176,97,.22);
+  }
+
+  .quiet-rows { display: flex; flex-direction: column; gap: 9px; margin-top: 18px; }
+  .qrow { display: flex; align-items: center; gap: 12px; padding: 13px 16px; border-radius: 18px;
+          background: rgba(255,255,255,.04); border: 1px solid rgba(255,255,255,.06); }
+  .qrow .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .qrow .l { flex: 1; font-size: 14.5px; font-weight: 600; color: #c8cee6; }
+  .qrow .v { font-size: 14.5px; font-weight: 600; color: #8f9ac2; font-variant-numeric: tabular-nums; }
+
+  .notes { max-width: 1500px; margin: 60px auto 0; display: flex; gap: 64px; flex-wrap: wrap; }
+  .note { width: 393px; font-size: 13.5px; line-height: 1.6; color: #a3a19d; }
+  .note h3 { color: #e8e6e3; font-size: 14px; margin-bottom: 9px; font-weight: 600; }
+  .note b { color: #cdcbc7; font-weight: 600; }
+  .note ul { margin: 9px 0 0 17px; }
+  .note li { margin-bottom: 5px; }
+
+  @media (prefers-reduced-motion: reduce) { .dial-glow { animation: none; } }
+
+  @media (max-width: 900px) {
+    body { padding: 24px 12px 60px; }
+    .rack { gap: 40px; }
+    .slot, .note { width: 100%; max-width: 393px; }
+    .phone { zoom: 0.92; }
+    .notes { gap: 32px; margin-top: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true">
+  <symbol id="ic-feed" viewBox="0 0 24 24">
+    <path d="M9 2h6M10 5h4a2 2 0 0 1 2 2v1.6a3 3 0 0 0 .5 1.7l.5.8a4 4 0 0 1 .6 2.1V19a3 3 0 0 1-3 3h-5a3 3 0 0 1-3-3v-5.8a4 4 0 0 1 .6-2.1l.5-.8A3 3 0 0 0 8 8.6V7a2 2 0 0 1 2-2Z"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M8 14h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-sleep" viewBox="0 0 24 24">
+    <path d="M20.5 14.3A8.5 8.5 0 1 1 9.7 3.5a6.8 6.8 0 0 0 10.8 10.8Z"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="ic-diaper" viewBox="0 0 24 24">
+    <path d="M3 5h18v5a11 11 0 0 1-5.5 9.5L12 21l-3.5-1.5A11 11 0 0 1 3 10Z"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M8 10c1.8 1.4 6.2 1.4 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-home" viewBox="0 0 24 24">
+    <path d="M3.5 10.5 12 3.5l8.5 7M5.5 9.3V20h13V9.3" fill="none" stroke="currentColor"
+      stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="ic-list" viewBox="0 0 24 24">
+    <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"
+      fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-chart" viewBox="0 0 24 24">
+    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" fill="none" stroke="currentColor"
+      stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-person" viewBox="0 0 24 24">
+    <circle cx="12" cy="8" r="3.6" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M5 20a7 7 0 0 1 14 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-battery" viewBox="0 0 26 13">
+    <rect x="0.6" y="0.6" width="21" height="11.8" rx="3.4" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+    <rect x="2.3" y="2.3" width="14" height="8.4" rx="2.1" fill="currentColor"/>
+    <path d="M23.4 4.5v4a2.3 2.3 0 0 0 0-4Z" fill="currentColor" opacity=".5"/>
+  </symbol>
+</svg>
+
+<div class="page-head">
+  <h1>Direction A, refined — Home has two honest states</h1>
+  <p>The dial is gone from the idle screen. With nothing running there is no quantity
+     to plot and no target to plot it against, so Home simply reports the last feed,
+     the last sleep, and the last diaper. The dial returns only when a timer is
+     actually counting, and even then its ring shows seconds of the current minute —
+     real data, not a forecast.</p>
+</div>
+
+<div class="rack">
+
+  <!-- ============ IDLE 1 ============ -->
+  <div class="slot">
+    <div class="slot-head">
+      <span class="slot-letter">A1 · nothing running</span>
+      <h2>Three cards</h2>
+      <p>Equal weight, equal size. Each reports one fact at a size you can read across
+         a dark room, with the detail underneath in a quieter voice.</p>
+    </div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="statusbar">
+        <span>2:47</span>
+        <span class="glyphs">
+          <span class="bar" style="height:5px"></span><span class="bar" style="height:8px"></span>
+          <span class="bar" style="height:11px"></span><span class="bar" style="height:11px;opacity:.4"></span>
+          <span style="width:25px;height:12px;margin-left:4px"><svg viewBox="0 0 26 13" style="width:25px;height:12px;display:block"><use href="#ic-battery"/></svg></span>
+        </span>
+      </div>
+
+      <div class="content">
+        <div class="topline">
+          <h1>Mira</h1>
+          <span class="switcher"><svg><use href="#ic-person"/></svg></span>
+        </div>
+
+        <div class="cards">
+          <div class="card c-feed">
+            <div class="card-top">
+              <span class="ic"><svg><use href="#ic-feed"/></svg></span>
+              <span class="card-key">Last feed</span>
+            </div>
+            <div class="card-when">2h 14m<span class="ago">ago</span></div>
+            <div class="card-detail">Breast · left · 18 min · 0:33</div>
+          </div>
+
+          <div class="card c-sleep">
+            <div class="card-top">
+              <span class="ic"><svg><use href="#ic-sleep"/></svg></span>
+              <span class="card-key">Last sleep</span>
+            </div>
+            <div class="card-when">Woke 40m<span class="ago">ago</span></div>
+            <div class="card-detail">Slept 1h 50m · 0:17 – 2:07</div>
+          </div>
+
+          <div class="card c-diaper">
+            <div class="card-top">
+              <span class="ic"><svg><use href="#ic-diaper"/></svg></span>
+              <span class="card-key">Last diaper</span>
+            </div>
+            <div class="card-when">55m<span class="ago">ago</span></div>
+            <div class="card-detail">Wet · 1:52</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="dock">
+        <div class="dbtn feed"><span class="ic"><svg><use href="#ic-feed"/></svg></span><span class="tx">Feed</span></div>
+        <div class="dbtn sleep"><span class="ic"><svg><use href="#ic-sleep"/></svg></span><span class="tx">Sleep</span></div>
+        <div class="dbtn diaper"><span class="ic"><svg><use href="#ic-diaper"/></svg></span><span class="tx">Diaper</span></div>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span class="ic"><svg><use href="#ic-home"/></svg></span>Home</div>
+        <div class="tab"><span class="ic"><svg><use href="#ic-list"/></svg></span>History</div>
+        <div class="tab"><span class="ic"><svg><use href="#ic-chart"/></svg></span>Insights</div>
+      </div>
+      <div class="home-ind"></div>
+    </div></div>
+  </div>
+
+  <!-- ============ IDLE 2 ============ -->
+  <div class="slot">
+    <div class="slot-head">
+      <span class="slot-letter">A2 · nothing running</span>
+      <h2>Three rows + today</h2>
+      <p>Same three facts in a third of the height, buying room for today's totals —
+         the thing you actually want when someone asks how she's eaten.</p>
+    </div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="statusbar">
+        <span>2:47</span>
+        <span class="glyphs">
+          <span class="bar" style="height:5px"></span><span class="bar" style="height:8px"></span>
+          <span class="bar" style="height:11px"></span><span class="bar" style="height:11px;opacity:.4"></span>
+          <span style="width:25px;height:12px;margin-left:4px"><svg viewBox="0 0 26 13" style="width:25px;height:12px;display:block"><use href="#ic-battery"/></svg></span>
+        </span>
+      </div>
+
+      <div class="content">
+        <div class="topline">
+          <h1>Mira</h1>
+          <span class="switcher"><svg><use href="#ic-person"/></svg></span>
+        </div>
+
+        <div class="rows">
+          <div class="row r-feed">
+            <span class="badge"><span class="ic"><svg><use href="#ic-feed"/></svg></span></span>
+            <span class="mid">
+              <span class="lab">Last feed</span>
+              <span class="sub">Breast · left · 18 min</span>
+            </span>
+            <span class="when">2h 14m<small>ago</small></span>
+          </div>
+          <div class="row r-sleep">
+            <span class="badge"><span class="ic"><svg><use href="#ic-sleep"/></svg></span></span>
+            <span class="mid">
+              <span class="lab">Awake</span>
+              <span class="sub">Slept 1h 50m before that</span>
+            </span>
+            <span class="when">40m<small>ago</small></span>
+          </div>
+          <div class="row r-diaper">
+            <span class="badge"><span class="ic"><svg><use href="#ic-diaper"/></svg></span></span>
+            <span class="mid">
+              <span class="lab">Last diaper</span>
+              <span class="sub">Wet · 1:52</span>
+            </span>
+            <span class="when">55m<small>ago</small></span>
+          </div>
+        </div>
+
+        <div class="today-head">
+          <span class="t">Today so far</span>
+          <span class="m">Tue 18 Sep</span>
+        </div>
+        <div class="today">
+          <div class="tcell"><div class="v" style="color:var(--feed)">7</div><div class="k">feeds</div></div>
+          <div class="tcell"><div class="v" style="color:var(--sleep)">9h 20m</div><div class="k">sleep</div></div>
+          <div class="tcell"><div class="v" style="color:var(--diaper)">5</div><div class="k">diapers</div></div>
+        </div>
+      </div>
+
+      <div class="dock">
+        <div class="dbtn feed"><span class="ic"><svg><use href="#ic-feed"/></svg></span><span class="tx">Feed</span></div>
+        <div class="dbtn sleep"><span class="ic"><svg><use href="#ic-sleep"/></svg></span><span class="tx">Sleep</span></div>
+        <div class="dbtn diaper"><span class="ic"><svg><use href="#ic-diaper"/></svg></span><span class="tx">Diaper</span></div>
+      </div>
+      <div class="tabs">
+        <div class="tab on"><span class="ic"><svg><use href="#ic-home"/></svg></span>Home</div>
+        <div class="tab"><span class="ic"><svg><use href="#ic-list"/></svg></span>History</div>
+        <div class="tab"><span class="ic"><svg><use href="#ic-chart"/></svg></span>Insights</div>
+      </div>
+      <div class="home-ind"></div>
+    </div></div>
+  </div>
+
+  <!-- ============ ACTIVE ============ -->
+  <div class="slot">
+    <div class="slot-head">
+      <span class="slot-letter">A · timer running</span>
+      <h2>The dial earns its place</h2>
+      <p>Only shown while something counts. The ring is a seconds hand for the current
+         minute, so it moves visibly and truthfully. No target, no forecast.</p>
+    </div>
+    <div class="phone"><div class="screen">
+      <div class="island"></div>
+      <div class="statusbar">
+        <span>2:47</span>
+        <span class="glyphs">
+          <span class="bar" style="height:5px"></span><span class="bar" style="height:8px"></span>
+          <span class="bar" style="height:11px"></span><span class="bar" style="height:11px;opacity:.4"></span>
+          <span style="width:25px;height:12px;margin-left:4px"><svg viewBox="0 0 26 13" style="width:25px;height:12px;display:block"><use href="#ic-battery"/></svg></span>
+        </span>
+      </div>
+
+      <div class="content">
+        <div class="topline">
+          <h1>Mira</h1>
+          <span class="switcher"><svg><use href="#ic-person"/></svg></span>
+        </div>
+
+        <div class="dial-wrap">
+          <div class="dial">
+            <div class="dial-glow"></div>
+            <svg class="ring" viewBox="0 0 252 252">
+              <circle cx="126" cy="126" r="114" fill="none" stroke="rgba(255,255,255,.07)" stroke-width="9"/>
+              <circle id="secring" cx="126" cy="126" r="114" fill="none" stroke="#f2b061"
+                      stroke-width="9" stroke-linecap="round"
+                      stroke-dasharray="716" stroke-dashoffset="716"/>
+            </svg>
+            <div class="dial-face">
+              <span class="dial-eyebrow">Feeding · left</span>
+              <span class="dial-value" id="elapsed">18:42</span>
+              <span class="dial-sub">Started 2:28</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="side-toggle">
+          <div class="side on">Left<small>18:42</small></div>
+          <div class="side">Right<small>not yet</small></div>
+        </div>
+        <span class="stop">Stop feed</span>
+
+        <div class="quiet-rows">
+          <div class="qrow">
+            <span class="dot" style="background:var(--sleep)"></span>
+            <span class="l">Awake since 2:07</span><span class="v">40m</span>
+          </div>
+          <div class="qrow">
+            <span class="dot" style="background:var(--diaper)"></span>
+            <span class="l">Last diaper · wet</span><span class="v">55m ago</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="tabs">
+        <div class="tab on"><span class="ic"><svg><use href="#ic-home"/></svg></span>Home</div>
+        <div class="tab"><span class="ic"><svg><use href="#ic-list"/></svg></span>History</div>
+        <div class="tab"><span class="ic"><svg><use href="#ic-chart"/></svg></span>Insights</div>
+      </div>
+      <div class="home-ind"></div>
+    </div></div>
+  </div>
+
+</div>
+
+<div class="notes">
+  <div class="note">
+    <h3>A1 — three cards</h3>
+    <b>Reads best in the dark.</b> Each number is ~40pt, so the three facts are legible
+    without focusing. Nothing in the content area is a control, so picking the phone up
+    to look can't write data.
+    <ul>
+      <li>Fills the screen with three facts and nothing else</li>
+      <li>No room for today's totals without scrolling</li>
+      <li>A fourth tracker later means scrolling or shrinking</li>
+    </ul>
+  </div>
+  <div class="note">
+    <h3>A2 — three rows + today</h3>
+    <b>Answers a second question too.</b> The totals strip covers "how much has she had
+    today", which otherwise costs a trip to Insights.
+    <ul>
+      <li>Relative time drops to ~25pt — still large, less commanding</li>
+      <li>Absorbs a fourth and fifth tracker without redesign</li>
+      <li>Denser; slightly more to parse half-asleep</li>
+    </ul>
+  </div>
+  <div class="note">
+    <h3>The running state</h3>
+    <b>One screen, one job.</b> The dock disappears while a timer runs — the actions that
+    matter are switch side and stop, and they take the dock's place so your thumb lands
+    on the same region either way.
+    <ul>
+      <li>Stop is a solid filled button: unmissable, one tap</li>
+      <li>Per-side elapsed is visible before you switch, not after</li>
+      <li>The other two trackers stay reported, quietly, below</li>
+      <li>This layout is what the Live Activity mirrors</li>
+    </ul>
+  </div>
+</div>
+
+<script>
+  // Live ticking so the running state reads as genuinely running.
+  const el = document.getElementById('elapsed');
+  const ring = document.getElementById('secring');
+  const C = 716;
+  let t = 18 * 60 + 42;
+  function tick() {
+    const m = Math.floor(t / 60), s = t % 60;
+    el.textContent = m + ':' + String(s).padStart(2, '0');
+    ring.setAttribute('stroke-dashoffset', C - C * (s / 60));
+    t++;
+  }
+  tick();
+  if (!window.matchMedia('(prefers-reduced-motion: reduce)').matches) setInterval(tick, 1000);
+</script>
+
+</body>
+</html>

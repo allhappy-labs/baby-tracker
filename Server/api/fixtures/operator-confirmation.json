@@ -1,0 +1,27 @@
+{
+  "version": "v1",
+  "operator_id": "90000000-0000-4000-8000-000000000001",
+  "clock": "2026-09-20T12:00:00Z",
+  "confirmation_key_hex": "4242424242424242424242424242424242424242424242424242424242424242",
+  "confirmation_expires_at": "2026-09-20T12:05:00Z",
+  "vectors": [
+    {
+      "operation": "ownership-recover",
+      "confirmation_digest": "0e9030b6119c2f6834643fc0c17f5681d1ea044ab618e841d2c652b6f02ae37a",
+      "evidence_reference": "case_test_0001",
+      "evidence_digest": "99beb25654c5a1b5e54f0560ad6cc46c59edcd1e1074b0c7562cd37ade9fd672"
+    },
+    {
+      "operation": "entitlement-grant",
+      "confirmation_digest": "35c9bfa1a62100f8cc06d8d04f74feafd46cde8b944b40826e2e1d5b402f3e82",
+      "evidence_reference": "entitlement_test_0001",
+      "evidence_digest": "ae11cb7ca4a4db1a8cc773a778603f2b71018f37dd547c0f4a05d43bd8aabd8e"
+    },
+    {
+      "operation": "entitlement-suspend",
+      "confirmation_digest": "5ff8150ff438cc3a471ccba9b6bb23529de13080e19d97339518c9b519065dcc",
+      "evidence_reference": "entitlement_test_0002",
+      "evidence_digest": "883948f1dd98b409a5ba5288fbdd59737744b84ba4047f2cdb1fa4b8770166d0"
+    }
+  ]
+}

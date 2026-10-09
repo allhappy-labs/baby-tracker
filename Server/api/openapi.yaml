@@ -1,0 +1,2520 @@
+openapi: 3.1.0
+info:
+  title: Baby Tracker Family Sync API
+  version: v1
+  description: Versioned JSON contract for the Baby Tracker family sync service.
+servers:
+  - url: https://{host}
+    variables:
+      host:
+        default: sync.example.test
+        description: Canonical HTTPS hostname for this server.
+paths:
+  /v1/live-activities/device:
+    put:
+      summary: registerLiveActivityDevice
+      description: Current family registration, including viewers. Responses use Cache-Control no-store. Maximum body is 16384 bytes. Rate limits are 30 per minute per device and 120 per minute per account.
+      operationId: registerLiveActivityDevice
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: live-activity-push-v1}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityDeviceRegistration'}}}
+      responses:
+        '200': {description: Registration accepted, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityRegistrationReceipt'}}}}
+        '400': {description: Live Activity BadRequest, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityBadRequestError'}}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {description: Live Activity Forbidden, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityForbiddenError'}}}}
+        '409': {description: Live Activity Conflict, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityConflictError'}}}}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {description: Live Activity Unavailable, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityUnavailableError'}}}}
+        '413': {description: Request body exceeds 16 KiB, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/live-activities/activity:
+    put:
+      summary: registerLiveActivityToken
+      description: Current family registration, including viewers. Responses use Cache-Control no-store. Maximum body is 16384 bytes. Rate limits are 30 per minute per device and 120 per minute per account.
+      operationId: registerLiveActivityToken
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: live-activity-push-v1}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityTokenRegistration'}}}
+      responses:
+        '200': {description: Registration accepted, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityRegistrationReceipt'}}}}
+        '400': {description: Live Activity BadRequest, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityBadRequestError'}}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {description: Live Activity Forbidden, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityForbiddenError'}}}}
+        '409': {description: Live Activity Conflict, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityConflictError'}}}}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {description: Live Activity Unavailable, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityUnavailableError'}}}}
+        '413': {description: Request body exceeds 16 KiB, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/live-activities/device/{installation_id}:
+    delete:
+      summary: unregisterLiveActivityDevice
+      description: "Revokes this installation's registration in the current family, including for viewers. The request has no body; the installation and version are in the path and query. Responses use Cache-Control no-store. Rate limits are 30 per minute per device and 120 per minute per account. Unlike registration it needs no worker, APNs key or push configuration: it succeeds, with the same authentication, authorization and version idempotency, on a server whose push is disabled or whose worker is stopped. The server's minute authority sweep also revokes registrations whose session or membership has ended."
+      operationId: unregisterLiveActivityDevice
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: live-activity-push-v1}}
+        - {name: installation_id, in: path, required: true, schema: {$ref: '#/components/schemas/CanonicalUUID'}}
+        - {name: version, in: query, required: true, schema: {$ref: '#/components/schemas/LiveActivityCounter'}}
+      responses:
+        '204': {description: Installation registration revoked, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}}
+        '400': {description: Live Activity BadRequest, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityBadRequestError'}}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {description: Live Activity Forbidden, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityForbiddenError'}}}}
+        '409': {description: Live Activity Conflict, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityConflictError'}}}}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {description: Live Activity Unavailable, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityUnavailableError'}}}}
+  /v1/export:
+    post:
+      summary: Request an owner-only JSON archive of the current family
+      operationId: createExport
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: export-v1}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CreateExportRequest'}}}
+      responses:
+        '200': {description: Idempotent replay, content: {application/json: {schema: {$ref: '#/components/schemas/ExportStatus'}}}}
+        '202': {description: Export queued, content: {application/json: {schema: {$ref: '#/components/schemas/ExportStatus'}}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/export/{id}:
+    get:
+      summary: Check an owner export job
+      operationId: exportStatus
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/CanonicalUUID'}}
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: export-v1}}
+      responses:
+        '200': {description: Current export state, content: {application/json: {schema: {$ref: '#/components/schemas/ExportStatus'}}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {description: Unknown export, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/export/{id}/download:
+    get:
+      summary: Download a verified JSON archive as the current owner
+      operationId: downloadExport
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: id, in: path, required: true, schema: {$ref: '#/components/schemas/CanonicalUUID'}}
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: export-v1}}
+      responses:
+        '200':
+          description: Verified plaintext family archive; never cache.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/ArchiveV1'}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {description: Unknown export, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410': {description: Export expired, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/family/import/resolve:
+    post:
+      summary: Stage a resumable import chunk and finalize exact baby mapping
+      operationId: resolveImport
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: 'records-v1,import-resolver-v1'}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ImportResolveRequest'}}}
+      responses:
+        '200':
+          description: Durable chunk checkpoint with the first bounded conflict page.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/ImportResolveResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410':
+          description: The incomplete import expired; a new import UUID is required.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '413':
+          description: Request body exceeds the configured bound.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/import/{import_id}:
+    get:
+      summary: Resume an import or continue its revision-bound conflict page
+      operationId: importStatus
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: import_id, in: path, required: true, schema: {$ref: '#/components/schemas/CanonicalUUID'}}
+        - {name: page_token, in: query, required: false, schema: {type: string, minLength: 1, maxLength: 512}}
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: 'records-v1,import-resolver-v1'}}
+      responses:
+        '200':
+          description: Durable mapping and bounded unresolved conflict page.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/ImportResolveResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404':
+          description: No import is visible for this family.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410':
+          description: Import or continuation expired.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/import/{import_id}/resolve-conflict:
+    post:
+      summary: Record one explicit owner choice against the current exact match graph
+      operationId: resolveImportConflict
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: import_id, in: path, required: true, schema: {$ref: '#/components/schemas/CanonicalUUID'}}
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: 'records-v1,import-resolver-v1'}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ImportConflictRequest'}}}
+      responses:
+        '200':
+          description: Byte-stable owner choice checkpoint and first conflict page.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/ImportResolveResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404':
+          description: No import is visible for this family.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410':
+          description: The import expired.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /healthz:
+    get:
+      summary: Report process liveness
+      operationId: healthz
+      responses:
+        '200':
+          description: The process is live.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+  /readyz:
+    get:
+      summary: Report dependency readiness
+      operationId: readyz
+      responses:
+        '200':
+          description: The service is ready to accept traffic.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/StatusResponse'
+        '503':
+          description: The service is not ready.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/server:
+    get:
+      summary: Describe the public server protocol surface
+      operationId: serverInfo
+      responses:
+        '200':
+          description: Server identity and supported API capabilities.
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ServerInfo'
+  /v1/live:
+    get:
+      summary: Receive family-scoped cursor hints over WebSocket
+      operationId: receiveLiveHints
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: 'records-v1,live-hints-v1'}}
+        - {name: Sec-WebSocket-Protocol, in: header, required: true, schema: {type: string, const: baby-tracker.v1}}
+      responses:
+        '101':
+          description: WebSocket upgrade; server messages are strict cursor-only LiveHint objects.
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/sync:
+    post:
+      summary: Apply an ordered mutation batch and pull a fixed-high-water journal page
+      description: >-
+        Older clients also send X-Baby-Tracker-Supplements, X-Baby-Tracker-Growth,
+        X-Baby-Tracker-Timed-Bottle and X-Baby-Tracker-Feeding-Session. The server ignores
+        them; a request is served the same with or without them.
+      operationId: applyAndPullSync
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - name: X-Baby-Tracker-Capabilities
+          in: header
+          required: true
+          schema:
+            type: string
+            enum: [records-v1, 'records-v1,timer-commands-v1']
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/SyncRequest'}}}
+      responses:
+        '200':
+          description: Ordered outcomes and a bounded fixed-high-water journal page.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/SyncResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '413':
+          description: The configured sync request-body bound was exceeded.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '410':
+          description: The authenticated continuation token expired.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/sync/snapshot:
+    get:
+      summary: Read or continue a consistent materialized family snapshot
+      description: >-
+        Older clients also send X-Baby-Tracker-Supplements, X-Baby-Tracker-Growth,
+        X-Baby-Tracker-Timed-Bottle and X-Baby-Tracker-Feeding-Session. The server ignores
+        them; a request is served the same with or without them.
+      operationId: readSyncSnapshot
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: 'records-v1,snapshot-v1'}}
+        - {name: page_token, in: query, required: false, schema: {type: string, maxLength: 512}}
+      responses:
+        '200':
+          description: A bounded page from one consistent materialized snapshot.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/SnapshotResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410':
+          description: The authenticated page token expired.
+          content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/auth/challenge:
+    post:
+      summary: Create a short-lived single-use Apple authentication challenge
+      operationId: createAuthChallenge
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/ChallengeRequest'
+      responses:
+        '200':
+          description: A nonce-binding challenge valid for five minutes.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ChallengeResponse'
+        '400':
+          description: The strict request contract was not satisfied.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: The caller exceeded the challenge IP limit.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+            Retry-After:
+              schema:
+                type: integer
+                minimum: 1
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '503':
+          description: Recovery, identity storage, or rate limiting is unavailable.
+          headers:
+            Cache-Control:
+              schema:
+                type: string
+                const: no-store
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+  /v1/auth/apple:
+    post:
+      summary: Exchange a verified Apple proof for an opaque session
+      operationId: exchangeAppleSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AppleExchangeRequest'
+      responses:
+        '200':
+          description: An initial or continued-device opaque session.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionResponse'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/AuthUnauthorized'}
+        '409': {$ref: '#/components/responses/AuthConflict'}
+        '429': {$ref: '#/components/responses/AuthRateLimited'}
+        '503': {$ref: '#/components/responses/AuthUnavailable'}
+  /v1/auth/refresh:
+    post:
+      summary: Rotate an opaque refresh credential
+      operationId: refreshSession
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefreshRequest'}
+      responses:
+        '200':
+          description: A rotated opaque session.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/SessionResponse'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/AuthUnauthorized'}
+        '409': {$ref: '#/components/responses/AuthConflict'}
+        '429': {$ref: '#/components/responses/AuthRateLimited'}
+        '503': {$ref: '#/components/responses/AuthUnavailable'}
+  /v1/auth/refresh-recoverable:
+    post:
+      summary: Rotate or recover a device-bound refresh attempt
+      operationId: refreshSessionRecoverable
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RecoverableRefreshRequest'}
+      responses:
+        '200':
+          description: The stable child session and matching attempt identifier.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+          content:
+            application/json:
+              schema: {$ref: '#/components/schemas/RecoverableRefreshResponse'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/AuthUnauthorized'}
+        '409': {$ref: '#/components/responses/AuthConflict'}
+        '429': {$ref: '#/components/responses/AuthRateLimited'}
+        '503': {$ref: '#/components/responses/AuthUnavailable'}
+  /v1/auth/refresh-ack:
+    post:
+      summary: Retire a recovered refresh receipt under active access authority
+      operationId: acknowledgeRefresh
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/RefreshAckRequest'}
+      responses:
+        '204':
+          description: The matching receipt is acknowledged or already absent.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/AuthUnauthorized'}
+        '409': {$ref: '#/components/responses/AuthConflict'}
+        '503': {$ref: '#/components/responses/AuthUnavailable'}
+  /v1/auth/logout:
+    post:
+      summary: Revoke the authenticated device binding and its sessions
+      operationId: logoutDevice
+      security:
+        - bearerAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/LogoutRequest'}
+      responses:
+        '204':
+          description: The device is revoked or the exact command was already applied.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '400': {$ref: '#/components/responses/AuthBadRequest'}
+        '401': {$ref: '#/components/responses/AuthUnauthorized'}
+        '409': {$ref: '#/components/responses/AuthConflict'}
+        '503': {$ref: '#/components/responses/AuthUnavailable'}
+  /v1/auth/apple/notifications:
+    post:
+      summary: Receive a signed Apple account-state notification
+      description: Hosted mode only. Self-hosted servers do not register this route.
+      operationId: receiveAppleNotification
+      x-baby-tracker-hosted-only: true
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: {$ref: '#/components/schemas/AppleNotificationRequest'}
+      responses:
+        '204':
+          description: The signed notification was accepted or replayed idempotently.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+        '401': {$ref: '#/components/responses/AuthUnauthorized'}
+        '409': {$ref: '#/components/responses/AuthConflict'}
+        '503': {$ref: '#/components/responses/AuthUnavailable'}
+  /v1/account:
+    get:
+      summary: Read the authenticated account profile and family slot
+      operationId: currentAccount
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: The caller's account-scoped projection.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/AccountResponse'}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+    patch:
+      summary: Update the authenticated account display name
+      operationId: updateAccount
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/UpdateAccountRequest'}}}
+      responses:
+        '200':
+          description: The updated account projection.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/AccountResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/account/delete:
+    post:
+      summary: Permanently remove the authenticated account from local authority
+      description: Provider credential revocation is asynchronous in hosted mode and manual in self-hosted mode.
+      operationId: deleteAccount
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ConfirmedCommandRequest'}}}
+      responses:
+        '200':
+          description: Local account deletion was committed; provider revocation status is explicit.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/AccountDeletionResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family:
+    get:
+      summary: Read the caller's active family
+      operationId: currentFamily
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: The active family and family-scoped member labels.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyResponse'}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+    post:
+      summary: Create the caller's one active family
+      operationId: createFamily
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CreateFamilyRequest'}}}
+      responses:
+        '201':
+          description: The newly created family.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+    patch:
+      summary: Repair missing family presentation after an owner confirms the replacement name
+      operationId: repairFamilyProfile
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/RepairFamilyProfileRequest'}}}
+      responses:
+        '200':
+          description: The repaired active family projection.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/actors:
+    get:
+      summary: Page active and pseudonymized former caregiver labels through a fixed high-water mark
+      description: Omit after and high_water for the first page. A continuation must send both the prior response's next_cursor as after and its high_water unchanged.
+      operationId: familyActorLabels
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: after
+          in: query
+          required: false
+          schema: {$ref: '#/components/schemas/CanonicalUUID'}
+        - name: high_water
+          in: query
+          required: false
+          schema:
+            type: string
+            pattern: '^[1-9][0-9]*$'
+            description: Positive JSON-safe actor-label version, at most 9007199254740991.
+        - name: limit
+          in: query
+          required: false
+          schema: {type: integer, minimum: 1, maximum: 100, default: 50}
+      responses:
+        '200':
+          description: One bounded actor-label page from a stable family snapshot.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyActorPageResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/delete:
+    post:
+      summary: Schedule owner-confirmed family deletion and its 30-day recovery claim
+      operationId: scheduleFamilyDeletion
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/ConfirmedCommandRequest'}}}
+      responses:
+        '200':
+          description: Family access is disabled and the owner's recovery deadline is returned.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyRecoveryResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/recovery:
+    get:
+      summary: Read the authenticated owner's own family recovery claim
+      operationId: familyRecoveryStatus
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: The caller's narrow recovery claim and deadline.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyRecoveryResponse'}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '410': {$ref: '#/components/responses/FamilyGone'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/recover:
+    post:
+      summary: Restore the deleting family to its recovering owner only
+      operationId: recoverFamily
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/RecoveryCommandRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410': {$ref: '#/components/responses/FamilyGone'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/recovery/forfeit:
+    post:
+      summary: Irrevocably surrender the authenticated owner's recovery claim
+      operationId: forfeitFamilyRecovery
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/RecoveryCommandRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410': {$ref: '#/components/responses/FamilyGone'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/invitations:
+    post:
+      summary: Create a single-use family invitation
+      operationId: createFamilyInvitation
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/InviteRequest'}}}
+      responses:
+        '201':
+          description: Invitation metadata and its one-time secret handoff.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/InvitationResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+    get:
+      summary: List the family's active, unexpired invitations
+      operationId: pendingFamilyInvitations
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Active invitations, newest first, without their secrets.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/PendingInvitationsResponse'}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/invitations/{id}:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/CanonicalUUID'}
+    get:
+      summary: Read invitation metadata without consuming it
+      operationId: familyInvitation
+      security: [{bearerAuth: []}]
+      responses:
+        '200':
+          description: Invitation metadata without its secret.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/InvitationResponse'}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/invitations/{id}/revoke:
+    parameters:
+      - name: id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/CanonicalUUID'}
+    post:
+      summary: Revoke an active invitation
+      operationId: revokeFamilyInvitation
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410': {$ref: '#/components/responses/InvitationGone'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/invitations/preview:
+    post:
+      summary: Preview safe family invitation metadata
+      operationId: previewFamilyInvitation
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/PreviewInvitationRequest'}}}
+      responses:
+        '200':
+          description: Safe display label and expiration only.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/InvitationPreviewResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '410': {$ref: '#/components/responses/InvitationGone'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/invitations/redeem:
+    post:
+      summary: Confirm and redeem a single-use invitation
+      operationId: redeemFamilyInvitation
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/RedeemInvitationRequest'}}}
+      responses:
+        '200':
+          description: The joined family.
+          headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+          content: {application/json: {schema: {$ref: '#/components/schemas/FamilyResponse'}}}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '410': {$ref: '#/components/responses/InvitationGone'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/members/{account_id}/remove:
+    parameters:
+      - name: account_id
+        in: path
+        required: true
+        schema: {$ref: '#/components/schemas/CanonicalUUID'}
+    post:
+      summary: Remove a caregiver from the family
+      operationId: removeFamilyMember
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/members/{account_id}/role:
+    post:
+      summary: Change a caregiver between full access and view-only
+      description: >-
+        Owner-only. Refused for the owner's own account: a family must always
+        have exactly one owner, so stepping down is
+        /v1/family/ownership-transfer, which names a successor in the same
+        command.
+      operationId: changeMemberRole
+      security: [{bearerAuth: []}]
+      parameters:
+        - name: account_id
+          in: path
+          required: true
+          schema: {type: string, format: uuid}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/MemberRoleRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/ownership-transfer:
+    post:
+      summary: Transfer family ownership to an active caregiver
+      operationId: transferFamilyOwnership
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/TransferOwnershipRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /v1/family/leave:
+    post:
+      summary: Leave the current family as a caregiver
+      operationId: leaveFamily
+      security: [{bearerAuth: []}]
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/CommandRequest'}}}
+      responses:
+        '200': {$ref: '#/components/responses/FamilyCommandOK'}
+        '400': {$ref: '#/components/responses/FamilyBadRequest'}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {$ref: '#/components/responses/FamilyForbidden'}
+        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '409': {$ref: '#/components/responses/FamilyConflict'}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+  /invite:
+    get:
+      summary: Render the static fragment-only invitation handoff
+      operationId: invitationHandoff
+      responses:
+        '200':
+          description: Static handoff page. The fragment is never sent to the server.
+          headers:
+            Cache-Control: {$ref: '#/components/headers/NoStore'}
+            Referrer-Policy: {schema: {type: string, const: no-referrer}}
+            Content-Security-Policy: {schema: {type: string}}
+          content:
+            text/html:
+              schema: {type: string}
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+  headers:
+    NoStore:
+      schema:
+        type: string
+        const: no-store
+  responses:
+    AuthBadRequest:
+      description: The strict request contract was not satisfied.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AuthBadRequestError'}
+    AuthUnauthorized:
+      description: Authentication failed without disclosing which proof failed.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        WWW-Authenticate:
+          schema:
+            type: string
+            const: Bearer
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AuthUnauthorizedError'}
+    AuthConflict:
+      description: The stable command or credential state conflicts.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AuthConflictError'}
+    AuthRateLimited:
+      description: The caller exceeded an authentication limit.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        Retry-After:
+          schema: {type: integer, minimum: 1}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AuthRateLimitedError'}
+    AuthUnavailable:
+      description: A required authority or provider dependency is unavailable.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        Retry-After:
+          description: Required with value 1 for security_busy and credential_rotation_busy; omitted for other codes.
+          x-required-for-error-codes: [security_busy, credential_rotation_busy]
+          schema: {type: integer, const: 1}
+      content:
+        application/json:
+          schema: {$ref: '#/components/schemas/AuthUnavailableError'}
+    FamilyBadRequest:
+      description: The strict family request contract was not satisfied.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyBadRequestError'}}}
+    FamilyUnauthorized:
+      description: The access credential is missing, expired, or revoked.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        WWW-Authenticate: {schema: {type: string, const: Bearer}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyUnauthorizedError'}}}
+    FamilyForbidden:
+      description: The authenticated caregiver cannot perform the action.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyForbiddenError'}}}
+    FamilyNotFound:
+      description: The family-scoped resource is unavailable without disclosing another family.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyNotFoundError'}}}
+    FamilyConflict:
+      description: The command conflicts with current family state or configured limits.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyConflictError'}}}
+    InvitationGone:
+      description: The invitation has expired, been consumed, or been revoked.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/InvitationGoneError'}}}
+    FamilyGone:
+      description: The recovery deadline passed or the recovery claim was forfeited.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/InvitationGoneError'}}}
+    FamilyRateLimited:
+      description: The caller exceeded a family or invitation limit.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        Retry-After: {schema: {type: integer, minimum: 1}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyRateLimitedError'}}}
+    FamilyUnavailable:
+      description: A required authority, database, entitlement, or rate-limit dependency is unavailable.
+      headers:
+        Cache-Control: {$ref: '#/components/headers/NoStore'}
+        Retry-After:
+          description: Required with value 1 when the security authority is busy.
+          x-required-for-error-codes: [security_busy]
+          schema: {type: integer, const: 1}
+      content: {application/json: {schema: {$ref: '#/components/schemas/FamilyUnavailableError'}}}
+    FamilyCommandOK:
+      description: The family command was applied or replayed idempotently.
+      headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}
+      content: {application/json: {schema: {$ref: '#/components/schemas/CommandResponse'}}}
+  schemas:
+    BirthDate:
+      type: string
+      format: date
+      pattern: '^\d{4}-\d{2}-\d{2}$'
+      example: '2026-09-20'
+    StatusResponse:
+      type: object
+      required: [status]
+      properties:
+        status:
+          type: string
+          const: ok
+    ErrorResponse:
+      type: object
+      required: [error]
+      properties:
+        error:
+          $ref: '#/components/schemas/ErrorDetail'
+        server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        recovery_epoch: {type: integer, minimum: 1, maximum: 9007199254740991}
+    ErrorDetail:
+      type: object
+      required: [code, message, request_id, retryable]
+      properties:
+        code:
+          type: string
+          pattern: '^[a-z][a-z0-9_]*$'
+          examples: [not_ready]
+        message:
+          type: string
+          minLength: 1
+          examples: [Service is not ready]
+        request_id:
+          type: string
+          pattern: '^(|[0-9a-f]{32})$'
+          description: Empty when no request identifier is available.
+        retryable:
+          type: boolean
+        retry_after_seconds:
+          type: integer
+          minimum: 1
+    AuthBadRequestError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [invalid_request, unsupported_capability, hosted_only_field, display_name_required, device_continuity_invalid]}
+                retryable: {const: false}
+    AuthUnauthorizedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [invalid_or_expired_challenge, invalid_apple_proof, invalid_apple_authorization, access_expired, session_revoked, refresh_reused, reauthentication_required, epoch_changed]}
+                retryable: {const: false}
+    AuthConflictError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [command_id_reused, credential_conflict]}
+                retryable: {const: false}
+    AuthRateLimitedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              required: [retry_after_seconds]
+              properties:
+                code: {const: rate_limited}
+                retryable: {const: true}
+    AuthUnavailableError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          oneOf:
+            - allOf:
+                - $ref: '#/components/schemas/ErrorDetail'
+                - type: object
+                  properties:
+                    code: {enum: [security_busy, credential_rotation_busy]}
+                    retryable: {const: true}
+            - allOf:
+                - $ref: '#/components/schemas/ErrorDetail'
+                - type: object
+                  properties:
+                    code: {enum: [authorization_quarantine, apple_unavailable, hosted_adapter_unavailable, credential_key_unavailable, service_unavailable]}
+                    retryable: {const: true}
+    FamilyBadRequestError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [invalid_request, unsupported_capability, confirmation_required, display_name_required, invalid_display_name]}
+                retryable: {const: false}
+    FamilyUnauthorizedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [access_expired, session_revoked, reauthentication_required, epoch_changed]}
+                retryable: {const: false}
+    FamilyForbiddenError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [owner_required, membership_revoked, entitlement_required, recovery_only, owner_identity_unavailable, operator_policy_required]}
+                retryable: {const: false}
+    FamilyNotFoundError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [family_unavailable, invitation_invalid]}
+                retryable: {const: false}
+    FamilyConflictError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [family_slot_occupied, caregiver_limit, invitation_limit, command_id_reused, profile_not_required, ownership_transfer_required, stale_security_revision, invalid_confirmation]}
+                retryable: {const: false}
+    InvitationGoneError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [invitation_expired, invitation_consumed, invitation_revoked, recovery_expired, recovery_forfeited]}
+                retryable: {const: false}
+    FamilyRateLimitedError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              required: [retry_after_seconds]
+              properties:
+                code: {const: rate_limited}
+                retryable: {const: true}
+    FamilyUnavailableError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [authorization_quarantine, hosted_adapter_unavailable, credential_key_unavailable, security_busy, service_unavailable]}
+                retryable: {const: true}
+    ServerInfo:
+      type: object
+      required: [instance_id, recovery_epoch, canonical_origin, api_versions, capabilities, apple_authorization_mode]
+      properties:
+        instance_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        recovery_epoch:
+          type: integer
+          format: uint64
+          minimum: 1
+          maximum: 9007199254740991
+        canonical_origin:
+          type: string
+          format: uri
+          pattern: '^https://'
+        api_versions:
+          type: array
+          minItems: 1
+          items:
+            type: string
+        capabilities:
+          $ref: '#/components/schemas/ServerCapabilities'
+        apple_authorization_mode:
+          type: string
+          enum: [identity_token_only, code_exchange_required]
+        limits:
+          $ref: '#/components/schemas/EffectiveSyncLimits'
+    Capability:
+      type: string
+      enum: [identity-v1, family-lifecycle-v1, recovery-v1, device-continuity-v1, records-v1, snapshot-v1, timer-commands-v1, import-resolver-v1, live-hints-v1, live-activity-push-v1]
+    ChallengeRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities]
+      properties:
+        protocol_version:
+          type: string
+          const: v1
+        capabilities:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items:
+            type: string
+            const: identity-v1
+    ChallengeResponse:
+      type: object
+      required: [protocol_version, challenge, server_instance_id, canonical_origin, expires_at]
+      properties:
+        protocol_version:
+          type: string
+          const: v1
+        challenge:
+          type: string
+          pattern: '^[A-Za-z0-9_-]{43}$'
+        server_instance_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        canonical_origin:
+          type: string
+          format: uri
+          pattern: '^https://'
+        expires_at:
+          type: string
+          format: date-time
+    RequestMeta:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items: {type: string, const: identity-v1}
+    FamilyCapabilities:
+      type: array
+      maxItems: 16
+      uniqueItems: true
+      items: {type: string, enum: [identity-v1, family-lifecycle-v1]}
+    RecoveryCapabilities:
+      type: array
+      minItems: 1
+      maxItems: 1
+      uniqueItems: true
+      items: {type: string, const: recovery-v1}
+    ServerCapabilities:
+      type: array
+      maxItems: 16
+      uniqueItems: true
+      items: {type: string, enum: [identity-v1, family-lifecycle-v1, recovery-v1, records-v1, snapshot-v1, timer-commands-v1, import-resolver-v1, live-hints-v1, export-v1, refresh-recovery-v1, live-activity-push-v1]}
+    ExportCapabilities:
+      type: array
+      minItems: 1
+      maxItems: 1
+      uniqueItems: true
+      items: {type: string, const: export-v1}
+    CreateExportRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, request_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/ExportCapabilities'}
+        request_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    ExportStatus:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, export_id, state, created_at, expires_at, plaintext_bytes, sha256, code]
+      properties:
+        protocol_version: {type: string, const: v1}
+        export_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        state: {type: string, enum: [queued, running, ready, failed, expired]}
+        created_at: {type: string, format: date-time}
+        expires_at: {type: string, format: date-time}
+        plaintext_bytes: {oneOf: [{type: integer, minimum: 0, maximum: 52428800}, {type: 'null'}]}
+        sha256: {oneOf: [{type: string, pattern: '^[0-9a-f]{64}$'}, {type: 'null'}]}
+        code: {oneOf: [{type: string}, {type: 'null'}]}
+    ArchiveV1:
+      type: object
+      additionalProperties: false
+      description: Stable ordered family archive containing members, canonical records, journal, audit, and an empty v1 attachment manifest.
+      required: [version, server_instance_id, recovery_epoch, family_id, captured_at, high_water, security_revision, members, babies, feeds, sleeps, diapers, supplements, growth_profiles, measurements, active_timers, journal, audit, attachments]
+      properties:
+        version: {type: string, const: v1}
+        server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        recovery_epoch: {type: integer, minimum: 1}
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        captured_at: {type: string, format: date-time}
+        high_water: {$ref: '#/components/schemas/Cursor'}
+        security_revision: {type: integer, minimum: 1}
+        members: {type: array, items: {type: object}}
+        babies: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        feeds: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        sleeps: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        diapers: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        supplements: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        growth_profiles: {type: array, description: 'Raw canonical growth profiles, including tombstones. No calculated percentiles.', items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        measurements: {type: array, description: 'Raw canonical check-ins, including tombstones. No calculated percentiles.', items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        active_timers: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        journal: {type: array, items: {$ref: '#/components/schemas/JournalChange'}}
+        audit: {type: array, items: {type: object}}
+        attachments:
+          type: object
+          additionalProperties: false
+          required: [version, attachments]
+          properties:
+            version: {type: string, const: v1}
+            attachments: {type: array, maxItems: 0, items: {$ref: '#/components/schemas/AttachmentMetadata'}}
+    CommandRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    ConfirmedCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, confirmed]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        confirmed: {type: boolean, const: true}
+    RecoveryCommandRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, confirmed]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/RecoveryCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        confirmed: {type: boolean, const: true}
+    UpdateAccountRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, display_name, confirmed]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string, minLength: 1, maxLength: 320}
+        confirmed: {type: boolean}
+    RepairFamilyProfileRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, display_name, confirmed]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string, minLength: 1, maxLength: 320}
+        confirmed: {type: boolean, const: true}
+    CreateFamilyRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, display_name]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string, minLength: 1, maxLength: 320}
+    InviteRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        role:
+          type: string
+          enum: [caregiver, viewer]
+          description: Defaults to caregiver when omitted.
+    PreviewInvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, token]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        token: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+    RedeemInvitationRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, confirmed, token]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        confirmed: {type: boolean, const: true}
+        token: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+    MemberRoleRequest:
+      type: object
+      additionalProperties: false
+      required: [command_id, role]
+      properties:
+        command_id: {type: string, format: uuid}
+        role:
+          type: string
+          enum: [caregiver, viewer]
+          description: >-
+            viewer reads everything the family logs and originates nothing.
+            owner is not settable here.
+    TransferOwnershipRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, new_owner_account_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/FamilyCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        new_owner_account_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    AccountResponse:
+      type: object
+      required: [protocol_version, id, display_name, status, profile_required]
+      properties:
+        protocol_version: {type: string, const: v1}
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string}
+        status: {type: string}
+        profile_required: {type: boolean}
+        family_slot: {$ref: '#/components/schemas/SessionFamilySlot'}
+    FamilyMemberResponse:
+      type: object
+      required: [account_id, display_name, role, status]
+      properties:
+        account_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string}
+        role: {type: string, enum: [owner, caregiver, viewer]}
+        status: {type: string}
+    FamilyResponse:
+      type: object
+      required: [protocol_version, id, display_name, status, profile_required, members]
+      properties:
+        protocol_version: {type: string, const: v1}
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string}
+        status: {type: string}
+        profile_required: {type: boolean}
+        members:
+          type: array
+          items: {$ref: '#/components/schemas/FamilyMemberResponse'}
+    FamilyActorResponse:
+      type: object
+      additionalProperties: false
+      required: [account_id, display_name, former]
+      properties:
+        account_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string}
+        former: {type: boolean}
+    FamilyActorPageResponse:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, actors, high_water]
+      properties:
+        protocol_version: {type: string, const: v1}
+        actors:
+          type: array
+          maxItems: 100
+          items: {$ref: '#/components/schemas/FamilyActorResponse'}
+        high_water:
+          type: string
+          pattern: '^[1-9][0-9]*$'
+          description: Positive JSON-safe actor-label version, at most 9007199254740991.
+        next_cursor: {$ref: '#/components/schemas/CanonicalUUID'}
+    InvitationResponse:
+      type: object
+      required: [protocol_version, id, family_id, role, status, expires_at, created_at, secret_unavailable]
+      properties:
+        protocol_version: {type: string, const: v1}
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        role: {type: string, enum: [caregiver, viewer]}
+        status: {type: string}
+        expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+        token: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+        link: {type: string, pattern: '^https://[^/?#]+/invite#token=[A-Za-z0-9_-]{43}$'}
+        secret_unavailable: {type: boolean}
+      oneOf:
+        - required: [token, link]
+          properties: {secret_unavailable: {const: false}}
+        - properties: {secret_unavailable: {const: true}}
+          not:
+            anyOf:
+              - required: [token]
+              - required: [link]
+    InvitationSummary:
+      type: object
+      additionalProperties: false
+      required: [id, family_id, role, status, expires_at, created_at]
+      properties:
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        role: {type: string, enum: [caregiver, viewer]}
+        status: {type: string}
+        expires_at: {type: string, format: date-time}
+        created_at: {type: string, format: date-time}
+    PendingInvitationsResponse:
+      type: object
+      additionalProperties: false
+      required: [invitations]
+      properties:
+        invitations:
+          type: array
+          maxItems: 50
+          items: {$ref: '#/components/schemas/InvitationSummary'}
+    InvitationPreviewResponse:
+      type: object
+      required: [protocol_version, family_display_name, expires_at]
+      properties:
+        protocol_version: {type: string, const: v1}
+        family_display_name: {type: string}
+        expires_at: {type: string, format: date-time}
+    CommandResponse:
+      type: object
+      required: [protocol_version, command_id, outcome, code, revision]
+      properties:
+        protocol_version: {type: string, const: v1}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        outcome: {type: string}
+        code: {type: string}
+        revision: {type: integer, minimum: 1, maximum: 9007199254740991}
+    FamilyRecoveryResponse:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, family_id, state, purge_after, can_recover]
+      properties:
+        protocol_version: {type: string, const: v1}
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        state: {type: string, const: deletion_pending}
+        purge_after: {type: string, format: date-time}
+        can_recover: {type: boolean}
+    AccountDeletionResponse:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, command_id, outcome, code, revision, apple_authorization_revocation]
+      properties:
+        protocol_version: {type: string, const: v1}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        outcome: {type: string}
+        code: {type: string}
+        revision: {type: integer, minimum: 1, maximum: 9007199254740991}
+        apple_authorization_revocation: {type: string, enum: [manual_required, pending]}
+    ProfileInput:
+      type: object
+      additionalProperties: false
+      required: [display_name, confirmed]
+      properties:
+        display_name: {type: string}
+        confirmed: {type: boolean}
+    DeviceContinuityClaim:
+      type: object
+      additionalProperties: false
+      required: [device_id, credential]
+      properties:
+        device_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        credential: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+    AppleExchangeRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, challenge, identity_token, installation_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items: {type: string, const: identity-v1}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        challenge: {type: string}
+        identity_token: {type: string}
+        authorization_code: {type: string}
+        installation_id: {type: string}
+        profile:
+          oneOf: [{$ref: '#/components/schemas/ProfileInput'}, {type: 'null'}]
+        device_continuity:
+          oneOf: [{$ref: '#/components/schemas/DeviceContinuityClaim'}, {type: 'null'}]
+    RefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, refresh_token]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items: {type: string, const: identity-v1}
+        refresh_token: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+    RefreshRecoveryCapabilities:
+      type: array
+      prefixItems: [{type: string, const: identity-v1}, {type: string, const: refresh-recovery-v1}]
+      minItems: 2
+      maxItems: 2
+    RecoverableRefreshRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, refresh_token, refresh_attempt_id, device_continuity]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/RefreshRecoveryCapabilities'}
+        refresh_token: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+        refresh_attempt_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        device_continuity: {$ref: '#/components/schemas/DeviceContinuityClaim'}
+    RefreshAckRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, refresh_attempt_id, device_continuity]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/RefreshRecoveryCapabilities'}
+        refresh_attempt_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        device_continuity: {$ref: '#/components/schemas/DeviceContinuityClaim'}
+    LogoutRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items: {type: string, const: identity-v1}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    SessionAccount:
+      type: object
+      required: [id, display_name, profile_required]
+      properties:
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        display_name: {type: string}
+        profile_required: {type: boolean}
+    SessionFamilySlot:
+      type: object
+      required: [family_id, state]
+      properties:
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        state: {type: string, enum: [active, family_recovery]}
+    SessionResponse:
+      type: object
+      required: [protocol_version, access_token, refresh_token, expires_at, reauthenticate_at, recovery_epoch, device_id, account]
+      properties:
+        protocol_version: {type: string, const: v1}
+        access_token: {type: string}
+        refresh_token: {type: string}
+        expires_at: {type: string, format: date-time}
+        reauthenticate_at: {type: string, format: date-time}
+        recovery_epoch: {type: integer, minimum: 1, maximum: 9007199254740991}
+        device_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        device_credential: {type: string, pattern: '^[A-Za-z0-9_-]{43}$'}
+        account: {$ref: '#/components/schemas/SessionAccount'}
+        family_slot: {$ref: '#/components/schemas/SessionFamilySlot'}
+    RecoverableRefreshResponse:
+      allOf:
+        - {$ref: '#/components/schemas/SessionResponse'}
+        - type: object
+          required: [refresh_attempt_id, server_instance_id]
+          properties:
+            refresh_attempt_id: {$ref: '#/components/schemas/CanonicalUUID'}
+            server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    AppleNotificationRequest:
+      type: object
+      additionalProperties: false
+      required: [payload]
+      properties:
+        payload: {type: string}
+    Cursor:
+      type: object
+      required: [server_instance_id, recovery_epoch, family_id, sequence]
+      properties:
+        server_instance_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        recovery_epoch:
+          type: integer
+          format: uint64
+          minimum: 1
+          maximum: 9007199254740991
+        family_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        sequence:
+          type: integer
+          format: uint64
+          minimum: 0
+          maximum: 9007199254740991
+    RecordCapabilities:
+      type: array
+      minItems: 1
+      maxItems: 1
+      uniqueItems: true
+      items: {type: string, const: records-v1}
+    TimerCapabilities:
+      type: array
+      minItems: 2
+      maxItems: 2
+      uniqueItems: true
+      items: {type: string, enum: [records-v1, timer-commands-v1]}
+    SnapshotCapabilities:
+      type: array
+      minItems: 2
+      maxItems: 2
+      uniqueItems: true
+      items: {type: string, enum: [records-v1, snapshot-v1]}
+    ImportCapabilities:
+      type: array
+      minItems: 2
+      maxItems: 2
+      uniqueItems: true
+      items: {type: string, enum: [records-v1, import-resolver-v1]}
+    CanonicalDecimal:
+      type: number
+      minimum: -0.0000005
+      maximum: 2000.0000005
+      description: Raw finite decimal input bounds include values that ties-to-even round into the semantic 0 through 2000 range. Canonical responses and storage round to six places and omit trailing zeros.
+    CanonicalTimestamp:
+      type: string
+      format: date-time
+      pattern: '^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{6}Z$'
+    FeedComponent:
+      type: object
+      additionalProperties: false
+      required: [id, kind]
+      properties:
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        kind: {type: string, enum: [breast, bottle, solids]}
+        side: {type: string, enum: [left, right]}
+        seconds: {type: integer, minimum: 1, maximum: 604800}
+        started_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        ended_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        volume_ml: {$ref: '#/components/schemas/CanonicalDecimal'}
+        contents: {type: string, enum: [breast_milk, formula, mixed]}
+        foods: {type: array, maxItems: 50, items: {type: string, maxLength: 100}}
+        amount: {type: string, enum: [taste, some, lots]}
+      oneOf:
+        - required: [side, seconds]
+          properties: {kind: {const: breast}}
+        - required: [volume_ml, contents]
+          properties: {kind: {const: bottle}}
+        - required: [foods, amount]
+          properties: {kind: {const: solids}}
+    BabyPayload:
+      type: object
+      additionalProperties: false
+      required: [name, birth_date]
+      properties:
+        name: {type: string, minLength: 1, maxLength: 100, description: At most 100 Unicode scalars and 400 UTF-8 bytes.}
+        birth_date: {$ref: '#/components/schemas/BirthDate'}
+        sort_order: {type: integer, minimum: 0, maximum: 1000000}
+        icon: {type: string, enum: [boy.1, boy.2, boy.3, boy.4, girl.1, girl.2, girl.3, girl.4]}
+    FeedPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, kind, started_at, time_zone_id, components, feeding_session_id]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        kind: {type: string, enum: [breast, bottle, solids]}
+        started_at: {type: string, format: date-time}
+        ended_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        time_zone_id: {type: string, minLength: 1}
+        feeding_session_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}], description: Always present; null clears a link.}
+        note: {oneOf: [{type: string, maxLength: 4096}, {type: 'null'}]}
+        components: {type: array, minItems: 1, maxItems: 512, items: {$ref: '#/components/schemas/FeedComponent'}, description: At most 256 breast parts.}
+    SleepPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, started_at, time_zone_id, sleep_session_id]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        started_at: {type: string, format: date-time}
+        ended_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        time_zone_id: {type: string, minLength: 1}
+        note: {oneOf: [{type: string, maxLength: 4096}, {type: 'null'}]}
+        kind_override: {oneOf: [{type: string, enum: [nap, night]}, {type: 'null'}]}
+        sleep_session_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}], description: Always present; null clears a link.}
+    GrowthProfilePayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, reference_sex, expected_due_date]
+      description: 'One profile per baby. Entity ID is UUIDv5 using the baby UUID namespace and UTF-8 name growth-profile-v1. Imports rederive it after baby mapping.'
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        reference_sex: {type: string, enum: [girls, boys]}
+        expected_due_date: {oneOf: [{type: string, format: date}, {type: 'null'}]}
+    MeasurementPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, measured_at, logged_at, time_zone_id, weight_kg, length_cm, head_circumference_cm, length_position]
+      description: 'Full state replacement. Optional values are explicit null. At least one positive finite measurement is required. Length position exists exactly when length_cm exists.'
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        measured_at: {type: string, format: date-time}
+        logged_at: {type: string, format: date-time, description: 'Immutable original logging timestamp, normalized to UTC microseconds.'}
+        time_zone_id: {type: string, minLength: 1, maxLength: 255}
+        weight_kg: {type: [number, 'null'], exclusiveMinimum: 0}
+        length_cm: {type: [number, 'null'], exclusiveMinimum: 0}
+        head_circumference_cm: {type: [number, 'null'], exclusiveMinimum: 0}
+        length_position: {oneOf: [{type: string, enum: [lying, standing]}, {type: 'null'}]}
+    SupplementPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, started_at, time_zone_id, name, logged_at]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        started_at: {type: string, format: date-time}
+        logged_at: {type: string, format: date-time, description: 'Immutable time of the original logging action; preserve on edits and import.'}
+        time_zone_id: {type: string, minLength: 1, maxLength: 255}
+        name: {type: string, minLength: 1, maxLength: 64, description: 'Trimmed NFC text; at most 256 UTF-8 bytes.'}
+        note: {type: [string, 'null'], maxLength: 4096}
+    DiaperPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, started_at, time_zone_id, contents]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        started_at: {type: string, format: date-time}
+        ended_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        time_zone_id: {type: string, minLength: 1}
+        note: {oneOf: [{type: string, maxLength: 4096}, {type: 'null'}]}
+        contents: {type: string, enum: [wet, dirty, mixed, dry]}
+        consistency: {oneOf: [{type: string, maxLength: 64, description: At most 64 Unicode scalars and 256 UTF-8 bytes.}, {type: 'null'}]}
+        color: {oneOf: [{type: string, maxLength: 64, description: At most 64 Unicode scalars and 256 UTF-8 bytes.}, {type: 'null'}]}
+    TimerStartPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, timer_kind, started_at, time_zone_id, completed_components, session_id]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        timer_kind: {type: string, enum: [feed, sleep]}
+        started_at: {type: string, format: date-time}
+        time_zone_id: {type: string, minLength: 1}
+        current_side: {oneOf: [{type: string, enum: [left, right]}, {type: 'null'}]}
+        current_side_started_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        current_bottle_started_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        completed_components: {type: array, maxItems: 512, items: {$ref: '#/components/schemas/FeedComponent'}, description: A running feed timer holds at most 255 breast parts.}
+        session_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}], description: Always present; null clears a link.}
+    TimerBottleFinishPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, finished_at, component_id, volume_ml, contents]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        finished_at: {type: string, format: date-time}
+        component_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        volume_ml: {$ref: '#/components/schemas/CanonicalDecimal'}
+        contents: {type: string, enum: [breast_milk, formula, mixed]}
+    TimerEditPayload:
+      type: object
+      additionalProperties: false
+      description: >-
+        A patch to a running timer, sent as `update` on a `timer` at payload_version 5.
+        session_id is required (null clears the link). A null or omitted started_at leaves the start unchanged; components lists only the
+        finished parts that changed, matched by id, with kind unchanged. A current side that
+        began with the timer moves with its start. Unknown part ids are
+        rejected/timer_component_not_found; a start more than one minute ahead of the server,
+        more than seven days back, after an untied current side, or finished breast time longer
+        than the time before the current side (or now) is rejected/invalid_timer_time. An edit
+        after stop is superseded/timer_ended with the completion; an edit that changes nothing
+        is applied at the timer's current cursor without a journal change.
+      required: [baby_id, components]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        started_at: {oneOf: [{type: string, format: date-time}, {type: 'null'}]}
+        components: {type: array, maxItems: 512, items: {$ref: '#/components/schemas/FeedComponent'}}
+        session_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}], description: Required in payload version 5; null clears a link.}
+    TimerStopPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, completed_record_id, stopped_at]
+      description: >-
+        On a payload-version-2 feed timer, cleanup_short_breast_segments opts in
+        to removing breast components shorter than 30 seconds at completion.
+        Adjacent surviving components on the same breast are combined. If no
+        components remain, the timer is tombstoned without a feed record.
+        Omission retains the earlier stop behavior.
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        completed_record_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        stopped_at: {type: string, format: date-time}
+        note: {oneOf: [{type: string, maxLength: 4096}, {type: 'null'}]}
+        sleep_kind_override: {oneOf: [{type: string, enum: [nap, night]}, {type: 'null'}]}
+        component_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        cleanup_short_breast_segments: {type: boolean}
+    BabyDeletePayload:
+      type: object
+      additionalProperties: false
+    RecordDeletePayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    DeletePayload:
+      oneOf:
+        - {$ref: '#/components/schemas/BabyDeletePayload'}
+        - {$ref: '#/components/schemas/RecordDeletePayload'}
+    Mutation:
+      type: object
+      additionalProperties: false
+      required: [mutation_id, entity_id, entity_kind, operation, payload_version, observed_entity_version, client_mutation_time, payload]
+      properties:
+        mutation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        entity_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        entity_kind: {type: string, enum: [baby, feed, sleep, diaper, supplement, growth_profile, measurement, timer]}
+        operation: {type: string, enum: [create, update, delete, timer_start, timer_finish_bottle, timer_stop]}
+        payload_version:
+          type: integer
+          enum: [1, 2, 3, 4, 5]
+          description: >-
+            Creates, updates and timer commands declare exactly the kind's current version
+            (feed 4, timer 5, sleep 2, every other kind 1); any other version is
+            400 invalid_request. A delete has no versioned shape and is accepted at any
+            version from 1 to the kind's current version.
+        observed_entity_version: {type: integer, minimum: 0, maximum: 9007199254740991}
+        client_mutation_time: {type: string, format: date-time}
+        import_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}]}
+        payload: {}
+      allOf:
+        - oneOf:
+            - properties:
+                entity_kind: {const: baby}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/BabyPayload'}
+            - properties:
+                entity_kind: {const: feed}
+                operation: {enum: [create, update]}
+                payload_version: {const: 4}
+                payload: {$ref: '#/components/schemas/FeedPayload'}
+            - properties:
+                entity_kind: {const: sleep}
+                operation: {enum: [create, update]}
+                payload_version: {const: 2}
+                payload: {$ref: '#/components/schemas/SleepPayload'}
+            - properties:
+                entity_kind: {const: diaper}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/DiaperPayload'}
+            - properties:
+                entity_kind: {const: growth_profile}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/GrowthProfilePayload'}
+            - properties:
+                entity_kind: {const: measurement}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/MeasurementPayload'}
+            - properties:
+                entity_kind: {const: supplement}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/SupplementPayload'}
+            - properties:
+                entity_kind: {const: timer}
+                operation: {const: timer_start}
+                payload_version: {const: 5}
+                payload: {$ref: '#/components/schemas/TimerStartPayload'}
+            - properties:
+                entity_kind: {const: timer}
+                operation: {const: timer_finish_bottle}
+                payload_version: {const: 5}
+                payload: {$ref: '#/components/schemas/TimerBottleFinishPayload'}
+            - properties:
+                entity_kind: {const: timer}
+                operation: {const: timer_stop}
+                payload_version: {const: 5}
+                payload: {$ref: '#/components/schemas/TimerStopPayload'}
+            - properties:
+                entity_kind: {const: timer}
+                operation: {const: update}
+                payload_version: {const: 5}
+                payload: {$ref: '#/components/schemas/TimerEditPayload'}
+            - properties:
+                entity_kind: {const: baby}
+                operation: {const: delete}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/BabyDeletePayload'}
+            - properties:
+                entity_kind: {const: feed}
+                operation: {const: delete}
+                payload_version: {minimum: 1, maximum: 4}
+                payload: {$ref: '#/components/schemas/RecordDeletePayload'}
+            - properties:
+                entity_kind: {const: sleep}
+                operation: {const: delete}
+                payload_version: {minimum: 1, maximum: 2}
+                payload: {$ref: '#/components/schemas/RecordDeletePayload'}
+            - properties:
+                entity_kind: {enum: [diaper, supplement, growth_profile, measurement]}
+                operation: {const: delete}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/RecordDeletePayload'}
+    EntityMeta:
+      type: object
+      required: [id, family_id, entity_version, creator_account_id, last_editor_account_id, client_mutation_time, accepted_at, tombstoned_at]
+      properties:
+        id: {$ref: '#/components/schemas/CanonicalUUID'}
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        entity_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        creator_account_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        last_editor_account_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        client_mutation_time: {$ref: '#/components/schemas/CanonicalTimestamp'}
+        accepted_at: {$ref: '#/components/schemas/CanonicalTimestamp'}
+        tombstoned_at: {oneOf: [{$ref: '#/components/schemas/CanonicalTimestamp'}, {type: 'null'}]}
+    CanonicalEntity:
+      type: object
+      required: [entity_kind, meta, payload]
+      properties:
+        entity_kind: {type: string}
+        meta: {$ref: '#/components/schemas/EntityMeta'}
+        payload:
+          description: A known typed payload, or null only for a tombstone. Response objects tolerate additive fields.
+          oneOf: [{type: object}, {type: 'null'}]
+    Outcome:
+      type: object
+      required: [mutation_id, status, original_status, canonical_entity, related_entities, cursor, code, overwrote_newer_version]
+      properties:
+        mutation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        status: {type: string, enum: [applied, already_applied, superseded, rejected]}
+        original_status: {oneOf: [{type: string, enum: [applied, superseded, rejected]}, {type: 'null'}]}
+        canonical_entity: {oneOf: [{$ref: '#/components/schemas/CanonicalEntity'}, {type: 'null'}]}
+        related_entities: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        cursor: {oneOf: [{$ref: '#/components/schemas/Cursor'}, {type: 'null'}]}
+        code: {oneOf: [{type: string, pattern: '^[a-z][a-z0-9_]*$'}, {type: 'null'}]}
+        overwrote_newer_version: {type: boolean}
+    JournalChange:
+      type: object
+      required: [cursor, entity_kind, entity_id, entity_version, actor_account_id, device_id, operation, accepted_at, optional, snapshot_or_tombstone]
+      properties:
+        cursor: {$ref: '#/components/schemas/Cursor'}
+        entity_kind: {type: string}
+        entity_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        entity_version: {type: integer, minimum: 1, maximum: 9007199254740991}
+        actor_account_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        device_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        operation: {type: string}
+        accepted_at: {$ref: '#/components/schemas/CanonicalTimestamp'}
+        optional: {type: boolean}
+        snapshot_or_tombstone: {$ref: '#/components/schemas/CanonicalEntity'}
+    SyncRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, cursor, mutations, page_token]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities:
+          oneOf:
+            - {$ref: '#/components/schemas/RecordCapabilities'}
+            - {$ref: '#/components/schemas/TimerCapabilities'}
+        cursor: {oneOf: [{$ref: '#/components/schemas/Cursor'}, {type: 'null'}]}
+        mutations: {type: array, maxItems: 200, items: {$ref: '#/components/schemas/Mutation'}}
+        page_token: {oneOf: [{type: string, maxLength: 512}, {type: 'null'}]}
+    SyncResponse:
+      type: object
+      required: [server_instance_id, recovery_epoch, outcomes, changes, high_water, next_page_token]
+      properties:
+        server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        recovery_epoch: {type: integer, minimum: 1, maximum: 9007199254740991}
+        outcomes: {type: array, items: {$ref: '#/components/schemas/Outcome'}}
+        changes: {type: array, items: {$ref: '#/components/schemas/JournalChange'}}
+        high_water: {$ref: '#/components/schemas/Cursor'}
+        next_page_token: {oneOf: [{type: string, maxLength: 512}, {type: 'null'}]}
+    SnapshotResponse:
+      type: object
+      required: [server_instance_id, recovery_epoch, snapshot_id, high_water, entities, next_page_token]
+      properties:
+        server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        recovery_epoch: {type: integer, minimum: 1, maximum: 9007199254740991}
+        snapshot_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        high_water: {$ref: '#/components/schemas/Cursor'}
+        entities: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        next_page_token: {oneOf: [{type: string, maxLength: 512}, {type: 'null'}]}
+    ImportBaby:
+      type: object
+      additionalProperties: false
+      required: [local_baby_id, name, birth_date, sort_order]
+      properties:
+        local_baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        name: {type: string, minLength: 1, maxLength: 100, description: At most 100 Unicode scalars and 400 UTF-8 bytes.}
+        birth_date: {$ref: '#/components/schemas/BirthDate'}
+        sort_order: {type: integer, minimum: 0, maximum: 1000000}
+    RecordManifest:
+      type: object
+      additionalProperties: false
+      required: [record_id, entity_kind, local_baby_id, content_sha256]
+      properties:
+        record_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        entity_kind: {type: string, enum: [feed, sleep, diaper, supplement, growth_profile, measurement, timer]}
+        local_baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        content_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
+    ImportResolveRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, import_id, import_mode, normalization_version, babies, records, total_record_count, chunk_index, finalize]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/ImportCapabilities'}
+        import_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        import_mode: {type: string, enum: [preserve_local_ids, match_shared]}
+        normalization_version: {type: string, const: nfc-trim-fold-nfc-v1}
+        babies: {type: array, maxItems: 500, items: {$ref: '#/components/schemas/ImportBaby'}}
+        records: {type: array, maxItems: 1000, items: {$ref: '#/components/schemas/RecordManifest'}}
+        total_record_count: {type: integer, minimum: 0, maximum: 1000000}
+        chunk_index: {type: integer, minimum: 0, maximum: 4294967295}
+        finalize: {type: boolean}
+    ImportConflictRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, command_id, resolver_revision, conflict_id, choice, canonical_baby_id]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/ImportCapabilities'}
+        command_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        resolver_revision: {type: integer, minimum: 1, maximum: 9007199254740991}
+        conflict_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        choice: {type: string, enum: [use_existing, keep_local]}
+        canonical_baby_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}]}
+    ImportResolveResponse:
+      type: object
+      required: [import_id, resolver_revision, normalization_version, mappings, conflicts, conflict_count, conflicts_complete, next_conflict_page_token, mapping_complete, next_chunk_index, manifest_complete]
+      properties:
+        import_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        resolver_revision: {type: integer, minimum: 1, maximum: 9007199254740991}
+        normalization_version: {type: string, const: nfc-trim-fold-nfc-v1}
+        mappings: {type: array, items: {$ref: '#/components/schemas/BabyMapping'}}
+        conflicts: {type: array, items: {$ref: '#/components/schemas/ImportConflict'}}
+        conflict_count: {type: integer, minimum: 0, maximum: 9007199254740991}
+        conflicts_complete: {type: boolean}
+        next_conflict_page_token: {oneOf: [{type: string, maxLength: 512}, {type: 'null'}]}
+        mapping_complete: {type: boolean}
+        next_chunk_index: {type: integer, minimum: 0, maximum: 4294967295}
+        manifest_complete: {type: boolean}
+    BabyMapping:
+      type: object
+      required: [local_baby_id, shared_baby_id]
+      properties:
+        local_baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        shared_baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    ImportConflict:
+      type: object
+      required: [conflict_id, kind, local_baby_id, record_id, candidate_baby_ids, candidate_versions]
+      properties:
+        conflict_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        kind: {type: string}
+        local_baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        record_id: {oneOf: [{$ref: '#/components/schemas/CanonicalUUID'}, {type: 'null'}]}
+        candidate_baby_ids: {type: array, items: {$ref: '#/components/schemas/CanonicalUUID'}}
+        candidate_versions: {type: array, items: {type: integer, minimum: 1, maximum: 9007199254740991}}
+    LiveHint:
+      type: object
+      additionalProperties: false
+      required: [family_id, cursor]
+      properties:
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        cursor: {$ref: '#/components/schemas/Cursor'}
+    EffectiveSyncLimits:
+      type: object
+      properties:
+        max_live_babies: {type: integer, minimum: 1, maximum: 100}
+        max_canonical_records_per_family: {type: integer, format: int64, minimum: 100, maximum: 1000000}
+        max_charged_storage_bytes_per_family: {type: integer, format: int64, minimum: 16777216, maximum: 4294967296}
+        sync_body_bytes: {type: integer, minimum: 65536, maximum: 4194304}
+        sync_batch_size: {type: integer, minimum: 1, maximum: 200}
+        sync_page_size: {type: integer, minimum: 1, maximum: 1000}
+        sync_page_bytes: {type: integer, minimum: 65536, maximum: 4194304}
+        sync_mutation_bytes: {type: integer, minimum: 4096, maximum: 65536}
+        sync_page_ttl_seconds: {type: integer, minimum: 60, maximum: 3600}
+        snapshot_ttl_seconds: {type: integer, minimum: 60, maximum: 3600}
+        snapshot_max_entities: {type: integer, minimum: 1000, maximum: 2000000}
+        snapshot_max_bytes: {type: integer, minimum: 1048576, maximum: 536870912}
+        sync_transaction_seconds: {type: integer, minimum: 1, maximum: 30}
+        import_max_records: {type: integer, minimum: 100, maximum: 1000000}
+        import_max_babies: {type: integer, minimum: 1, maximum: 500}
+        import_chunk_size: {type: integer, minimum: 1, maximum: 1000}
+        import_staging_ttl_hours: {type: integer, minimum: 1, maximum: 720}
+        import_max_sessions_per_family: {type: integer, minimum: 10, maximum: 10000}
+        import_max_sessions_per_account: {type: integer, minimum: 1, maximum: 1000}
+        active_snapshot_account_limit: {type: integer, const: 2}
+        active_snapshot_family_limit: {type: integer, const: 8}
+        unfinished_import_account_limit: {type: integer, const: 1}
+        unfinished_import_family_limit: {type: integer, const: 4}
+        socket_device_limit: {type: integer, minimum: 1, maximum: 5}
+        socket_account_limit: {type: integer, minimum: 1, maximum: 10}
+        socket_process_limit: {type: integer, minimum: 10, maximum: 10000}
+        socket_attempt_ip_per_minute: {type: integer, minimum: 1, maximum: 10000}
+        socket_attempt_device_per_minute: {type: integer, minimum: 1, maximum: 10000}
+        socket_attempt_account_per_minute: {type: integer, minimum: 1, maximum: 10000}
+        socket_attempt_family_per_minute: {type: integer, minimum: 1, maximum: 10000}
+        max_capabilities: {type: integer, const: 16}
+        max_name_scalars: {type: integer, const: 100}
+        max_name_bytes: {type: integer, const: 400}
+        max_note_bytes: {type: integer, const: 4096}
+        max_food_scalars: {type: integer, const: 100}
+        max_food_bytes: {type: integer, const: 400}
+        max_foods: {type: integer, const: 50}
+        max_side_intervals: {type: integer, const: 256}
+        max_side_seconds: {type: integer, const: 604800}
+        max_side_total_seconds: {type: integer, const: 604800}
+        max_sort_order: {type: integer, const: 1000000}
+        sync_mutation_device_per_minute: {type: integer, minimum: 1, maximum: 100000}
+        sync_mutation_account_per_minute: {type: integer, minimum: 1, maximum: 100000}
+        sync_mutation_family_per_minute: {type: integer, minimum: 1, maximum: 100000}
+        sync_pull_device_per_minute: {type: integer, minimum: 1, maximum: 10000}
+        sync_pull_account_per_minute: {type: integer, minimum: 1, maximum: 10000}
+    AttachmentMetadata:
+      type: object
+      required: [id, family_id, creator_account_id, media_type, byte_size, sha256, lifecycle, created_at]
+      properties:
+        id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        family_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        creator_account_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        media_type:
+          type: string
+          pattern: "^[a-z0-9!#$%&'*+.^_`|~-]+/[a-z0-9!#$%&'*+.^_`|~-]+$"
+          description: Lowercase RFC token type/subtype without parameters.
+        byte_size:
+          type: integer
+          format: uint64
+          minimum: 0
+        sha256:
+          type: string
+          pattern: '^[0-9a-f]{64}$'
+        lifecycle:
+          type: string
+          pattern: '^[a-z][a-z0-9_]*$'
+        created_at:
+          type: string
+          format: date-time
+        baby_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+        record_id:
+          $ref: '#/components/schemas/CanonicalUUID'
+      oneOf:
+        - required: [baby_id]
+        - required: [record_id]
+    AttachmentManifest:
+      type: object
+      required: [version, attachments]
+      properties:
+        version:
+          type: string
+          const: v1
+        attachments:
+          type: array
+          items:
+            $ref: '#/components/schemas/AttachmentMetadata'
+    CanonicalUUID:
+      type: string
+      format: uuid
+      pattern: '^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$'
+
+    LiveActivityCapabilities:
+      type: array
+      minItems: 1
+      maxItems: 1
+      uniqueItems: true
+      items: {type: string, const: live-activity-push-v1}
+    LiveActivityCounter:
+      type: integer
+      minimum: 1
+      maximum: 9007199254740991
+    LiveActivityToken:
+      type: string
+      minLength: 2
+      maxLength: 2048
+      pattern: '^(?:[0-9a-f]{2})+$'
+    LiveActivityScope:
+      type: object
+      additionalProperties: false
+      required: [server_instance_id, recovery_epoch, family_id, baby_id, kind_raw]
+      properties:
+        server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        recovery_epoch: {$ref: '#/components/schemas/LiveActivityCounter'}
+        family_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        kind_raw: {type: string, enum: [feed, sleep]}
+    LiveActivityAbsentGeneration:
+      type: object
+      additionalProperties: false
+      required: [generation_id, observed_attempt_id]
+      properties:
+        generation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        observed_attempt_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    LiveActivityForegroundInventory:
+      type: object
+      additionalProperties: false
+      required: [inventory_version, absent_generations]
+      properties:
+        inventory_version: {$ref: '#/components/schemas/LiveActivityCounter'}
+        absent_generations:
+          type: array
+          maxItems: 16
+          uniqueItems: true
+          items: {$ref: '#/components/schemas/LiveActivityAbsentGeneration'}
+    LiveActivityUnconfirmedStart:
+      type: object
+      additionalProperties: false
+      required: [scope, generation_id, attempt_id]
+      properties:
+        scope: {$ref: '#/components/schemas/LiveActivityScope'}
+        generation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        attempt_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    LiveActivityDeviceRegistration:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, installation_id, registration_version, apns_environment, payload_version, push_to_start_token]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/LiveActivityCapabilities'}
+        installation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        registration_version: {$ref: '#/components/schemas/LiveActivityCounter'}
+        apns_environment: {type: string, enum: [sandbox, production]}
+        payload_version: {type: integer, const: 1}
+        push_to_start_token: {$ref: '#/components/schemas/LiveActivityToken'}
+        feed_break_minutes: {type: integer, minimum: 5, maximum: 120, multipleOf: 5, default: 30}
+        foreground_inventory: {$ref: '#/components/schemas/LiveActivityForegroundInventory'}
+    LiveActivityTokenRegistration:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, installation_id, activity_id, token, token_version, scope, state]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities: {$ref: '#/components/schemas/LiveActivityCapabilities'}
+        installation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        activity_id: {type: string, minLength: 1, maxLength: 256}
+        token: {$ref: '#/components/schemas/LiveActivityToken'}
+        token_version: {$ref: '#/components/schemas/LiveActivityCounter'}
+        scope: {$ref: '#/components/schemas/LiveActivityScope'}
+        known_generation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        timer_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        session_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        state: {type: string, enum: [active, ended, dismissed]}
+    LiveActivityGenerationMapping:
+      type: object
+      additionalProperties: false
+      required: [activity_id, scope, generation_id]
+      properties:
+        activity_id: {type: string, minLength: 1, maxLength: 256}
+        scope: {$ref: '#/components/schemas/LiveActivityScope'}
+        generation_id: {$ref: '#/components/schemas/CanonicalUUID'}
+    LiveActivityRegistrationReceipt:
+      type: object
+      required: [protocol_version, server_instance_id, recovery_epoch, accepted_registration_version, generations]
+      properties:
+        protocol_version: {type: string, const: v1}
+        server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        recovery_epoch: {$ref: '#/components/schemas/LiveActivityCounter'}
+        accepted_registration_version: {$ref: '#/components/schemas/LiveActivityCounter'}
+        accepted_token_version: {$ref: '#/components/schemas/LiveActivityCounter'}
+        unconfirmed_starts:
+          type: array
+          default: []
+          items: {$ref: '#/components/schemas/LiveActivityUnconfirmedStart'}
+        generations:
+          type: array
+          items: {$ref: '#/components/schemas/LiveActivityGenerationMapping'}
+    LiveActivityPayloadScope:
+      description: Immutable ActivityKit attributes use camelCase; timer and session IDs are mutable content only.
+      type: object
+      required: [serverInstanceID, recoveryEpoch, familyID, babyID, kindRaw]
+      properties:
+        serverInstanceID: {$ref: '#/components/schemas/CanonicalUUID'}
+        recoveryEpoch: {$ref: '#/components/schemas/LiveActivityCounter'}
+        familyID: {$ref: '#/components/schemas/CanonicalUUID'}
+        babyID: {$ref: '#/components/schemas/CanonicalUUID'}
+        kindRaw: {type: string, enum: [feed, sleep]}
+    LiveActivityPayloadRevision:
+      type: object
+      required: [scope, generationID, familySequence, presentationVersion, presentationTimestamp, canWrite]
+      properties:
+        scope: {$ref: '#/components/schemas/LiveActivityPayloadScope'}
+        generationID: {$ref: '#/components/schemas/CanonicalUUID'}
+        timerID: {$ref: '#/components/schemas/CanonicalUUID'}
+        sessionID: {$ref: '#/components/schemas/CanonicalUUID'}
+        familySequence: {type: integer, minimum: 0, maximum: 9007199254740991}
+        presentationVersion: {$ref: '#/components/schemas/LiveActivityCounter'}
+        presentationTimestamp: {type: integer, minimum: 0, maximum: 9007199254740991, description: Server Unix seconds for APNs ordering; separate from Foundation content dates.}
+        canWrite: {type: boolean}
+    LiveActivityContentState:
+      type: object
+      required: [startedAt, sideLabel, activityKind]
+      properties:
+        startedAt: {type: number, description: Foundation Date seconds since 2001-01-01T00:00:00Z.}
+        sideLabel: {type: string, description: Legacy saved label; new remote rendering derives localized caption from phase and kind.}
+        activityKind: {type: string, enum: [breastLeft, breastRight, breastMilkBottle, formulaBottle, mixedBottle, timedBottle, paused, sleep]}
+        phase: {type: string, enum: [running, feedBreak, sleepBreak], default: running}
+        breakEndsAt: {type: number, description: Foundation Date seconds since 2001-01-01T00:00:00Z.}
+        parts:
+          type: array
+          items:
+            type: object
+            required: [seconds]
+            properties:
+              side: {type: string, enum: [left, right]}
+              seconds: {type: integer, minimum: 0, maximum: 9007199254740991}
+        suggestedSide: {type: string, enum: [left, right]}
+        omittedParts: {type: integer, minimum: 0, maximum: 9007199254740991, default: 0}
+        remote: {$ref: '#/components/schemas/LiveActivityPayloadRevision'}
+    LiveActivityBadRequestError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [invalid_request, unsupported_protocol]}
+                retryable: {const: false}
+    LiveActivityForbiddenError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [live_activity_registration_denied, membership_revoked, entitlement_required, recovery_only, owner_required, read_only_caregiver]}
+                retryable: {const: false}
+    LiveActivityConflictError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [unsupported_capability, live_activity_version_conflict]}
+                retryable: {const: false}
+    LiveActivityUnavailableError:
+      type: object
+      required: [error]
+      properties:
+        error:
+          allOf:
+            - $ref: '#/components/schemas/ErrorDetail'
+            - type: object
+              properties:
+                code: {enum: [authorization_quarantine, hosted_adapter_unavailable, credential_key_unavailable, security_busy, service_unavailable]}
+                retryable: {const: true}

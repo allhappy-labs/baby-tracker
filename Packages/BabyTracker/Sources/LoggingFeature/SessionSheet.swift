@@ -1,0 +1,312 @@
+import SwiftUI
+import BabyCore
+import BabyStore
+import BabyUI
+
+/// A feed or sleep session in one sheet (mockup G2): its time and totals
+/// with Done, the Join row, then each part with the gap before it in grey on
+/// the left and **Split here** on the right, Add part, and Delete feed /
+/// Delete sleep. Tapping a part slides its editor in, inside the sheet's own
+/// navigation stack; Save or Delete there returns to the session.
+///
+/// A view-only caregiver (ruling H-R6) sees the same session with nothing to
+/// tap: no Join, Split, Add, Delete, swipe or editor.
+public struct SessionSheet: View {
+    @State private var model: SessionSheetModel
+    @State private var path: [PartEditTarget] = []
+    @State private var isConfirmingDelete = false
+    /// `onDone` runs once even when a delete is followed by the revision
+    /// bump that marks the session gone.
+    @State private var isFinished = false
+    private let unit: VolumeUnit
+    private let onDone: () -> Void
+    @Environment(\.errorReporter) private var errorReporter
+
+    public init(model: SessionSheetModel, unit: VolumeUnit, onDone: @escaping () -> Void) {
+        _model = State(initialValue: model)
+        self.unit = unit
+        self.onDone = onDone
+    }
+
+    public var body: some View {
+        NavigationStack(path: $path) {
+            List {
+                if model.canEdit, model.join.previous != nil {
+                    Section { JoinRow(model: model.join) }
+                }
+
+                Section {
+                    ForEach(Array(model.parts.enumerated()), id: \.element.id) { index, part in
+                        if showsGapRow(part) {
+                            gapRow(part, index: index)
+                        }
+                        partRow(part, index: index)
+                    }
+                }
+
+                if model.canEdit {
+                    Section { addPart }
+                    Section { deleteSessionButton }
+                }
+            }
+            // Gap rows are a line of small text, not a full row.
+            .environment(\.defaultMinListRowHeight, 24)
+            #if os(iOS)
+            .listSectionSpacing(.compact)
+            // The header is drawn below, with Done beside the time, as in the
+            // mockup; a bar above it would only leave an empty band.
+            .toolbar(.hidden, for: .navigationBar)
+            #endif
+            // What the pushed editor's back button reads.
+            .navigationTitle(model.title)
+            .safeAreaInset(edge: .top, spacing: 0) { header }
+            .navigationDestination(for: PartEditTarget.self) { target in
+                PartEditSheet(model: model.editorModel(for: target), showsJoinRow: false) {
+                    if path.last == target { path.removeLast() }
+                }
+            }
+            .deleteConfirmation(isPresented: $isConfirmingDelete, title: deleteConfirmTitle,
+                                identifierPrefix: "sessionSheet", onDelete: deleteSession)
+        }
+        .sheetHeight(height)
+        .editLifecycle(revision: model.store.revision, isGone: model.isGone, reload: model.reload, onGone: finish)
+    }
+
+    // MARK: - Header
+
+    private var header: some View {
+        HStack(alignment: .top, spacing: 12) {
+            VStack(alignment: .leading, spacing: 2) {
+                Text(model.title)
+                    .font(.title3.weight(.bold))
+                    .monospacedDigit()
+                    .foregroundStyle(Palette.primaryText)
+                    .accessibilityAddTraits(.isHeader)
+                    .accessibilityIdentifier("sessionSheet.title")
+                if !model.totals.isEmpty {
+                    Text(model.totals)
+                        .font(.subheadline)
+                        .monospacedDigit()
+                        .foregroundStyle(Palette.secondaryText)
+                        .accessibilityIdentifier("sessionSheet.totals")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            // The 44-point frame inside the label: outside it, it only
+            // padded the layout, and the hit area stayed the word's own size
+            // (the accessibility audit's hitRegion finding).
+            Button(action: finish) {
+                Text(SessionSheetCopy.done)
+                    .font(.body.weight(.semibold))
+                    .frame(minWidth: 44, minHeight: 44)
+                    .contentShape(.rect)
+            }
+            .accessibilityIdentifier("sessionSheet.done")
+        }
+        .padding(.horizontal, 20)
+        .padding(.top, 16)
+        .padding(.bottom, 4)
+    }
+
+    // MARK: - Parts
+
+    private func partRow(_ part: SessionPart, index: Int) -> some View {
+        let content = HStack(spacing: 12) {
+            BabyIconView(part.icon, size: 22)
+                .foregroundStyle(tint)
+            Text(part.label)
+                .foregroundStyle(Palette.primaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+            Text(part.detail)
+                .font(.subheadline)
+                .monospacedDigit()
+                .foregroundStyle(Palette.secondaryText)
+        }
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .combine)
+
+        return Group {
+            if model.canEdit {
+                NavigationLink(value: part.target) { content }
+                    .swipeActions(edge: .trailing, allowsFullSwipe: true) {
+                        Button(role: .destructive) {
+                            deletePart(part)
+                        } label: {
+                            Label(EditChromeCopy.delete, systemImage: "trash")
+                        }
+                        .accessibilityIdentifier("sessionSheet.part.\(index).delete")
+                    }
+            } else {
+                content
+            }
+        }
+        .listRowSeparator(.hidden)
+        .listRowInsets(Self.partInsets)
+        .accessibilityIdentifier("sessionSheet.part.\(index)")
+    }
+
+    /// Part rows sit close; the gap line between two of them is a line of
+    /// small text, not another full row (mockup G2).
+    private static let partInsets = EdgeInsets(top: 2, leading: 20, bottom: 2, trailing: 20)
+    private static let gapInsets = EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
+
+    /// The line between two parts: the gap in small grey text on the left
+    /// and Split here on the right, only where Split can cut (ruling H-R2).
+    /// No scissors, no dashed line. The row has no insets of its own, so it
+    /// is as tall as Split here's 44-point tap target and no taller: a list
+    /// row's touches end at its edge, so the target cannot borrow height
+    /// from the parts around it. With no Split, the line is shorter still.
+    private func gapRow(_ part: SessionPart, index: Int) -> some View {
+        let canSplit = model.canEdit && part.canSplitBefore
+        return HStack(spacing: 12) {
+            Text(part.gapBefore ?? "")
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(Palette.secondaryText)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .accessibilityIdentifier("sessionSheet.gap.\(index)")
+            if canSplit {
+                Button { split(before: part) } label: {
+                    Text(SessionSheetCopy.splitHere)
+                        .font(.caption.weight(.semibold))
+                        // Wider and taller to the touch than it looks.
+                        .padding(.leading, 12)
+                        .frame(minWidth: 44, minHeight: 44, alignment: .trailing)
+                        .contentShape(Rectangle())
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(SessionSheetCopy.splitBefore(part.label))
+                .accessibilityIdentifier("sessionSheet.split.\(index)")
+            }
+        }
+        .frame(minHeight: canSplit ? 44 : 24)
+        .listRowSeparator(.hidden)
+        .listRowInsets(Self.gapInsets)
+    }
+
+    private func showsGapRow(_ part: SessionPart) -> Bool {
+        part.gapBefore != nil || (model.canEdit && part.canSplitBefore)
+    }
+
+    // MARK: - Add and Delete
+
+    /// Left, Right and Bottle for a feed; a sleep has the one kind, so its
+    /// Add part adds a sleep at once rather than opening a one-item menu.
+    /// A kind that would end in the future is off (ruling H-R18) until the
+    /// session ended long enough ago; while one is off, the row re-checks
+    /// every few seconds, as nothing else redraws the sheet as time passes.
+    @ViewBuilder
+    private var addPart: some View {
+        if AddPartKind.offered(for: model.kind).allSatisfy(model.canAdd) {
+            addPartControl
+        } else {
+            TimelineView(.periodic(from: .now, by: 5)) { _ in addPartControl }
+        }
+    }
+
+    @ViewBuilder
+    private var addPartControl: some View {
+        let offered = AddPartKind.offered(for: model.kind)
+        if offered.count == 1, let only = offered.first {
+            Button { add(only) } label: { addPartLabel(isEnabled: model.canAdd(only)) }
+                .disabled(!model.canAdd(only))
+                .accessibilityIdentifier("sessionSheet.addPart")
+        } else {
+            Menu {
+                ForEach(offered, id: \.self) { kind in
+                    Button(kind.title) { add(kind) }
+                        .disabled(!model.canAdd(kind))
+                        .accessibilityIdentifier("sessionSheet.add.\(kind)")
+                }
+            } label: {
+                addPartLabel(isEnabled: true)
+            }
+            .accessibilityIdentifier("sessionSheet.addPart")
+        }
+    }
+
+    /// Dimmed by hand while off: the tint is set explicitly, so the
+    /// button's own disabled look does not reach it (it looked as on as
+    /// ever in the screenshots).
+    private func addPartLabel(isEnabled: Bool) -> some View {
+        Label(SessionSheetCopy.addPart, systemImage: "plus")
+            .foregroundStyle(isEnabled ? tint : tint.opacity(0.4))
+            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+            .contentShape(.rect)
+    }
+
+    private var deleteSessionButton: some View {
+        Button(role: .destructive) {
+            isConfirmingDelete = true
+        } label: {
+            Text(model.kind == .feed ? SessionSheetCopy.deleteFeed : SessionSheetCopy.deleteSleep)
+                .font(.body.weight(.semibold))
+                .foregroundStyle(Palette.destructive)
+                .frame(maxWidth: .infinity, minHeight: 44)
+                .contentShape(.rect)
+        }
+        .accessibilityIdentifier("sessionSheet.delete")
+    }
+
+    private var deleteConfirmTitle: String {
+        model.kind == .feed ? SessionSheetCopy.deleteFeedConfirmTitle : SessionSheetCopy.deleteSleepConfirmTitle
+    }
+
+    // MARK: - Layout
+
+    private var tint: Color { model.kind == .feed ? Palette.feed : Palette.sleep }
+
+    /// Sized to the list at the default text size: the header, the Join row
+    /// when there is one, each part and gap row, Add part and Delete. With an
+    /// editor pushed, at least as tall as that editor needs.
+    private var height: CGFloat {
+        let gaps = model.parts.filter(showsGapRow).count
+        let list: CGFloat = 76
+            + (model.canEdit && model.join.previous != nil ? 72 : 0)
+            + CGFloat(model.parts.count) * 52 + CGFloat(gaps) * 36 + 20
+            + (model.canEdit ? 144 : 0)
+            + 40
+        guard let editing = path.last else { return list }
+        let editor: CGFloat = switch editing {
+        case .bottle: 780
+        case .breast, .sleep: 560
+        }
+        return max(list, editor)
+    }
+
+    // MARK: - Actions
+
+    private var subject: String { model.kind == .feed ? ErrorSubject.feed : ErrorSubject.sleep }
+
+    private func split(before part: SessionPart) {
+        _ = performEdit({ try model.split(before: part.id) }, failure: ErrorBannerCopy.saveFailed(what: subject),
+                        reporter: errorReporter)
+    }
+
+    private func add(_ kind: AddPartKind) {
+        var added: PartEditTarget?
+        if performEdit({ added = try model.addPart(kind) }, failure: ErrorBannerCopy.saveFailed(what: subject),
+                       reporter: errorReporter), let added {
+            path.append(added)
+        }
+    }
+
+    private func deletePart(_ part: SessionPart) {
+        _ = performEdit({ try model.deletePart(part.id) }, failure: ErrorBannerCopy.deleteFailed(what: subject),
+                        reporter: errorReporter)
+    }
+
+    private func deleteSession() {
+        if performEdit(model.deleteSession, failure: ErrorBannerCopy.deleteFailed(what: subject),
+                       reporter: errorReporter) {
+            finish()
+        }
+    }
+
+    private func finish() {
+        guard !isFinished else { return }
+        isFinished = true
+        onDone()
+    }
+}

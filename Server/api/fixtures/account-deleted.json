@@ -1,0 +1,8 @@
+{
+  "protocol_version": "v1",
+  "command_id": "10000000-0000-4000-8000-000000000009",
+  "outcome": "applied",
+  "code": "ok",
+  "revision": 9,
+  "apple_authorization_revocation": "pending"
+}

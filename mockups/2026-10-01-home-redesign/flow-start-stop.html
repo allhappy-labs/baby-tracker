@@ -1,0 +1,150 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>flow-start-stop</title><style>body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px}.subtitle{opacity:.7}.option,.pick{border:1px solid #333;border-radius:14px;padding:12px;margin:10px 0}.letter{display:inline-block;padding:2px 8px;background:#333;border-radius:6px;margin-right:8px}</style>
+<style>
+  .phones{display:flex;gap:16px;flex-wrap:nowrap;justify-content:center;margin-top:18px;overflow-x:auto;padding-bottom:6px}
+  .col{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .col p{margin:0;max-width:230px;font-size:12px;opacity:.8;text-align:center}
+  .col h3{margin:0;font-size:14px}
+  .ph{width:236px;height:500px;border-radius:34px;background:#0B1020;position:relative;overflow:hidden;flex:none;
+      font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 6px #1d2233,0 14px 30px rgba(0,0,0,.45)}
+  .hd{display:flex;align-items:center;justify-content:space-between;padding:30px 16px 0}
+  .name{font-size:18px;font-weight:700}
+  .tabs{position:absolute;bottom:8px;left:10px;right:10px;height:40px;border-radius:20px;background:rgba(255,255,255,.07)}
+  svg.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}
+  .bgF{background:rgba(242,176,97,.14)}.bgS{background:rgba(138,155,240,.14)}.bgD{background:rgba(95,211,196,.14)}
+  .num{font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-.5px}
+  .mut{color:#8B93AD}
+  .chip{display:inline-flex;align-items:center;gap:6px;border-radius:12px;padding:4px 5px 4px 9px;font-size:10px;background:rgba(255,255,255,.07)}
+  .chip b{background:rgba(255,255,255,.12);border-radius:9px;padding:2px 4px;display:grid}
+  .dock{position:absolute;left:10px;right:10px;bottom:58px;border-radius:26px;background:rgba(255,255,255,.07);padding:10px}
+  .btn{border-radius:17px;display:flex;align-items:center;justify-content:center;gap:6px;font-weight:700}
+  .stop{background:#EEF1FA;color:#0B1020}
+  .ghost{background:rgba(255,255,255,.08);color:#8B93AD}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .live{width:6px;height:6px;border-radius:3px;background:currentColor;display:inline-block;animation:pulse 1.6s infinite}
+  .steps{display:flex;gap:3px;margin:12px 22px 0;height:7px}
+  .steps div{border-radius:4px}
+  .arrow{align-self:center;font-size:22px;opacity:.4;flex:none;margin-top:-60px}
+  .seg{display:flex;justify-content:center;gap:14px;font-size:11px;margin-top:6px}
+</style>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="drop" viewBox="0 0 24 24"><path d="M12 2.8c3.9 4.6 6.6 8.2 6.6 11.6a6.6 6.6 0 0 1-13.2 0c0-3.4 2.7-7 6.6-11.6z"/></symbol>
+  <symbol id="bottle" viewBox="0 0 24 24"><path d="M10.4 2.6h3.2M9.6 6.2 10.4 2.6h3.2l.8 3.6z"/><rect x="7.2" y="6.2" width="9.6" height="15" rx="3"/><path d="M7.2 11h3.4M7.2 14.4h3.4M7.2 17.8h3.4"/></symbol>
+  <symbol id="moon" viewBox="0 0 24 24"><path d="M19.8 14.8A8.2 8.2 0 0 1 9.2 4.2a8.2 8.2 0 1 0 10.6 10.6z"/><path d="M16 3.5v3M14.5 5h3"/></symbol>
+  <symbol id="diaper" viewBox="0 0 24 24"><path d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path d="M2.8 6.8H1.2M21.2 6.8h1.6"/><rect x="9.6" y="7.6" width="4.8" height="3.2" rx="1"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></symbol>
+  <symbol id="x" viewBox="0 0 24 24"><path d="M7 7l10 10M17 7 7 17"/></symbol>
+</defs></svg>
+
+<h2>Start → stop, one thing at a time</h2>
+<p class="subtitle">Each breast, bottle or sleep is its own timer. Starting again within your break limit (e.g. 30 min for feeds) joins the same feed automatically. No Switch, no Pause, no Resume.</p>
+
+<div class="phones">
+
+<!-- 1 idle -->
+<div class="col">
+  <div class="ph">
+    <div class="hd"><div class="name">Mila</div><div class="mut" style="font-size:11px">7 weeks</div></div>
+    <div style="text-align:center;padding-top:30px">
+      <div class="sleep" style="font-size:11px;font-weight:600;display:flex;gap:5px;justify-content:center"><svg class="ic" style="width:14px;height:14px"><use href="#moon"/></svg>Awake</div>
+      <div class="num" style="font-size:52px">40m</div>
+      <div class="seg"><span class="feed" style="display:flex;gap:4px;align-items:center"><svg class="ic" style="width:13px;height:13px"><use href="#drop"/></svg><span class="num" style="color:#EEF1FA">2h 10m</span></span><span class="diaper" style="display:flex;gap:4px;align-items:center"><svg class="ic" style="width:13px;height:13px"><use href="#diaper"/></svg><span class="num" style="color:#EEF1FA">1h 5m</span></span></div>
+    </div>
+    <div class="dock">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+        <div class="btn bgF" style="height:58px;font-size:18px;box-shadow:inset 0 0 0 2px #F2B061"><svg class="ic feed"><use href="#drop"/></svg>L</div>
+        <div class="btn bgF" style="height:58px;font-size:18px"><svg class="ic feed"><use href="#drop"/></svg>R</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:7px">
+        <div class="btn bgF feed" style="height:46px"><svg class="ic"><use href="#bottle"/></svg></div>
+        <div class="btn bgS sleep" style="height:46px"><svg class="ic"><use href="#moon"/></svg></div>
+        <div class="btn bgD diaper" style="height:46px"><svg class="ic"><use href="#diaper"/></svg></div>
+        <div class="btn ghost" style="height:46px"><svg class="ic"><use href="#more"/></svg></div>
+      </div>
+    </div>
+    <div class="tabs"></div>
+  </div>
+  <h3>1 · Tap L</h3>
+  <p>L is outlined because last feed ended on R.</p>
+</div>
+<div class="arrow">→</div>
+
+<!-- 2 left running -->
+<div class="col">
+  <div class="ph">
+    <div class="hd"><div class="name">Mila</div><div class="mut" style="font-size:11px">7 weeks</div></div>
+    <div style="text-align:center;padding-top:40px">
+      <div class="feed" style="font-size:13px;font-weight:700;display:flex;gap:6px;justify-content:center;align-items:center"><span class="live"></span>Left</div>
+      <div class="num" style="font-size:60px;line-height:1.1">9:02</div>
+      <div class="mut" style="font-size:11px">since 3:02</div>
+    </div>
+    <div class="dock">
+      <div class="btn stop" style="height:72px;font-size:18px">Stop</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px">
+        <div class="btn bgD diaper" style="height:46px"><svg class="ic"><use href="#diaper"/></svg></div>
+        <div class="btn ghost" style="height:46px"><svg class="ic"><use href="#more"/></svg></div>
+      </div>
+    </div>
+    <div class="tabs"></div>
+  </div>
+  <h3>2 · Left runs</h3>
+  <p>Just this breast's time and one huge Stop. Diaper / more still reachable.</p>
+</div>
+<div class="arrow">→</div>
+
+<!-- 3 break -->
+<div class="col">
+  <div class="ph">
+    <div class="hd"><div class="name">Mila</div><div class="mut" style="font-size:11px">7 weeks</div></div>
+    <div style="text-align:center;padding-top:30px">
+      <div class="feed" style="font-size:11px;font-weight:600">Feed · break</div>
+      <div class="num" style="font-size:52px">0:40</div>
+      <div class="seg"><span><b class="feed">L</b> <span class="num">9:02</span></span></div>
+    </div>
+    <div class="steps"><div style="flex:9;background:#F2B061"></div><div style="flex:1;background:rgba(255,255,255,.08)"></div><div style="flex:8;background:transparent;border:1px dashed rgba(242,176,97,.35)"></div></div>
+    <div class="dock">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px">
+        <div class="btn bgF" style="height:58px;font-size:18px"><svg class="ic feed"><use href="#drop"/></svg>L</div>
+        <div class="btn bgF" style="height:58px;font-size:18px;box-shadow:inset 0 0 0 2px #F2B061"><svg class="ic feed"><use href="#drop"/></svg>R</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:7px;margin-top:7px">
+        <div class="btn bgF feed" style="height:46px"><svg class="ic"><use href="#bottle"/></svg></div>
+        <div class="btn bgS sleep" style="height:46px"><svg class="ic"><use href="#moon"/></svg></div>
+        <div class="btn bgD diaper" style="height:46px"><svg class="ic"><use href="#diaper"/></svg></div>
+        <div class="btn ghost" style="height:46px"><svg class="ic"><use href="#more"/></svg></div>
+      </div>
+    </div>
+    <div class="tabs"></div>
+  </div>
+  <h3>3 · Stopped</h3>
+  <p>Feed stays "open" during the break; R is now suggested. Nothing to dismiss.</p>
+</div>
+<div class="arrow">→</div>
+
+<!-- 4 right running, continuing -->
+<div class="col">
+  <div class="ph">
+    <div class="hd"><div class="name">Mila</div><div class="mut" style="font-size:11px">7 weeks</div></div>
+    <div style="text-align:center;padding-top:30px">
+      <div class="chip"><span style="color:#EEF1FA">Same feed · L 9:02</span><b><svg class="ic" style="width:10px;height:10px"><use href="#x"/></svg></b></div>
+      <div class="feed" style="font-size:13px;font-weight:700;display:flex;gap:6px;justify-content:center;align-items:center;margin-top:12px"><span class="live"></span>Right</div>
+      <div class="num" style="font-size:60px;line-height:1.1">4:22</div>
+      <div class="mut" style="font-size:11px">since 3:12</div>
+    </div>
+    <div class="steps"><div style="flex:9;background:#F2B061;opacity:.5"></div><div style="flex:1;background:rgba(255,255,255,.08)"></div><div style="flex:4;background:#F2B061"></div><div style="flex:4"></div></div>
+    <div class="dock">
+      <div class="btn stop" style="height:72px;font-size:18px">Stop</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px">
+        <div class="btn bgD diaper" style="height:46px"><svg class="ic"><use href="#diaper"/></svg></div>
+        <div class="btn ghost" style="height:46px"><svg class="ic"><use href="#more"/></svg></div>
+      </div>
+    </div>
+    <div class="tabs"></div>
+  </div>
+  <h3>4 · Tap R</h3>
+  <p>Joins the same feed (✕ = make it a new feed). Then Stop. If nothing starts within 30 min, the feed just closes.</p>
+</div>
+
+</div>

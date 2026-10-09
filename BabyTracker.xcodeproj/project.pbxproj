@@ -1,0 +1,732 @@
+// !$*UTF8*$!
+{
+	archiveVersion = 1;
+	classes = {
+	};
+	objectVersion = 77;
+	objects = {
+
+/* Begin PBXBuildFile section */
+		AA0000000000000000000021 /* BabyCore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000011 /* BabyCore */; };
+		AA0000000000000000000022 /* BabyStore in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000012 /* BabyStore */; };
+		AA0000000000000000000023 /* BabySync in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000013 /* BabySync */; };
+		AA0000000000000000000024 /* BabyUI in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000014 /* BabyUI */; };
+		AA0000000000000000000025 /* HomeFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000015 /* HomeFeature */; };
+		AA0000000000000000000026 /* LoggingFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000016 /* LoggingFeature */; };
+		AA0000000000000000000027 /* HistoryFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000017 /* HistoryFeature */; };
+		AA0000000000000000000028 /* InsightsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000018 /* InsightsFeature */; };
+		AA000000000000000000003A /* AskFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001B /* AskFeature */; };
+		AA0000000000000000000029 /* BabyFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA0000000000000000000019 /* BabyFeature */; };
+		AA000000000000000000003B /* SettingsFeature in Frameworks */ = {isa = PBXBuildFile; productRef = AA000000000000000000001A /* SettingsFeature */; };
+		BB000000000000000000000B /* BabyTrackerWidgets.appex in Embed Foundation Extensions */ = {isa = PBXBuildFile; fileRef = BB0000000000000000000001 /* BabyTrackerWidgets.appex */; settings = {ATTRIBUTES = (RemoveHeadersOnCopy, ); }; };
+		BB0000000000000000000021 /* BabyCore in Frameworks */ = {isa = PBXBuildFile; productRef = BB0000000000000000000011 /* BabyCore */; };
+		BB0000000000000000000022 /* BabyStore in Frameworks */ = {isa = PBXBuildFile; productRef = BB0000000000000000000012 /* BabyStore */; };
+		BB0000000000000000000023 /* BabyUI in Frameworks */ = {isa = PBXBuildFile; productRef = BB0000000000000000000013 /* BabyUI */; };
+		BB0000000000000000000024 /* BabyFeature in Frameworks */ = {isa = PBXBuildFile; productRef = BB0000000000000000000014 /* BabyFeature */; };
+/* End PBXBuildFile section */
+
+/* Begin PBXContainerItemProxy section */
+		BB000000000000000000000D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = BB0000000000000000000003;
+			remoteInfo = BabyTrackerWidgets;
+		};
+		DD000000000000000000000D /* PBXContainerItemProxy */ = {
+			isa = PBXContainerItemProxy;
+			containerPortal = AA0000000000000000000001 /* Project object */;
+			proxyType = 1;
+			remoteGlobalIDString = AA0000000000000000000004;
+			remoteInfo = BabyTracker;
+		};
+/* End PBXContainerItemProxy section */
+
+/* Begin PBXCopyFilesBuildPhase section */
+		BB000000000000000000000A /* Embed Foundation Extensions */ = {
+			isa = PBXCopyFilesBuildPhase;
+			buildActionMask = 2147483647;
+			dstPath = "";
+			dstSubfolderSpec = 13;
+			files = (
+				BB000000000000000000000B /* BabyTrackerWidgets.appex in Embed Foundation Extensions */,
+			);
+			name = "Embed Foundation Extensions";
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXCopyFilesBuildPhase section */
+
+/* Begin PBXFileReference section */
+		AA0000000000000000000005 /* BabyTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BabyTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
+		AA000000000000000000002A /* BabyTracker.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BabyTracker.entitlements; sourceTree = "<group>"; };
+		AA000000000000000000002D /* BabyTrackerLiveActivityPush.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BabyTrackerLiveActivityPush.entitlements; sourceTree = "<group>"; };
+		BB0000000000000000000001 /* BabyTrackerWidgets.appex */ = {isa = PBXFileReference; explicitFileType = "wrapper.app-extension"; includeInIndex = 0; path = BabyTrackerWidgets.appex; sourceTree = BUILT_PRODUCTS_DIR; };
+		BB000000000000000000000E /* BabyTrackerWidgets.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = BabyTrackerWidgets.entitlements; sourceTree = "<group>"; };
+		BB000000000000000000000F /* BabyTrackerWidgets-Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist; path = "BabyTrackerWidgets-Info.plist"; sourceTree = "<group>"; };
+		DD0000000000000000000001 /* BabyTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BabyTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+/* End PBXFileReference section */
+
+/* Begin PBXFileSystemSynchronizedRootGroup section */
+		AA000000000000000000000F /* BabyTrackerApp */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BabyTrackerApp;
+			sourceTree = "<group>";
+		};
+		BB0000000000000000000002 /* BabyTrackerWidgets */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BabyTrackerWidgets;
+			sourceTree = "<group>";
+		};
+		CC0000000000000000000001 /* SharedIntents */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = SharedIntents;
+			sourceTree = "<group>";
+		};
+		DD0000000000000000000002 /* BabyTrackerUITests */ = {
+			isa = PBXFileSystemSynchronizedRootGroup;
+			path = BabyTrackerUITests;
+			sourceTree = "<group>";
+		};
+/* End PBXFileSystemSynchronizedRootGroup section */
+
+/* Begin PBXFrameworksBuildPhase section */
+		AA0000000000000000000007 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				AA0000000000000000000021 /* BabyCore in Frameworks */,
+				AA0000000000000000000022 /* BabyStore in Frameworks */,
+				AA0000000000000000000023 /* BabySync in Frameworks */,
+				AA0000000000000000000024 /* BabyUI in Frameworks */,
+				AA0000000000000000000025 /* HomeFeature in Frameworks */,
+				AA0000000000000000000026 /* LoggingFeature in Frameworks */,
+				AA0000000000000000000027 /* HistoryFeature in Frameworks */,
+				AA0000000000000000000028 /* InsightsFeature in Frameworks */,
+				AA000000000000000000003A /* AskFeature in Frameworks */,
+				AA0000000000000000000029 /* BabyFeature in Frameworks */,
+				AA000000000000000000003B /* SettingsFeature in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB0000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+				BB0000000000000000000021 /* BabyCore in Frameworks */,
+				BB0000000000000000000022 /* BabyStore in Frameworks */,
+				BB0000000000000000000023 /* BabyUI in Frameworks */,
+				BB0000000000000000000024 /* BabyFeature in Frameworks */,
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD0000000000000000000005 /* Frameworks */ = {
+			isa = PBXFrameworksBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXFrameworksBuildPhase section */
+
+/* Begin PBXGroup section */
+		AA0000000000000000000002 = {
+			isa = PBXGroup;
+			children = (
+				AA000000000000000000002B /* Apps */,
+				DD000000000000000000000A /* UITests */,
+				AA000000000000000000002C /* Packages */,
+				AA0000000000000000000003 /* Products */,
+			);
+			sourceTree = "<group>";
+		};
+		AA0000000000000000000003 /* Products */ = {
+			isa = PBXGroup;
+			children = (
+				AA0000000000000000000005 /* BabyTracker.app */,
+				BB0000000000000000000001 /* BabyTrackerWidgets.appex */,
+				DD0000000000000000000001 /* BabyTrackerUITests.xctest */,
+			);
+			name = Products;
+			sourceTree = "<group>";
+		};
+		AA000000000000000000002B /* Apps */ = {
+			isa = PBXGroup;
+			children = (
+				AA000000000000000000000F /* BabyTrackerApp */,
+				BB0000000000000000000002 /* BabyTrackerWidgets */,
+				CC0000000000000000000001 /* SharedIntents */,
+				AA000000000000000000002A /* BabyTracker.entitlements */,
+				AA000000000000000000002D /* BabyTrackerLiveActivityPush.entitlements */,
+				BB000000000000000000000E /* BabyTrackerWidgets.entitlements */,
+				BB000000000000000000000F /* BabyTrackerWidgets-Info.plist */,
+			);
+			path = Apps;
+			sourceTree = "<group>";
+		};
+		AA000000000000000000002C /* Packages */ = {
+			isa = PBXGroup;
+			children = (
+			);
+			name = Packages;
+			sourceTree = "<group>";
+		};
+		DD000000000000000000000A /* UITests */ = {
+			isa = PBXGroup;
+			children = (
+				DD0000000000000000000002 /* BabyTrackerUITests */,
+			);
+			path = UITests;
+			sourceTree = "<group>";
+		};
+/* End PBXGroup section */
+
+/* Begin PBXNativeTarget section */
+		AA0000000000000000000004 /* BabyTracker */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = AA000000000000000000000A /* Build configuration list for PBXNativeTarget "BabyTracker" */;
+			buildPhases = (
+				AA0000000000000000000006 /* Sources */,
+				AA0000000000000000000007 /* Frameworks */,
+				AA0000000000000000000008 /* Resources */,
+				BB000000000000000000000A /* Embed Foundation Extensions */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				BB000000000000000000000C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				AA000000000000000000000F /* BabyTrackerApp */,
+				CC0000000000000000000001 /* SharedIntents */,
+			);
+			name = BabyTracker;
+			packageProductDependencies = (
+				AA0000000000000000000011 /* BabyCore */,
+				AA0000000000000000000012 /* BabyStore */,
+				AA0000000000000000000013 /* BabySync */,
+				AA0000000000000000000014 /* BabyUI */,
+				AA0000000000000000000015 /* HomeFeature */,
+				AA0000000000000000000016 /* LoggingFeature */,
+				AA0000000000000000000017 /* HistoryFeature */,
+				AA0000000000000000000018 /* InsightsFeature */,
+				AA000000000000000000001B /* AskFeature */,
+				AA0000000000000000000019 /* BabyFeature */,
+				AA000000000000000000001A /* SettingsFeature */,
+			);
+			productName = BabyTracker;
+			productReference = AA0000000000000000000005 /* BabyTracker.app */;
+			productType = "com.apple.product-type.application";
+		};
+		BB0000000000000000000003 /* BabyTrackerWidgets */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "BabyTrackerWidgets" */;
+			buildPhases = (
+				BB0000000000000000000004 /* Sources */,
+				BB0000000000000000000005 /* Frameworks */,
+				BB0000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+			);
+			fileSystemSynchronizedGroups = (
+				BB0000000000000000000002 /* BabyTrackerWidgets */,
+				CC0000000000000000000001 /* SharedIntents */,
+			);
+			name = BabyTrackerWidgets;
+			packageProductDependencies = (
+				BB0000000000000000000011 /* BabyCore */,
+				BB0000000000000000000012 /* BabyStore */,
+				BB0000000000000000000013 /* BabyUI */,
+				BB0000000000000000000014 /* BabyFeature */,
+			);
+			productName = BabyTrackerWidgets;
+			productReference = BB0000000000000000000001 /* BabyTrackerWidgets.appex */;
+			productType = "com.apple.product-type.app-extension";
+		};
+		DD0000000000000000000003 /* BabyTrackerUITests */ = {
+			isa = PBXNativeTarget;
+			buildConfigurationList = DD0000000000000000000007 /* Build configuration list for PBXNativeTarget "BabyTrackerUITests" */;
+			buildPhases = (
+				DD0000000000000000000004 /* Sources */,
+				DD0000000000000000000005 /* Frameworks */,
+				DD0000000000000000000006 /* Resources */,
+			);
+			buildRules = (
+			);
+			dependencies = (
+				DD000000000000000000000C /* PBXTargetDependency */,
+			);
+			fileSystemSynchronizedGroups = (
+				DD0000000000000000000002 /* BabyTrackerUITests */,
+			);
+			name = BabyTrackerUITests;
+			packageProductDependencies = (
+			);
+			productName = BabyTrackerUITests;
+			productReference = DD0000000000000000000001 /* BabyTrackerUITests.xctest */;
+			productType = "com.apple.product-type.bundle.ui-testing";
+		};
+/* End PBXNativeTarget section */
+
+/* Begin PBXProject section */
+		AA0000000000000000000001 /* Project object */ = {
+			isa = PBXProject;
+			attributes = {
+				BuildIndependentTargetsInParallel = 1;
+				LastSwiftUpdateCheck = 2700;
+				LastUpgradeCheck = 2700;
+				TargetAttributes = {
+					AA0000000000000000000004 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					BB0000000000000000000003 = {
+						CreatedOnToolsVersion = 27.0;
+					};
+					DD0000000000000000000003 = {
+						CreatedOnToolsVersion = 27.0;
+						TestTargetID = AA0000000000000000000004;
+					};
+				};
+			};
+			buildConfigurationList = AA0000000000000000000009 /* Build configuration list for PBXProject "BabyTracker" */;
+			developmentRegion = en;
+			hasScannedForEncodings = 0;
+			knownRegions = (
+				en,
+				de,
+				fr,
+				es,
+				it,
+				uk,
+				Base,
+			);
+			mainGroup = AA0000000000000000000002;
+			minimizedProjectReferenceProxies = 1;
+			packageReferences = (
+				AA0000000000000000000010 /* XCLocalSwiftPackageReference "Packages/BabyTracker" */,
+			);
+			preferredProjectObjectVersion = 77;
+			productRefGroup = AA0000000000000000000003 /* Products */;
+			projectDirPath = "";
+			projectRoot = "";
+			targets = (
+				AA0000000000000000000004 /* BabyTracker */,
+				BB0000000000000000000003 /* BabyTrackerWidgets */,
+				DD0000000000000000000003 /* BabyTrackerUITests */,
+			);
+		};
+/* End PBXProject section */
+
+/* Begin PBXResourcesBuildPhase section */
+		AA0000000000000000000008 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB0000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD0000000000000000000006 /* Resources */ = {
+			isa = PBXResourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXResourcesBuildPhase section */
+
+/* Begin PBXSourcesBuildPhase section */
+		AA0000000000000000000006 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		BB0000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+		DD0000000000000000000004 /* Sources */ = {
+			isa = PBXSourcesBuildPhase;
+			buildActionMask = 2147483647;
+			files = (
+			);
+			runOnlyForDeploymentPostprocessing = 0;
+		};
+/* End PBXSourcesBuildPhase section */
+
+/* Begin PBXTargetDependency section */
+		BB000000000000000000000C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = BB0000000000000000000003 /* BabyTrackerWidgets */;
+			targetProxy = BB000000000000000000000D /* PBXContainerItemProxy */;
+		};
+		DD000000000000000000000C /* PBXTargetDependency */ = {
+			isa = PBXTargetDependency;
+			target = AA0000000000000000000004 /* BabyTracker */;
+			targetProxy = DD000000000000000000000D /* PBXContainerItemProxy */;
+		};
+/* End PBXTargetDependency section */
+
+/* Begin XCBuildConfiguration section */
+		AA000000000000000000000B /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = dwarf;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_TESTABILITY = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_DYNAMIC_NO_PIC = NO;
+				GCC_NO_COMMON_BLOCKS = YES;
+				GCC_OPTIMIZATION_LEVEL = 0;
+				GCC_PREPROCESSOR_DEFINITIONS = (
+					"DEBUG=1",
+					"$(inherited)",
+				);
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = INCLUDE_SOURCE;
+				MTL_FAST_MATH = YES;
+				ONLY_ACTIVE_ARCH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+			};
+			name = Debug;
+		};
+		AA000000000000000000000C /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ALWAYS_SEARCH_USER_PATHS = NO;
+				ASSETCATALOG_COMPILER_GENERATE_SWIFT_ASSET_SYMBOL_EXTENSIONS = YES;
+				CLANG_ANALYZER_NONNULL = YES;
+				CLANG_ENABLE_MODULES = YES;
+				CLANG_ENABLE_OBJC_ARC = YES;
+				COPY_PHASE_STRIP = NO;
+				DEBUG_INFORMATION_FORMAT = "dwarf-with-dsym";
+				ENABLE_NS_ASSERTIONS = NO;
+				ENABLE_STRICT_OBJC_MSGSEND = YES;
+				ENABLE_USER_SCRIPT_SANDBOXING = YES;
+				GCC_C_LANGUAGE_STANDARD = gnu17;
+				GCC_NO_COMMON_BLOCKS = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MTL_ENABLE_DEBUG_INFO = NO;
+				MTL_FAST_MATH = YES;
+				SDKROOT = iphoneos;
+				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				VALIDATE_PRODUCT = YES;
+			};
+			name = Release;
+		};
+		AA000000000000000000000D /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerLiveActivityPush.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TEAM123456;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Apps/BabyTracker-Info.plist";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Baby Tracker uses the camera to scan a caregiver invitation QR code.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "BabyTracker Development - TEAM123456";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		AA000000000000000000000E /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
+				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerLiveActivityPush.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TEAM123456;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = YES;
+				INFOPLIST_FILE = "Apps/BabyTracker-Info.plist";
+				INFOPLIST_KEY_NSCameraUsageDescription = "Baby Tracker uses the camera to scan a caregiver invitation QR code.";
+				INFOPLIST_KEY_NSSupportsLiveActivities = YES;
+				INFOPLIST_KEY_UIApplicationSceneManifest_Generation = YES;
+				INFOPLIST_KEY_UIApplicationSupportsIndirectInputEvents = YES;
+				INFOPLIST_KEY_UILaunchScreen_Generation = YES;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations = UIInterfaceOrientationPortrait;
+				INFOPLIST_KEY_UISupportedInterfaceOrientations_iPad = "UIInterfaceOrientationPortrait UIInterfaceOrientationPortraitUpsideDown UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight";
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "BabyTracker Development - TEAM123456";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		BB0000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerWidgets.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TEAM123456;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Apps/BabyTrackerWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Baby Tracker";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "BabyTrackerWidgets Development - TEAM123456";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Debug;
+		};
+		BB0000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				CODE_SIGN_ENTITLEMENTS = Apps/BabyTrackerWidgets.entitlements;
+				"CODE_SIGN_IDENTITY[sdk=iphoneos*]" = "Apple Development: developer@example.com (CERT123456)";
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Manual;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TEAM123456;
+				ENABLE_PREVIEWS = YES;
+				GENERATE_INFOPLIST_FILE = NO;
+				INFOPLIST_FILE = "Apps/BabyTrackerWidgets-Info.plist";
+				INFOPLIST_KEY_CFBundleDisplayName = "Baby Tracker";
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				LD_RUNPATH_SEARCH_PATHS = (
+					"$(inherited)",
+					"@executable_path/Frameworks",
+					"@executable_path/../../Frameworks",
+				);
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker.widgets;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				PROVISIONING_PROFILE_SPECIFIER = "BabyTrackerWidgets Development - TEAM123456";
+				SKIP_INSTALL = YES;
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = YES;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+			};
+			name = Release;
+		};
+		DD0000000000000000000008 /* Debug */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TEAM123456;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BabyTracker;
+			};
+			name = Debug;
+		};
+		DD0000000000000000000009 /* Release */ = {
+			isa = XCBuildConfiguration;
+			buildSettings = {
+				"CODE_SIGN_IDENTITY[sdk=iphonesimulator*]" = "-";
+				CODE_SIGN_STYLE = Automatic;
+				CURRENT_PROJECT_VERSION = 1;
+				DEVELOPMENT_TEAM = TEAM123456;
+				GENERATE_INFOPLIST_FILE = YES;
+				IPHONEOS_DEPLOYMENT_TARGET = 26.0;
+				MARKETING_VERSION = 1.0;
+				PRODUCT_BUNDLE_IDENTIFIER = com.olhapi.babytracker.uitests;
+				PRODUCT_NAME = "$(TARGET_NAME)";
+				SUPPORTED_PLATFORMS = "iphoneos iphonesimulator";
+				SWIFT_EMIT_LOC_STRINGS = NO;
+				SWIFT_STRICT_CONCURRENCY = complete;
+				SWIFT_VERSION = 6.0;
+				TARGETED_DEVICE_FAMILY = "1,2";
+				TEST_TARGET_NAME = BabyTracker;
+			};
+			name = Release;
+		};
+/* End XCBuildConfiguration section */
+
+/* Begin XCConfigurationList section */
+		AA0000000000000000000009 /* Build configuration list for PBXProject "BabyTracker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000000B /* Debug */,
+				AA000000000000000000000C /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		AA000000000000000000000A /* Build configuration list for PBXNativeTarget "BabyTracker" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				AA000000000000000000000D /* Debug */,
+				AA000000000000000000000E /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		BB0000000000000000000007 /* Build configuration list for PBXNativeTarget "BabyTrackerWidgets" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				BB0000000000000000000008 /* Debug */,
+				BB0000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+		DD0000000000000000000007 /* Build configuration list for PBXNativeTarget "BabyTrackerUITests" */ = {
+			isa = XCConfigurationList;
+			buildConfigurations = (
+				DD0000000000000000000008 /* Debug */,
+				DD0000000000000000000009 /* Release */,
+			);
+			defaultConfigurationIsVisible = 0;
+			defaultConfigurationName = Release;
+		};
+/* End XCConfigurationList section */
+
+/* Begin XCLocalSwiftPackageReference section */
+		AA0000000000000000000010 /* XCLocalSwiftPackageReference "Packages/BabyTracker" */ = {
+			isa = XCLocalSwiftPackageReference;
+			relativePath = Packages/BabyTracker;
+		};
+/* End XCLocalSwiftPackageReference section */
+
+/* Begin XCSwiftPackageProductDependency section */
+		AA0000000000000000000011 /* BabyCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyCore;
+		};
+		AA0000000000000000000012 /* BabyStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyStore;
+		};
+		AA0000000000000000000013 /* BabySync */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabySync;
+		};
+		AA0000000000000000000014 /* BabyUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyUI;
+		};
+		AA0000000000000000000015 /* HomeFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HomeFeature;
+		};
+		AA0000000000000000000016 /* LoggingFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = LoggingFeature;
+		};
+		AA0000000000000000000017 /* HistoryFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = HistoryFeature;
+		};
+		AA0000000000000000000018 /* InsightsFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = InsightsFeature;
+		};
+		AA000000000000000000001B /* AskFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = AskFeature;
+		};
+		AA0000000000000000000019 /* BabyFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyFeature;
+		};
+		AA000000000000000000001A /* SettingsFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = SettingsFeature;
+		};
+		BB0000000000000000000011 /* BabyCore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyCore;
+		};
+		BB0000000000000000000012 /* BabyStore */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyStore;
+		};
+		BB0000000000000000000013 /* BabyUI */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyUI;
+		};
+		BB0000000000000000000014 /* BabyFeature */ = {
+			isa = XCSwiftPackageProductDependency;
+			productName = BabyFeature;
+		};
+/* End XCSwiftPackageProductDependency section */
+	};
+	rootObject = AA0000000000000000000001 /* Project object */;
+}

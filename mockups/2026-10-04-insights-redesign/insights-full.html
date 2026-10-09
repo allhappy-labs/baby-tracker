@@ -1,0 +1,241 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>insights-full</title>
+<style>
+  body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px;margin:0}
+  h2{margin:0 0 6px}.subtitle{opacity:.75;max-width:1000px;line-height:1.45;margin:0}
+  ul.notes{max-width:1000px;font-size:13.5px;line-height:1.5;opacity:.85;margin:10px 0 0;padding-left:18px}
+  .cards{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;margin-top:20px}
+  .card{display:flex;flex-direction:column;align-items:center;gap:10px;border-radius:22px;padding:10px}
+  .card h3{margin:0}.card p.d{margin:0;max-width:310px;font-size:13px;opacity:.82;text-align:center;line-height:1.4}
+  .ph{width:310px;border-radius:40px;background:#0B1020;position:relative;overflow:hidden;padding-bottom:72px;
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 7px #1d2233,0 18px 40px rgba(0,0,0,.45)}
+  .sb{display:flex;justify-content:space-between;padding:14px 26px 0;font-size:12px;font-weight:600}
+  .top{position:sticky;top:0;background:rgba(11,16,32,.92)}
+  .hd{display:flex;align-items:center;padding:10px 16px 4px}
+  .name{font-size:22px;font-weight:700;display:flex;align-items:center;gap:5px}
+  .seg{margin:4px 16px 12px;display:flex;background:rgba(255,255,255,.07);border-radius:9px;padding:2px;font-size:12px;font-weight:600}
+  .seg div{flex:1;text-align:center;padding:5px 0;border-radius:7px;color:#C9CEDF}
+  .seg .on{background:rgba(255,255,255,.16);color:#fff}
+  .tabs{position:absolute;bottom:10px;left:12px;right:12px;height:50px;border-radius:25px;background:rgba(20,24,40,.95);
+        display:flex;justify-content:space-around;align-items:center;font-size:9px;color:#8B93AD;z-index:5}
+  .tabs div{display:flex;flex-direction:column;align-items:center;gap:2px}.tabs .on{color:#EEF1FA}
+  .tabs i{width:18px;height:18px;border-radius:5px;background:currentColor;opacity:.8;display:block}
+  svg.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  svg.sm{width:13px;height:13px}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}.growth{color:#9FD27A}
+  .mut{color:#8B93AD}.dim{color:#5f6683}
+  .sec{margin:0 12px 10px;background:rgba(255,255,255,.045);border-radius:18px;padding:12px 13px}
+  .hl{display:flex;align-items:center;gap:8px}
+  .big{font-size:26px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+  .big small{font-size:13px;font-weight:600;color:#8B93AD;letter-spacing:0}
+  .delta{margin-left:auto;font-size:12px;color:#C9CEDF;font-variant-numeric:tabular-nums;text-align:right;line-height:1.25}
+  .delta small{display:block;font-size:10px;color:#5f6683}
+  .chart{position:relative;margin-top:10px;margin-right:22px}
+  .bars{display:flex;align-items:flex-end;gap:4px;height:64px;position:relative;border-bottom:1px solid rgba(255,255,255,.1)}
+  .bars b{flex:1;border-radius:3px 3px 0 0;display:block;position:relative}
+  .grid{position:absolute;left:0;right:-22px;border-top:1px solid rgba(255,255,255,.05);font-size:9px;color:#5f6683;text-align:right}
+  .grid span{position:absolute;right:0;top:-6px}
+  .avg{position:absolute;left:0;right:0;border-top:1px dashed rgba(255,255,255,.4)}
+  .ax{display:flex;justify-content:space-between;font-size:10px;color:#8B93AD;margin-top:3px;margin-right:22px}
+  .rows{margin-top:8px;font-size:12.5px}
+  .r{display:flex;justify-content:space-between;align-items:center;padding:5px 0;border-top:1px solid rgba(255,255,255,.06)}
+  .r span:last-child{font-variant-numeric:tabular-nums;font-weight:600}
+  .split{height:6px;border-radius:3px;display:flex;overflow:hidden;margin:4px 0 2px}
+  .callout{position:absolute;font-size:10.5px;background:#1d2338;border:1px solid rgba(255,255,255,.14);border-radius:8px;padding:3px 7px;white-space:nowrap;z-index:3;font-variant-numeric:tabular-nums}
+  .key{display:inline-flex;align-items:center;gap:4px;margin-right:8px}.key i{width:8px;height:8px;border-radius:2px;display:inline-block}
+  .chips{display:flex;gap:6px;margin-top:8px}
+  .chip{flex:1;border-radius:12px;padding:7px 8px;background:rgba(255,255,255,.05);display:flex;flex-direction:column;gap:2px}
+  .chip.on{background:rgba(159,210,122,.14);box-shadow:inset 0 0 0 1.5px rgba(159,210,122,.6)}
+  .chip .k{font-size:10px;color:#8B93AD;font-weight:600}.chip .v{font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}.chip .p{font-size:10.5px;color:#9FD27A;font-weight:700}
+  .link{display:flex;align-items:center;gap:5px;font-size:12px;color:#8A9BF0;margin-top:8px}
+  .empty{font-size:12.5px;color:#8B93AD;margin-top:6px;line-height:1.4}
+</style>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="drop" viewBox="0 0 24 24"><path d="M12 2.8c3.9 4.6 6.6 8.2 6.6 11.6a6.6 6.6 0 0 1-13.2 0c0-3.4 2.7-7 6.6-11.6z"/></symbol>
+  <symbol id="moon" viewBox="0 0 24 24"><path d="M19.8 14.8A8.2 8.2 0 0 1 9.2 4.2a8.2 8.2 0 1 0 10.6 10.6z"/><path d="M16 3.5v3M14.5 5h3"/></symbol>
+  <symbol id="diaper" viewBox="0 0 24 24"><path d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path d="M2.8 6.8H1.2M21.2 6.8h1.6"/><rect x="9.6" y="7.6" width="4.8" height="3.2" rx="1"/></symbol>
+  <symbol id="scale" viewBox="0 0 24 24"><path d="M4 20.5h16l-1.6-9H5.6z"/><path d="M3 8.5c3-2.8 15-2.8 18 0M12 11.5V7"/></symbol>
+  <symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <symbol id="down" viewBox="0 0 24 24"><path d="m6 9 6 6 6-6"/></symbol>
+  <symbol id="wchart" viewBox="0 0 280 120">
+    <path d="M18 92 C80 70 160 46 272 22 L272 62 C160 82 80 100 18 112 Z" fill="rgba(138,155,240,.14)"/>
+    <path d="M18 102 C80 85 160 64 272 42" fill="none" stroke="#8A9BF0" stroke-width="1" stroke-dasharray="4 4"/>
+    <path d="M18 103 L70 90 L120 76 L175 62 L230 52" fill="none" stroke="#9FD27A" stroke-width="2"/>
+    <g fill="#9FD27A"><circle cx="18" cy="103" r="3"/><circle cx="70" cy="90" r="3"/><circle cx="120" cy="76" r="3"/><circle cx="175" cy="62" r="3"/><circle cx="230" cy="52" r="3"/></g>
+    <g fill="#5f6683" font-size="9" font-family="-apple-system"><text x="0" y="26">6</text><text x="0" y="70">5</text><text x="0" y="114">4</text></g>
+  </symbol>
+</defs></svg>
+
+<h2>Full Insights screen: does this read right?</h2>
+<p class="subtitle">This is layout A with G1 at the end. There's nothing to pick on this page; tell me what's wrong. The screens are drawn at full length rather than cropped. The header (name + Week/Month/All) stays pinned while you scroll.</p>
+<ul class="notes">
+  <li><b>Averages use complete days only.</b> Today appears as a hatched "so far" bar but never counts in an average or a comparison. Days before tracking began, and days with nothing logged at all, are left out of averages so they don't drag them down.</li>
+  <li><b>Comparisons are neutral:</b> ▲/▼ against the previous period, in grey, never green or red. A difference smaller than a rounding step shows "≈". "All" has no comparison and shows weekly bars instead.</li>
+  <li><b>Sections are marked by icon only</b> (no "FEEDING" eyebrow), following the Home/History copy rules. The unit after the big number says what it is.</li>
+  <li><b>Tap or drag across a chart</b> to see that day's (or week's) exact value in a callout, as shown on the sleep chart.</li>
+  <li>Rows only appear when they apply: no bottle feeds → no bottle rows; no breast feeds → no L/R row.</li>
+</ul>
+
+<div class="cards">
+
+<!-- WEEK -->
+<div class="card">
+  <div class="ph">
+    <div class="top"><div class="sb"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="hd"><div class="name">Mila <svg class="ic sm mut"><use href="#down"/></svg></div></div>
+      <div class="seg"><div class="on">Week</div><div>Month</div><div>All</div></div></div>
+
+    <div class="sec">
+      <div class="hl"><svg class="ic feed"><use href="#drop"/></svg><div class="big">8.4 <small>feeds / day</small></div>
+        <div class="delta">▲ 0.6<small>vs prev. week</small></div></div>
+      <div class="chart"><div class="bars">
+        <div class="grid" style="bottom:100%"><span>12</span></div><div class="grid" style="bottom:50%"><span>6</span></div>
+        <div class="avg" style="bottom:70%"></div>
+        <b style="height:66%;background:#F2B06170"></b><b style="height:75%;background:#F2B06170"></b><b style="height:58%;background:#F2B06170"></b><b style="height:75%;background:#F2B06170"></b><b style="height:66%;background:#F2B06170"></b><b style="height:75%;background:#F2B06170"></b><b style="height:75%;background:#F2B06170"></b><b style="height:33%;background:repeating-linear-gradient(45deg,#F2B06166 0 3px,transparent 3px 6px)"></b></div></div>
+      <div class="ax"><span>Fri 25</span><span>Today</span></div>
+      <div class="rows">
+        <div class="r"><span class="mut">Between feeds</span><span>2h 50m</span></div>
+        <div class="r"><span class="mut">Longest gap</span><span>5h 10m</span></div>
+        <div class="r" style="display:block"><div style="display:flex;justify-content:space-between"><span class="mut">Breast · bottle</span><span style="font-weight:600">72% · 28%</span></div>
+          <div class="split"><i style="width:72%;background:#F2B061"></i><i style="width:28%;background:#F2B06150"></i></div></div>
+        <div class="r"><span class="mut">Left · right</span><span>48% · 52%</span></div>
+        <div class="r"><span class="mut">Bottle / day</span><span>410 ml</span></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="hl"><svg class="ic sleep"><use href="#moon"/></svg><div class="big">14h 20m <small>/ day</small></div>
+        <div class="delta">▲ 25m<small>vs prev. week</small></div></div>
+      <div class="chart"><div class="bars">
+        <div class="grid" style="bottom:100%"><span>16h</span></div><div class="grid" style="bottom:50%"><span>8h</span></div>
+        <div class="avg" style="bottom:89%"></div>
+        <b style="height:86%;background:linear-gradient(to top,#8A9BF0 0 70%,#8A9BF060 70%)"></b><b style="height:90%;background:linear-gradient(to top,#8A9BF0 0 68%,#8A9BF060 68%)"></b><b style="height:84%;background:linear-gradient(to top,#8A9BF0 0 72%,#8A9BF060 72%)"></b>
+        <b style="height:92%;background:linear-gradient(to top,#8A9BF0 0 70%,#8A9BF060 70%);box-shadow:0 0 0 1.5px #fff"><span class="callout" style="bottom:calc(100% + 5px);left:-40px">Mon 28 · 14h 45m<br><span class="mut">night 10h 20m · naps 4h 25m</span></span></b>
+        <b style="height:88%;background:linear-gradient(to top,#8A9BF0 0 74%,#8A9BF060 74%)"></b><b style="height:90%;background:linear-gradient(to top,#8A9BF0 0 70%,#8A9BF060 70%)"></b><b style="height:91%;background:linear-gradient(to top,#8A9BF0 0 72%,#8A9BF060 72%)"></b><b style="height:46%;background:repeating-linear-gradient(45deg,#8A9BF066 0 3px,transparent 3px 6px)"></b></div></div>
+      <div class="ax"><span><span class="key"><i style="background:#8A9BF0"></i>night</span><span class="key"><i style="background:#8A9BF060"></i>naps</span></span><span>Today</span></div>
+      <div class="rows">
+        <div class="r"><span class="mut">Longest stretch</span><span>5h 40m</span></div>
+        <div class="r"><span class="mut">Night · naps</span><span>10h 5m · 4h 15m</span></div>
+        <div class="r"><span class="mut">Naps / day</span><span>3.4</span></div>
+        <div class="r"><span class="mut">Awake between sleeps</span><span>1h 35m</span></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="hl"><svg class="ic diaper"><use href="#diaper"/></svg><div class="big">7.1 <small>diapers / day</small></div>
+        <div class="delta">≈<small>vs prev. week</small></div></div>
+      <div class="chart"><div class="bars" style="height:40px">
+        <div class="avg" style="bottom:71%"></div>
+        <b style="height:70%;background:#5FD3C470"></b><b style="height:80%;background:#5FD3C470"></b><b style="height:60%;background:#5FD3C470"></b><b style="height:70%;background:#5FD3C470"></b><b style="height:80%;background:#5FD3C470"></b><b style="height:70%;background:#5FD3C470"></b><b style="height:70%;background:#5FD3C470"></b><b style="height:30%;background:repeating-linear-gradient(45deg,#5FD3C466 0 3px,transparent 3px 6px)"></b></div></div>
+    </div>
+
+    <div class="sec">
+      <div class="hl"><svg class="ic growth"><use href="#scale"/></svg><span class="mut" style="margin-left:auto;font-size:11.5px">2 Oct · 9 wk</span></div>
+      <div class="chips">
+        <div class="chip on"><span class="k">Weight</span><span class="v">5.62 kg</span><span class="p">P48</span></div>
+        <div class="chip"><span class="k">Length</span><span class="v">58.5 cm</span><span class="p">P55</span></div>
+        <div class="chip"><span class="k">Head</span><span class="v">39.0 cm</span><span class="p dim">—</span></div></div>
+      <div style="font-size:12px;color:#C9CEDF;margin-top:9px">+ 420 g since 18 Sep · ≈ 30 g / day</div>
+      <svg viewBox="0 0 280 120" style="width:100%;height:128px;margin-top:6px"><use href="#wchart"/></svg>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#5f6683;margin:-4px 0 0 18px"><span>Birth</span><span>1 mo</span><span>2 mo</span><span>3 mo</span></div>
+      <div class="link"><svg class="ic sm"><use href="#info"/></svg>Swiss PEZZ 2025 reference</div>
+      <div class="r" style="margin-top:6px;font-size:12.5px"><span class="mut">All check-ins</span><span class="mut">5 <svg class="ic sm" style="vertical-align:-2px"><use href="#chev"/></svg></span></div>
+    </div>
+    <div class="tabs"><div><i></i>Home</div><div><i></i>History</div><div class="on"><i></i>Insights</div><div><i></i>Ask</div></div>
+  </div>
+  <h3>Week</h3>
+  <p class="d">7 complete days plus today's hatched "so far" bar. The sleep chart shows a tapped day.</p>
+</div>
+
+<!-- ALL -->
+<div class="card">
+  <div class="ph">
+    <div class="top"><div class="sb"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="hd"><div class="name">Mila <svg class="ic sm mut"><use href="#down"/></svg></div></div>
+      <div class="seg"><div>Week</div><div>Month</div><div class="on">All</div></div></div>
+
+    <div class="sec">
+      <div class="hl"><svg class="ic feed"><use href="#drop"/></svg><div class="big">8.9 <small>feeds / day</small></div>
+        <div class="delta">since 26 Jul</div></div>
+      <div class="chart"><div class="bars">
+        <div class="grid" style="bottom:100%"><span>12</span></div><div class="grid" style="bottom:50%"><span>6</span></div>
+        <b style="height:90%;background:#F2B06170"></b><b style="height:88%;background:#F2B06170"></b><b style="height:84%;background:#F2B06170"></b><b style="height:80%;background:#F2B06170"></b><b style="height:78%;background:#F2B06170"></b><b style="height:75%;background:#F2B06170"></b><b style="height:74%;background:#F2B06170"></b><b style="height:72%;background:#F2B06170"></b><b style="height:70%;background:#F2B06170"></b><b style="height:70%;background:#F2B06170"></b></div></div>
+      <div class="ax"><span>wk 1</span><span>wk 10</span></div>
+      <div class="rows">
+        <div class="r"><span class="mut">Between feeds</span><span>2h 35m</span></div>
+        <div class="r"><span class="mut">Longest gap</span><span>5h 40m</span></div>
+        <div class="r"><span class="mut">Breast · bottle</span><span>80% · 20%</span></div>
+        <div class="r"><span class="mut">Left · right</span><span>49% · 51%</span></div>
+        <div class="r"><span class="mut">Bottle / day</span><span>290 ml</span></div>
+      </div>
+    </div>
+
+    <div class="sec">
+      <div class="hl"><svg class="ic sleep"><use href="#moon"/></svg><div class="big">14h 50m <small>/ day</small></div>
+        <div class="delta">since 26 Jul</div></div>
+      <div class="chart"><div class="bars">
+        <div class="grid" style="bottom:100%"><span>16h</span></div><div class="grid" style="bottom:50%"><span>8h</span></div>
+        <b style="height:98%;background:linear-gradient(to top,#8A9BF0 0 52%,#8A9BF060 52%)"></b><b style="height:96%;background:linear-gradient(to top,#8A9BF0 0 55%,#8A9BF060 55%)"></b><b style="height:95%;background:linear-gradient(to top,#8A9BF0 0 58%,#8A9BF060 58%)"></b><b style="height:93%;background:linear-gradient(to top,#8A9BF0 0 61%,#8A9BF060 61%)"></b><b style="height:93%;background:linear-gradient(to top,#8A9BF0 0 63%,#8A9BF060 63%)"></b><b style="height:91%;background:linear-gradient(to top,#8A9BF0 0 66%,#8A9BF060 66%)"></b><b style="height:91%;background:linear-gradient(to top,#8A9BF0 0 68%,#8A9BF060 68%)"></b><b style="height:90%;background:linear-gradient(to top,#8A9BF0 0 69%,#8A9BF060 69%)"></b><b style="height:89%;background:linear-gradient(to top,#8A9BF0 0 70%,#8A9BF060 70%)"></b><b style="height:89%;background:linear-gradient(to top,#8A9BF0 0 71%,#8A9BF060 71%)"></b></div></div>
+      <div class="ax"><span><span class="key"><i style="background:#8A9BF0"></i>night</span><span class="key"><i style="background:#8A9BF060"></i>naps</span></span><span>wk 10</span></div>
+      <div class="rows">
+        <div class="r"><span class="mut">Longest stretch</span><span>6h 5m</span></div>
+        <div class="r"><span class="mut">Night · naps</span><span>9h 10m · 5h 40m</span></div>
+        <div class="r"><span class="mut">Naps / day</span><span>4.1</span></div>
+        <div class="r"><span class="mut">Awake between sleeps</span><span>1h 20m</span></div>
+      </div>
+    </div>
+    <div class="sec"><div class="hl"><svg class="ic diaper"><use href="#diaper"/></svg><div class="big">7.6 <small>diapers / day</small></div></div>
+      <div class="chart"><div class="bars" style="height:40px">
+        <b style="height:90%;background:#5FD3C470"></b><b style="height:88%;background:#5FD3C470"></b><b style="height:84%;background:#5FD3C470"></b><b style="height:80%;background:#5FD3C470"></b><b style="height:78%;background:#5FD3C470"></b><b style="height:76%;background:#5FD3C470"></b><b style="height:74%;background:#5FD3C470"></b><b style="height:72%;background:#5FD3C470"></b><b style="height:71%;background:#5FD3C470"></b><b style="height:71%;background:#5FD3C470"></b></div></div></div>
+    <div class="sec"><div class="hl"><svg class="ic growth"><use href="#scale"/></svg><span class="mut" style="font-size:12px">same as Week; Growth ignores the range</span></div></div>
+    <div class="tabs"><div><i></i>Home</div><div><i></i>History</div><div class="on"><i></i>Insights</div><div><i></i>Ask</div></div>
+  </div>
+  <h3>All</h3>
+  <p class="d">One bar per week (the per-day average for that week) since tracking began. The headline and rows cover the whole span, and "Longest stretch" is the record. Month is like Week but with 30 daily bars.</p>
+</div>
+
+<!-- NEW BABY -->
+<div class="card">
+  <div class="ph">
+    <div class="top"><div class="sb"><span>9:41</span><span>●●● ▮</span></div>
+      <div class="hd"><div class="name">Leo <svg class="ic sm mut"><use href="#down"/></svg></div></div>
+      <div class="seg"><div class="on">Week</div><div>Month</div><div>All</div></div></div>
+    <div class="sec">
+      <div class="hl"><svg class="ic feed"><use href="#drop"/></svg><div class="big">10.5 <small>feeds / day</small></div>
+        <div class="delta">2 days</div></div>
+      <div class="chart"><div class="bars">
+        <div class="grid" style="bottom:100%"><span>12</span></div><div class="grid" style="bottom:50%"><span>6</span></div>
+        <b style="opacity:0"></b><b style="opacity:0"></b><b style="opacity:0"></b><b style="opacity:0"></b><b style="opacity:0"></b><b style="height:83%;background:#F2B06170"></b><b style="height:92%;background:#F2B06170"></b><b style="height:40%;background:repeating-linear-gradient(45deg,#F2B06166 0 3px,transparent 3px 6px)"></b></div></div>
+      <div class="ax"><span>Fri 25</span><span>Today</span></div>
+      <div class="rows">
+        <div class="r"><span class="mut">Between feeds</span><span>2h 15m</span></div>
+        <div class="r"><span class="mut">Longest gap</span><span>3h 40m</span></div>
+        <div class="r"><span class="mut">Left · right</span><span>55% · 45%</span></div>
+      </div>
+    </div>
+    <div class="sec">
+      <div class="hl"><svg class="ic sleep"><use href="#moon"/></svg><div class="big">16h 5m <small>/ day</small></div><div class="delta">2 days</div></div>
+      <div class="rows">
+        <div class="r"><span class="mut">Longest stretch</span><span>3h 10m</span></div>
+        <div class="r"><span class="mut">Night · naps</span><span>8h 40m · 7h 25m</span></div>
+      </div>
+    </div>
+    <div class="sec"><div class="hl"><svg class="ic diaper"><use href="#diaper"/></svg><div class="big">6.5 <small>diapers / day</small></div><div class="delta">2 days</div></div></div>
+    <div class="sec">
+      <div class="hl"><svg class="ic growth"><use href="#scale"/></svg></div>
+      <div class="chips">
+        <div class="chip on"><span class="k">Weight</span><span class="v">3.41 kg</span><span class="p">P52</span></div>
+        <div class="chip"><span class="k">Length</span><span class="v">50.0 cm</span><span class="p">P50</span></div>
+        <div class="chip"><span class="k">Head</span><span class="v dim">—</span><span class="p dim"> </span></div></div>
+      <div class="empty">The chart appears after a second check-in.</div>
+      <div class="link"><svg class="ic sm"><use href="#info"/></svg>Swiss PEZZ 2025 reference</div>
+    </div>
+    <div class="tabs"><div><i></i>Home</div><div><i></i>History</div><div class="on"><i></i>Insights</div><div><i></i>Ask</div></div>
+  </div>
+  <h3>New baby (2 days logged)</h3>
+  <p class="d">With no previous week, the averages say how many days they cover instead of showing ▲/▼. Missing bottle feeds mean no bottle rows. If the reference sex isn't set, the Growth chips show the values with a "Choose girls/boys reference" button in place of percentiles.</p>
+</div>
+
+</div>

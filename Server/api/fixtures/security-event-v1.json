@@ -1,0 +1,20 @@
+{
+  "version": "v1",
+  "generation": 1,
+  "revision": 1,
+  "previous_hash": "0000000000000000000000000000000000000000000000000000000000000000",
+  "command_id": "30000000-0000-4000-8000-000000000001",
+  "command_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "actor_account_id": "10000000-0000-4000-8000-000000000001",
+  "actor_device_id": "",
+  "kind": "account_registered",
+  "at": "2026-09-20T12:00:00Z",
+  "effects": [
+    {
+      "kind": "account_registered",
+      "account_id": "10000000-0000-4000-8000-000000000001",
+      "identity_key": "sha256:opaque-identity-lookup-digest",
+      "status": "active"
+    }
+  ]
+}

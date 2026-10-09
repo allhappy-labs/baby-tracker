@@ -1,0 +1,193 @@
+{
+  "unsupported_protocol": {
+    "error": {
+      "code": "unsupported_protocol",
+      "message": "Unsupported protocol",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "unsupported_capability": {
+    "error": {
+      "code": "unsupported_capability",
+      "message": "Unsupported capability",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "unsupported_resource": {
+    "error": {
+      "code": "unsupported_resource",
+      "message": "Upgrade is required for this resource",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "invalid_timestamp": {
+    "error": {
+      "code": "invalid_timestamp",
+      "message": "A timestamp is invalid",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "snapshot_required": {
+    "error": {
+      "code": "snapshot_required",
+      "message": "Snapshot required",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "invalid_page_token": {
+    "error": {
+      "code": "invalid_page_token",
+      "message": "Invalid page token",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "page_expired": {
+    "error": {
+      "code": "page_expired",
+      "message": "Page expired",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "epoch_changed": {
+    "error": {
+      "code": "epoch_changed",
+      "message": "Authentication failed",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "access_expired": {
+    "error": {
+      "code": "access_expired",
+      "message": "Authentication failed",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "reauthentication_required": {
+    "error": {
+      "code": "reauthentication_required",
+      "message": "Authentication failed",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "snapshot_limit": {
+    "error": {
+      "code": "snapshot_limit",
+      "message": "Snapshot limit exceeded",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "body_too_large": {
+    "error": {
+      "code": "body_too_large",
+      "message": "Request body is too large",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "batch_limit": {
+    "error": {
+      "code": "batch_limit",
+      "message": "Mutation batch limit exceeded",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "rate_limited": {
+    "error": {
+      "code": "rate_limited",
+      "message": "Rate limit exceeded",
+      "request_id": "",
+      "retryable": true,
+      "retry_after_seconds": 1
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "mutation_id_reused": {
+    "error": {
+      "code": "mutation_id_reused",
+      "message": "Mutation ID was reused",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "family_scope_required": {
+    "error": {
+      "code": "family_scope_required",
+      "message": "Family access is required",
+      "request_id": "",
+      "retryable": false
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  },
+  "import_history_limit": {
+    "error": {"code":"import_history_limit","message":"Import request could not be completed","request_id":"","retryable":false},
+    "server_instance_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch":1
+  },
+  "import_expired": {
+    "error": {"code":"import_expired","message":"Import request could not be completed","request_id":"","retryable":false},
+    "server_instance_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch":1
+  },
+  "import_resolution_stale": {
+    "error": {"code":"import_resolution_stale","message":"Import request could not be completed","request_id":"","retryable":false},
+    "server_instance_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch":1
+  },
+  "import_chunk_reused": {
+    "error": {"code":"import_chunk_reused","message":"Import request could not be completed","request_id":"","retryable":false},
+    "server_instance_id":"a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch":1
+  },
+  "service_unavailable": {
+    "error": {
+      "code": "service_unavailable",
+      "message": "Service is unavailable",
+      "request_id": "",
+      "retryable": true
+    },
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+    "recovery_epoch": 1
+  }
+}

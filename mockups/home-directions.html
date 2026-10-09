@@ -1,0 +1,706 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baby Tracker — Home screen directions</title>
+<style>
+  :root {
+    --sf: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --sfr: ui-rounded, "SF Pro Rounded", -apple-system, system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: #17181c;
+    color: #e8e6e3;
+    font-family: var(--sf);
+    padding: 56px 32px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  .page-head { max-width: 1400px; margin: 0 auto 56px; }
+  .page-head h1 {
+    font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 8px;
+  }
+  .page-head p { color: #8e8d8a; font-size: 15px; max-width: 62ch; line-height: 1.55; }
+
+  .rack {
+    display: flex; gap: 72px; justify-content: center;
+    flex-wrap: wrap; max-width: 1400px; margin: 0 auto;
+  }
+
+  .slot { width: 393px; }
+
+  .slot-head { margin-bottom: 20px; }
+  .slot-letter {
+    font-family: var(--mono); font-size: 11px; letter-spacing: 0.14em;
+    color: #6f6e6b; text-transform: uppercase; display: block; margin-bottom: 6px;
+  }
+  .slot-head h2 { font-size: 19px; font-weight: 600; letter-spacing: -0.01em; }
+  .slot-head p { font-size: 13.5px; color: #8e8d8a; line-height: 1.5; margin-top: 7px; }
+
+  /* ---------- device frame ---------- */
+  .phone {
+    width: 393px; height: 852px; border-radius: 56px;
+    position: relative; overflow: hidden;
+    border: 10px solid #000;
+    box-shadow: 0 30px 70px rgba(0,0,0,.55), 0 0 0 1px #34343a;
+  }
+  .screen { position: absolute; inset: 0; overflow: hidden; }
+
+  .island {
+    position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+    width: 122px; height: 35px; background: #000; border-radius: 20px; z-index: 60;
+  }
+  .statusbar {
+    position: absolute; top: 0; left: 0; right: 0; height: 59px; z-index: 55;
+    display: flex; align-items: center; justify-content: space-between;
+    padding: 18px 32px 0; font-size: 15px; font-weight: 600; font-family: var(--sf);
+  }
+  .statusbar .glyphs { display: flex; gap: 5px; align-items: center; opacity: .95; }
+  .bar { width: 3px; border-radius: 1px; background: currentColor; }
+
+  .home-ind {
+    position: absolute; bottom: 8px; left: 50%; transform: translateX(-50%);
+    width: 140px; height: 5px; border-radius: 3px; background: currentColor;
+    opacity: .3; z-index: 60;
+  }
+
+  /* ============================================================
+     DIRECTION A — NIGHT SHIFT
+     ============================================================ */
+  .a {
+    background:
+      radial-gradient(120% 70% at 50% 0%, #1b2547 0%, #0d1224 46%, #080b16 100%);
+    color: #e9ecf7;
+  }
+  .a .content { position: absolute; inset: 59px 0 0; padding: 8px 20px 0; }
+
+  .a-topline {
+    display: flex; align-items: baseline; justify-content: space-between;
+    padding: 0 4px 22px;
+  }
+  .a-topline h1 {
+    font-family: var(--sfr); font-size: 27px; font-weight: 700;
+    letter-spacing: -0.02em; color: #f3f5fd;
+  }
+  .a-switch {
+    font-size: 13px; font-weight: 600; color: #aab3d4;
+    background: rgba(255,255,255,.07); border: 1px solid rgba(255,255,255,.09);
+    padding: 6px 13px; border-radius: 30px;
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  }
+
+  /* the dial — signature element */
+  .dial-wrap { display: flex; justify-content: center; margin: 4px 0 30px; }
+  .dial { position: relative; width: 248px; height: 248px; }
+  .dial svg { position: absolute; inset: 0; transform: rotate(-90deg); }
+  .dial-glow {
+    position: absolute; inset: 24px; border-radius: 50%;
+    background: radial-gradient(circle, rgba(242,176,97,.17) 0%, rgba(242,176,97,0) 68%);
+    animation: breathe 5.5s ease-in-out infinite;
+  }
+  @keyframes breathe {
+    0%, 100% { opacity: .55; transform: scale(.97); }
+    50%      { opacity: 1;   transform: scale(1.03); }
+  }
+  .dial-face {
+    position: absolute; inset: 0; display: flex; flex-direction: column;
+    align-items: center; justify-content: center; gap: 2px;
+  }
+  .dial-eyebrow {
+    font-size: 11.5px; font-weight: 600; letter-spacing: .1em; text-transform: uppercase;
+    color: #8f9ac2;
+  }
+  .dial-value {
+    font-family: var(--sfr); font-size: 62px; font-weight: 700;
+    letter-spacing: -0.035em; color: #f6d9ae; line-height: 1;
+    font-variant-numeric: tabular-nums;
+  }
+  .dial-sub { font-size: 14px; color: #9aa4c9; font-weight: 500; margin-top: 5px; }
+
+  .a-rows { display: flex; flex-direction: column; gap: 10px; }
+  .a-row {
+    display: flex; align-items: center; gap: 14px;
+    padding: 15px 17px; border-radius: 19px;
+    background: rgba(255,255,255,.055);
+    border: 1px solid rgba(255,255,255,.075);
+    backdrop-filter: blur(24px); -webkit-backdrop-filter: blur(24px);
+  }
+  .a-dot { width: 9px; height: 9px; border-radius: 50%; flex: none; }
+  .a-row-label { font-size: 15.5px; font-weight: 600; color: #e2e6f5; flex: 1; }
+  .a-row-value {
+    font-size: 15.5px; font-weight: 600; color: #98a2c7;
+    font-variant-numeric: tabular-nums;
+  }
+  .a-row.live { background: rgba(138,155,240,.14); border-color: rgba(138,155,240,.3); }
+  .a-row.live .a-row-value { color: #b9c4fb; }
+
+  /* glass dock */
+  .a-dock {
+    position: absolute; left: 16px; right: 16px; bottom: 96px; z-index: 40;
+    display: flex; gap: 9px;
+    padding: 9px; border-radius: 30px;
+    background: rgba(28,36,66,.55);
+    border: 1px solid rgba(255,255,255,.1);
+    backdrop-filter: blur(34px) saturate(170%); -webkit-backdrop-filter: blur(34px) saturate(170%);
+    box-shadow: 0 16px 40px rgba(0,0,0,.45);
+  }
+  .a-btn {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 7px;
+    padding: 17px 0 15px; border-radius: 22px;
+    background: rgba(255,255,255,.07);
+    border: 1px solid rgba(255,255,255,.08);
+  }
+  .a-btn .ic { font-size: 23px; line-height: 1; }
+  .a-btn .tx { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+  .a-btn.feed { background: rgba(242,176,97,.17); border-color: rgba(242,176,97,.3); color: #f6c98d; }
+  .a-btn.sleep { background: rgba(138,155,240,.15); border-color: rgba(138,155,240,.28); color: #b3bdf7; }
+  .a-btn.diaper { background: rgba(95,211,196,.14); border-color: rgba(95,211,196,.26); color: #8fe4d8; }
+
+  .a-tabs {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 84px; z-index: 50;
+    display: flex; align-items: flex-start; padding-top: 11px;
+    background: rgba(12,17,36,.6);
+    border-top: 1px solid rgba(255,255,255,.07);
+    backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+  }
+  .a-tab {
+    flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+    font-size: 10.5px; font-weight: 500; color: #6d769b;
+  }
+  .a-tab .ic { font-size: 21px; }
+  .a-tab.on { color: #f0c592; }
+
+  /* ============================================================
+     DIRECTION B — THE RIBBON
+     ============================================================ */
+  .b { background: #100f0e; color: #efe9e1; }
+  .b .content { position: absolute; inset: 59px 0 84px; padding: 4px 0 0; overflow: hidden; }
+
+  .b-head { padding: 0 22px 16px; display: flex; align-items: baseline; justify-content: space-between; }
+  .b-head h1 { font-size: 30px; font-weight: 700; letter-spacing: -0.028em; }
+  .b-head .date { font-size: 13px; color: #8d8377; font-weight: 600;
+                  letter-spacing: .04em; text-transform: uppercase; }
+
+  .b-strip { display: flex; gap: 0; padding: 0 22px 18px; }
+  .b-stat { flex: 1; border-left: 1px solid rgba(255,255,255,.1); padding-left: 11px; }
+  .b-stat:first-child { border-left: 0; padding-left: 0; }
+  .b-stat .k {
+    font-size: 10.5px; letter-spacing: .09em; text-transform: uppercase;
+    color: #8d8377; font-weight: 600; margin-bottom: 5px;
+  }
+  .b-stat .v {
+    font-size: 21px; font-weight: 700; letter-spacing: -0.03em;
+    font-variant-numeric: tabular-nums;
+  }
+  .b-stat .u { font-size: 12.5px; color: #8d8377; font-weight: 500; }
+
+  /* the ribbon — signature element */
+  .b-ribbon-wrap { display: flex; padding: 6px 22px 0; gap: 14px; height: 470px; }
+  .b-hours {
+    width: 34px; display: flex; flex-direction: column; justify-content: space-between;
+    font-family: var(--mono); font-size: 10px; color: #6f665c; padding: 2px 0;
+  }
+  .b-ribbon {
+    width: 46px; border-radius: 10px; overflow: hidden;
+    display: flex; flex-direction: column; flex: none;
+    box-shadow: inset 0 0 0 1px rgba(255,255,255,.07);
+  }
+  .seg { width: 100%; position: relative; }
+  .seg.awake { background: #1c1a18; }
+  .seg.sleep { background: #454f8d; }
+  .seg.sleep-l { background: #39406f; }
+  .seg.feed { background: #d98f3d; }
+  .seg.diaper { background: #3f9c8d; }
+  .seg.now { background: repeating-linear-gradient(180deg,#26241f 0 3px,#1c1a18 3px 6px); }
+
+  .b-events { flex: 1; position: relative; }
+  .b-ev { position: absolute; left: 0; right: 0; display: flex; align-items: center; gap: 9px; }
+  .b-ev .tick { width: 14px; height: 1px; background: rgba(255,255,255,.18); flex: none; }
+  .b-ev .lab { font-size: 13px; font-weight: 600; letter-spacing: -0.01em; }
+  .b-ev .sub { font-size: 12px; color: #8d8377; font-weight: 500; }
+  .b-ev.current .lab { color: #e5b478; }
+
+  .b-now-pill {
+    position: absolute; left: 0; display: flex; align-items: center; gap: 8px;
+    background: rgba(217,143,61,.16); border: 1px solid rgba(217,143,61,.34);
+    border-radius: 9px; padding: 7px 11px;
+  }
+  .b-now-pill .lab { font-size: 13px; font-weight: 700; color: #edb978; }
+
+  .b-dock {
+    position: absolute; left: 14px; right: 14px; bottom: 98px; z-index: 40;
+    display: flex; gap: 8px; padding: 8px; border-radius: 26px;
+    background: rgba(32,29,26,.62); border: 1px solid rgba(255,255,255,.09);
+    backdrop-filter: blur(32px) saturate(160%); -webkit-backdrop-filter: blur(32px) saturate(160%);
+    box-shadow: 0 14px 36px rgba(0,0,0,.5);
+  }
+  .b-btn {
+    flex: 1; text-align: center; padding: 14px 0; border-radius: 19px;
+    font-size: 14px; font-weight: 650; letter-spacing: -0.01em;
+    background: rgba(255,255,255,.065); border: 1px solid rgba(255,255,255,.07);
+  }
+  .b-btn.feed { color: #edb978; }
+  .b-btn.sleep { color: #9aa4e0; }
+  .b-btn.diaper { color: #72c9bb; }
+
+  .b-tabs {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 84px; z-index: 50;
+    display: flex; align-items: flex-start; padding-top: 11px;
+    background: rgba(16,15,14,.66); border-top: 1px solid rgba(255,255,255,.07);
+    backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+  }
+  .b-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+           font-size: 10.5px; font-weight: 500; color: #746a5f; }
+  .b-tab .ic { font-size: 21px; }
+  .b-tab.on { color: #edb978; }
+
+  /* ============================================================
+     DIRECTION C — THREE DOORS
+     ============================================================ */
+  .c { background: #08080a; color: #f2f2f4; }
+  .c .content { position: absolute; inset: 59px 0 84px; padding: 2px 14px 0;
+                display: flex; flex-direction: column; gap: 11px; }
+
+  .c-head { display: flex; align-items: center; justify-content: space-between; padding: 2px 8px 10px; }
+  .c-head h1 { font-family: var(--sfr); font-size: 25px; font-weight: 700; letter-spacing: -0.025em; }
+  .c-head .sw { font-size: 22px; opacity: .55; }
+
+  .c-card {
+    flex: 1; border-radius: 30px; padding: 22px 24px;
+    display: flex; flex-direction: column; justify-content: space-between;
+    position: relative; overflow: hidden;
+    border: 1px solid rgba(255,255,255,.09);
+  }
+  .c-card .ic { font-size: 30px; line-height: 1; opacity: .9; }
+  .c-card .k {
+    font-family: var(--sfr); font-size: 21px; font-weight: 700; letter-spacing: -0.02em;
+  }
+  .c-card .v {
+    font-family: var(--sfr); font-size: 46px; font-weight: 700; letter-spacing: -0.04em;
+    line-height: 1; font-variant-numeric: tabular-nums;
+  }
+  .c-card .sub { font-size: 14px; font-weight: 550; opacity: .62; margin-top: 7px; }
+  .c-top { display: flex; align-items: flex-start; justify-content: space-between; }
+
+  .c-feed {
+    background: linear-gradient(152deg, rgba(240,164,74,.24), rgba(240,164,74,.07));
+    color: #f8cd93;
+  }
+  .c-sleep {
+    background: linear-gradient(152deg, rgba(124,142,246,.3), rgba(124,142,246,.09));
+    color: #c3ccff;
+    border-color: rgba(124,142,246,.4);
+  }
+  .c-diaper {
+    background: linear-gradient(152deg, rgba(74,206,187,.2), rgba(74,206,187,.06));
+    color: #92e6d9;
+  }
+  .c-running {
+    position: absolute; top: 20px; right: 22px;
+    display: flex; align-items: center; gap: 7px;
+    font-size: 12px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase;
+  }
+  .c-pulse {
+    width: 8px; height: 8px; border-radius: 50%; background: currentColor;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100% { opacity: .35; } 50% { opacity: 1; } }
+
+  .c-stop {
+    margin-top: 14px; align-self: flex-start;
+    padding: 11px 26px; border-radius: 30px;
+    background: rgba(255,255,255,.14); border: 1px solid rgba(255,255,255,.18);
+    font-size: 15px; font-weight: 650;
+    backdrop-filter: blur(20px); -webkit-backdrop-filter: blur(20px);
+  }
+
+  .c-tabs {
+    position: absolute; left: 0; right: 0; bottom: 0; height: 84px; z-index: 50;
+    display: flex; align-items: flex-start; padding-top: 11px;
+    background: rgba(8,8,10,.7); border-top: 1px solid rgba(255,255,255,.07);
+    backdrop-filter: blur(30px); -webkit-backdrop-filter: blur(30px);
+  }
+  .c-tab { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 4px;
+           font-size: 10.5px; font-weight: 500; color: #6e6e76; }
+  .c-tab .ic { font-size: 21px; }
+  .c-tab.on { color: #f8cd93; }
+
+  .notes {
+    max-width: 1400px; margin: 64px auto 0;
+    display: flex; gap: 72px; flex-wrap: wrap;
+  }
+  .note { width: 393px; font-size: 13.5px; line-height: 1.6; color: #a3a19d; }
+  .note h3 { color: #e8e6e3; font-size: 14px; margin-bottom: 9px; font-weight: 600; }
+  .note b { color: #cdcbc7; font-weight: 600; }
+  .note ul { margin: 9px 0 0 17px; }
+  .note li { margin-bottom: 5px; }
+
+  .ic svg, .sw svg { width: 1em; height: 1em; display: block; }
+  .sprite { position: absolute; width: 0; height: 0; overflow: hidden; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .dial-glow, .c-pulse { animation: none; }
+  }
+
+  @media (max-width: 900px) {
+    body { padding: 24px 12px 60px; }
+    .rack { gap: 40px; }
+    .slot, .note { width: 100%; max-width: 393px; }
+    .phone { zoom: 0.92; }
+    .notes { gap: 32px; margin-top: 40px; }
+  }
+</style>
+</head>
+<body>
+
+<svg class="sprite" aria-hidden="true">
+  <symbol id="ic-feed" viewBox="0 0 24 24">
+    <path d="M9 2h6M10 5h4a2 2 0 0 1 2 2v1.6a3 3 0 0 0 .5 1.7l.5.8a4 4 0 0 1 .6 2.1V19a3 3 0 0 1-3 3h-5a3 3 0 0 1-3-3v-5.8a4 4 0 0 1 .6-2.1l.5-.8A3 3 0 0 0 8 8.6V7a2 2 0 0 1 2-2Z"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M8 14h8" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-sleep" viewBox="0 0 24 24">
+    <path d="M20.5 14.3A8.5 8.5 0 1 1 9.7 3.5a6.8 6.8 0 0 0 10.8 10.8Z"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="ic-diaper" viewBox="0 0 24 24">
+    <path d="M3 5h18v5a11 11 0 0 1-5.5 9.5L12 21l-3.5-1.5A11 11 0 0 1 3 10Z"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round"/>
+    <path d="M8 10c1.8 1.4 6.2 1.4 8 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-home" viewBox="0 0 24 24">
+    <path d="M3.5 10.5 12 3.5l8.5 7M5.5 9.3V20h13V9.3"
+      fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+  </symbol>
+  <symbol id="ic-list" viewBox="0 0 24 24">
+    <path d="M9 6h11M9 12h11M9 18h11M4.5 6h.01M4.5 12h.01M4.5 18h.01"
+      fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-chart" viewBox="0 0 24 24">
+    <path d="M4 20V10M10 20V4M16 20v-7M22 20H2"
+      fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-person" viewBox="0 0 24 24">
+    <circle cx="12" cy="8" r="3.6" fill="none" stroke="currentColor" stroke-width="1.7"/>
+    <path d="M5 20a7 7 0 0 1 14 0" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"/>
+  </symbol>
+  <symbol id="ic-battery" viewBox="0 0 26 13">
+    <rect x="0.6" y="0.6" width="21" height="11.8" rx="3.4" fill="none" stroke="currentColor" stroke-width="1.1" opacity=".5"/>
+    <rect x="2.3" y="2.3" width="14" height="8.4" rx="2.1" fill="currentColor"/>
+    <path d="M23.4 4.5v4a2.3 2.3 0 0 0 0-4Z" fill="currentColor" opacity=".5"/>
+  </symbol>
+</svg>
+
+<div class="page-head">
+  <h1>Home screen — three directions</h1>
+  <p>Same spec, same data, same three trackers. What differs is what the screen makes
+     easy: reading one number in the dark, reading the shape of the whole day, or
+     hitting a target without looking. Dark mode shown, since night feeds are peak usage.</p>
+</div>
+
+<div class="rack">
+
+  <!-- ================= A ================= -->
+  <div class="slot">
+    <div class="slot-head">
+      <span class="slot-letter">Direction A</span>
+      <h2>Night Shift</h2>
+      <p>One question answered enormously: how long since the last feed. Everything
+         else recedes. Amber on deep ink, because amber is the kindest accent to
+         dark-adapted eyes.</p>
+    </div>
+
+    <div class="phone">
+      <div class="screen a">
+        <div class="island"></div>
+        <div class="statusbar" style="color:#e9ecf7">
+          <span>2:47</span>
+          <span class="glyphs">
+            <span class="bar" style="height:5px"></span>
+            <span class="bar" style="height:8px"></span>
+            <span class="bar" style="height:11px"></span>
+            <span class="bar" style="height:11px;opacity:.4"></span>
+            <span style="width:25px;height:12px;margin-left:4px"><svg viewBox="0 0 26 13" style="width:25px;height:12px;display:block"><use href="#ic-battery"/></svg></span>
+          </span>
+        </div>
+
+        <div class="content">
+          <div class="a-topline">
+            <h1>Mira</h1>
+            <span class="a-switch">Switch baby</span>
+          </div>
+
+          <div class="dial-wrap">
+            <div class="dial">
+              <div class="dial-glow"></div>
+              <svg viewBox="0 0 248 248">
+                <circle cx="124" cy="124" r="112" fill="none"
+                        stroke="rgba(255,255,255,.07)" stroke-width="10"/>
+                <circle cx="124" cy="124" r="112" fill="none"
+                        stroke="#f2b061" stroke-width="10" stroke-linecap="round"
+                        stroke-dasharray="703" stroke-dashoffset="446"/>
+              </svg>
+              <div class="dial-face">
+                <span class="dial-eyebrow">Since last feed</span>
+                <span class="dial-value">2:14</span>
+                <span class="dial-sub">Left side · 18 min</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="a-rows">
+            <div class="a-row live">
+              <span class="a-dot" style="background:#8a9bf0"></span>
+              <span class="a-row-label">Asleep</span>
+              <span class="a-row-value">42m</span>
+            </div>
+            <div class="a-row">
+              <span class="a-dot" style="background:#5fd3c4"></span>
+              <span class="a-row-label">Last diaper</span>
+              <span class="a-row-value">55m ago · wet</span>
+            </div>
+          </div>
+        </div>
+
+        <div class="a-dock">
+          <div class="a-btn feed"><span class="ic"><svg><use href="#ic-feed"/></svg></span><span class="tx">Feed</span></div>
+          <div class="a-btn sleep"><span class="ic"><svg><use href="#ic-sleep"/></svg></span><span class="tx">Sleep</span></div>
+          <div class="a-btn diaper"><span class="ic"><svg><use href="#ic-diaper"/></svg></span><span class="tx">Diaper</span></div>
+        </div>
+
+        <div class="a-tabs">
+          <div class="a-tab on"><span class="ic"><svg><use href="#ic-home"/></svg></span>Home</div>
+          <div class="a-tab"><span class="ic"><svg><use href="#ic-list"/></svg></span>History</div>
+          <div class="a-tab"><span class="ic"><svg><use href="#ic-chart"/></svg></span>Insights</div>
+        </div>
+        <div class="home-ind" style="color:#e9ecf7"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= B ================= -->
+  <div class="slot">
+    <div class="slot-head">
+      <span class="slot-letter">Direction B</span>
+      <h2>The Ribbon</h2>
+      <p>The last 12 hours as a single vertical band you read like a thermometer.
+         Home and History become one screen — you see rhythm, not just the last event.</p>
+    </div>
+
+    <div class="phone">
+      <div class="screen b">
+        <div class="island"></div>
+        <div class="statusbar" style="color:#efe9e1">
+          <span>2:47</span>
+          <span class="glyphs">
+            <span class="bar" style="height:5px"></span>
+            <span class="bar" style="height:8px"></span>
+            <span class="bar" style="height:11px"></span>
+            <span class="bar" style="height:11px;opacity:.4"></span>
+            <span style="width:25px;height:12px;margin-left:4px"><svg viewBox="0 0 26 13" style="width:25px;height:12px;display:block"><use href="#ic-battery"/></svg></span>
+          </span>
+        </div>
+
+        <div class="content">
+          <div class="b-head">
+            <h1>Mira</h1>
+            <span class="date">Tue 18 Sep</span>
+          </div>
+
+          <div class="b-strip">
+            <div class="b-stat">
+              <div class="k">Feeds</div>
+              <div class="v">7 <span class="u">today</span></div>
+            </div>
+            <div class="b-stat">
+              <div class="k">Sleep</div>
+              <div class="v">9<span class="u">h</span> 20<span class="u">m</span></div>
+            </div>
+            <div class="b-stat">
+              <div class="k">Diapers</div>
+              <div class="v">5 <span class="u">today</span></div>
+            </div>
+          </div>
+
+          <div class="b-ribbon-wrap">
+            <div class="b-hours">
+              <span>02:47</span><span>01:00</span><span>23:00</span>
+              <span>21:00</span><span>19:00</span><span>17:00</span><span>15:00</span>
+            </div>
+
+            <div class="b-ribbon">
+              <div class="seg sleep" style="height:9%"></div>
+              <div class="seg feed" style="height:4%"></div>
+              <div class="seg awake" style="height:5%"></div>
+              <div class="seg sleep-l" style="height:24%"></div>
+              <div class="seg diaper" style="height:2.5%"></div>
+              <div class="seg feed" style="height:4%"></div>
+              <div class="seg awake" style="height:8%"></div>
+              <div class="seg sleep-l" style="height:13%"></div>
+              <div class="seg feed" style="height:3.5%"></div>
+              <div class="seg diaper" style="height:2.5%"></div>
+              <div class="seg awake" style="height:11%"></div>
+              <div class="seg sleep" style="height:9%"></div>
+              <div class="seg feed" style="height:4.5%"></div>
+            </div>
+
+            <div class="b-events">
+              <div class="b-now-pill" style="top:0px">
+                <span class="lab">Asleep · 42m</span>
+              </div>
+              <div class="b-ev" style="top:56px">
+                <span class="tick"></span>
+                <div><div class="lab">Breast · left</div><div class="sub">2:05 · 18 min</div></div>
+              </div>
+              <div class="b-ev" style="top:150px">
+                <span class="tick"></span>
+                <div><div class="lab">Diaper · wet</div><div class="sub">1:52</div></div>
+              </div>
+              <div class="b-ev" style="top:214px">
+                <span class="tick"></span>
+                <div><div class="lab">Bottle · 120 ml</div><div class="sub">23:10 · formula</div></div>
+              </div>
+              <div class="b-ev" style="top:300px">
+                <span class="tick"></span>
+                <div><div class="lab">Diaper · mixed</div><div class="sub">21:30</div></div>
+              </div>
+              <div class="b-ev" style="top:372px">
+                <span class="tick"></span>
+                <div><div class="lab">Breast · right</div><div class="sub">20:15 · 22 min</div></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="b-dock">
+          <div class="b-btn feed">Feed</div>
+          <div class="b-btn sleep">Wake</div>
+          <div class="b-btn diaper">Diaper</div>
+        </div>
+
+        <div class="b-tabs">
+          <div class="b-tab on"><span class="ic"><svg><use href="#ic-home"/></svg></span>Home</div>
+          <div class="b-tab"><span class="ic"><svg><use href="#ic-list"/></svg></span>History</div>
+          <div class="b-tab"><span class="ic"><svg><use href="#ic-chart"/></svg></span>Insights</div>
+        </div>
+        <div class="home-ind" style="color:#efe9e1"></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ================= C ================= -->
+  <div class="slot">
+    <div class="slot-head">
+      <span class="slot-letter">Direction C</span>
+      <h2>Three Doors</h2>
+      <p>The card is the button. Three targets, each a third of the screen, each
+         showing its own status. Impossible to miss one-handed, in the dark,
+         without looking.</p>
+    </div>
+
+    <div class="phone">
+      <div class="screen c">
+        <div class="island"></div>
+        <div class="statusbar" style="color:#f2f2f4">
+          <span>2:47</span>
+          <span class="glyphs">
+            <span class="bar" style="height:5px"></span>
+            <span class="bar" style="height:8px"></span>
+            <span class="bar" style="height:11px"></span>
+            <span class="bar" style="height:11px;opacity:.4"></span>
+            <span style="width:25px;height:12px;margin-left:4px"><svg viewBox="0 0 26 13" style="width:25px;height:12px;display:block"><use href="#ic-battery"/></svg></span>
+          </span>
+        </div>
+
+        <div class="content">
+          <div class="c-head">
+            <h1>Mira</h1>
+            <span class="sw" style="width:26px;height:26px"><svg><use href="#ic-person"/></svg></span>
+          </div>
+
+          <div class="c-card c-feed">
+            <div class="c-top">
+              <span class="ic"><svg><use href="#ic-feed"/></svg></span>
+            </div>
+            <div>
+              <div class="k">Feed</div>
+              <div class="v" style="margin-top:8px">2h 14m</div>
+              <div class="sub">since left side, 18 min</div>
+            </div>
+          </div>
+
+          <div class="c-card c-sleep">
+            <div class="c-running"><span class="c-pulse"></span>Asleep</div>
+            <div class="c-top"><span class="ic"><svg><use href="#ic-sleep"/></svg></span></div>
+            <div>
+              <div class="k">Sleep</div>
+              <div class="v" style="margin-top:8px">42m</div>
+              <div class="c-stop">Wake up</div>
+            </div>
+          </div>
+
+          <div class="c-card c-diaper">
+            <div class="c-top"><span class="ic"><svg><use href="#ic-diaper"/></svg></span></div>
+            <div>
+              <div class="k">Diaper</div>
+              <div class="v" style="margin-top:8px">55m</div>
+              <div class="sub">since wet</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="c-tabs">
+          <div class="c-tab on"><span class="ic"><svg><use href="#ic-home"/></svg></span>Home</div>
+          <div class="c-tab"><span class="ic"><svg><use href="#ic-list"/></svg></span>History</div>
+          <div class="c-tab"><span class="ic"><svg><use href="#ic-chart"/></svg></span>Insights</div>
+        </div>
+        <div class="home-ind" style="color:#f2f2f4"></div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="notes">
+  <div class="note">
+    <h3>A — what you gain and give up</h3>
+    <b>Gain:</b> the single most-asked question is legible across a dark room without
+    your glasses. The dial arc is elapsed time only — it never points at a target,
+    because a ring that fills toward "next feed" is a prediction, and the spec rules
+    predictions out.
+    <ul>
+      <li>Feed is privileged; sleep and diaper are demoted to rows</li>
+      <li>Dial costs ~250pt of vertical space for one number</li>
+      <li>Reflows cleanly at AX5: dial shrinks, rows stack</li>
+    </ul>
+  </div>
+  <div class="note">
+    <h3>B — what you gain and give up</h3>
+    <b>Gain:</b> rhythm. You see cluster feeding, a short nap, a long stretch — the
+    things that actually tell you how the day went — without opening History.
+    <ul>
+      <li>Densest of the three; hardest to read half-asleep</li>
+      <li>The ribbon is real work to build and to make accessible</li>
+      <li>Duplicates History, which may make that tab redundant</li>
+    </ul>
+  </div>
+  <div class="note">
+    <h3>C — what you gain and give up</h3>
+    <b>Gain:</b> the largest possible tap targets and the shortest path from
+    intent to logged. Status and action are the same object, so there's nothing
+    to aim at twice.
+    <ul>
+      <li>Least information per screen of the three</li>
+      <li>Card-as-button needs a clear press state to not feel ambiguous</li>
+      <li>Scales awkwardly if pumping or growth are added later</li>
+    </ul>
+  </div>
+</div>
+
+</body>
+</html>

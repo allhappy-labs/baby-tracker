@@ -1,0 +1,21 @@
+{
+  "protocol_version": "v1",
+  "capabilities": [
+    "live-activity-push-v1"
+  ],
+  "installation_id": "11111111-1111-4111-8111-111111111111",
+  "registration_version": 1,
+  "apns_environment": "sandbox",
+  "payload_version": 1,
+  "push_to_start_token": "aabb",
+  "feed_break_minutes": 30,
+  "foreground_inventory": {
+    "inventory_version": 1,
+    "absent_generations": [
+      {
+        "generation_id": "55555555-5555-4555-8555-555555555555",
+        "observed_attempt_id": "66666666-6666-4666-8666-666666666666"
+      }
+    ]
+  }
+}

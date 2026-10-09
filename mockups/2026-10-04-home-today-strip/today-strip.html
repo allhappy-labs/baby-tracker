@@ -1,0 +1,176 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>today-strip</title>
+<style>
+  body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px;margin:0}
+  h2{margin:0 0 4px}.subtitle{opacity:.7;margin:0 0 6px;max-width:1300px}
+  .phones{display:flex;gap:22px;justify-content:center;margin-top:18px}
+  .col{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .col h3{margin:4px 0 0;font-size:14px}.col p{margin:0;max-width:290px;font-size:12px;opacity:.8;text-align:center}
+  .ph{width:300px;height:652px;border-radius:44px;position:relative;overflow:hidden;flex:none;
+      background:linear-gradient(180deg,#1E2546 0%,#151a33 45%,#0f1326 100%);
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 7px #1d2233,0 14px 30px rgba(0,0,0,.45)}
+  .sb{display:flex;justify-content:space-between;padding:16px 26px 0;font-size:13px;font-weight:600}
+  .hd{display:flex;align-items:baseline;justify-content:space-between;padding:22px 20px 0}
+  .name{font-size:32px;font-weight:800}.name small{font-size:15px;color:#8B93AD;margin-left:6px}
+  svg.ic{width:20px;height:20px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}
+  .num{font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-.5px}
+  .mut{color:#8B93AD}
+  .hero{text-align:center}
+  .hero .t{font-size:17px;font-weight:700;display:flex;gap:7px;justify-content:center;align-items:center}
+  .hero .big{font-size:68px;line-height:1.1;font-weight:800;letter-spacing:-2px;font-variant-numeric:tabular-nums}
+  .hero .since{font-size:13px;margin-top:2px}
+  .seg{display:flex;justify-content:center;gap:22px;font-size:14px;margin-top:14px}
+  .seg span{display:flex;gap:6px;align-items:center}
+  @keyframes pulse{0%,100%{opacity:1}50%{opacity:.35}}
+  .live{width:7px;height:7px;border-radius:4px;background:#6b6258;display:inline-block;animation:pulse 1.6s infinite}
+  .dock{position:absolute;left:14px;right:14px;bottom:70px;border-radius:28px;background:rgba(255,255,255,.07);padding:8px;
+        box-shadow:inset 0 0 0 1px rgba(255,255,255,.06)}
+  .btn{border-radius:20px;display:flex;align-items:center;justify-content:center;gap:6px;font-weight:700}
+  .stop{background:#EEF1FA;color:#0B1020;height:52px;font-size:19px}
+  .ghost{background:rgba(255,255,255,.08);color:#8B93AD}
+  .bgD{background:rgba(95,211,196,.18)}.bgS{background:rgba(138,155,240,.16)}.bgF{background:rgba(242,176,97,.14)}
+  .tabs{position:absolute;bottom:14px;left:16px;right:16px;height:46px;border-radius:26px;background:rgba(255,255,255,.07);
+        display:grid;grid-template-columns:repeat(5,1fr);align-items:center;font-size:10px;color:#cfd3e2;text-align:center}
+  .tabs .on{color:#4EA3FF;background:rgba(10,14,35,.6);border-radius:22px;margin:4px;padding:6px 0}
+
+  /* Today strip, bigger */
+  .today{margin:0 20px;border-radius:20px;background:rgba(255,255,255,.045);padding:14px 14px 12px;
+         box-shadow:inset 0 0 0 1px rgba(255,255,255,.05)}
+  .today .top{display:flex;justify-content:space-between;align-items:center;font-size:13px;margin-bottom:10px}
+  .today .top .chev{font-size:13px;color:#8B93AD}
+  .bar{position:relative;height:28px;border-radius:8px;background:rgba(255,255,255,.06);overflow:hidden}
+  .bar .s{position:absolute;top:0;bottom:0;background:rgba(138,155,240,.7)}
+  .bar .s.run{background:#8A9BF0;animation:pulse 1.6s infinite}
+  .bar .f{position:absolute;top:0;bottom:0;width:2px;background:#F2B061}
+  .bar .f.run{width:4px;box-shadow:0 0 8px 2px rgba(242,176,97,.8);animation:pulse 1.6s infinite}
+  .bar .h{position:absolute;top:0;bottom:0;width:1px;background:rgba(255,255,255,.10)}
+  .axis{position:relative;height:14px;margin-top:4px;font-size:10px;color:#8B93AD;font-variant-numeric:tabular-nums}
+  .axis span{position:absolute;transform:translateX(-50%)}
+  .axis span.end{transform:none;right:0}
+  .axis span.start{transform:none;left:0}
+  .stats{display:flex;justify-content:space-between;margin-top:12px;padding:0 6px}
+  .stat{display:flex;align-items:center;gap:3px;white-space:nowrap}
+  .stat svg.ic{width:16px;height:16px}
+  .stat b{font-size:14px;font-variant-numeric:tabular-nums}
+  .tag{position:absolute;top:10px;left:50%;transform:translateX(-50%);font-size:10px;background:#F2B061;color:#0B1020;padding:2px 8px;border-radius:8px;font-weight:700;z-index:5}
+</style>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="dropR" viewBox="0 0 24 24"><path d="M12 2.8c3.9 4.6 6.6 8.2 6.6 11.6a6.6 6.6 0 0 1-13.2 0c0-3.4 2.7-7 6.6-11.6z"/><path d="M10.6 17.4v-4.6h1.7a1.3 1.3 0 0 1 0 2.6h-1.7M12.4 15.4l1.4 2"/></symbol>
+  <symbol id="drop" viewBox="0 0 24 24"><path d="M12 2.8c3.9 4.6 6.6 8.2 6.6 11.6a6.6 6.6 0 0 1-13.2 0c0-3.4 2.7-7 6.6-11.6z"/></symbol>
+  <symbol id="bottle" viewBox="0 0 24 24"><path d="M10.4 2.6h3.2M9.6 6.2 10.4 2.6h3.2l.8 3.6z"/><rect x="7.2" y="6.2" width="9.6" height="15" rx="3"/><path d="M7.2 11h3.4M7.2 14.4h3.4M7.2 17.8h3.4"/></symbol>
+  <symbol id="moon" viewBox="0 0 24 24"><path d="M19.8 14.8A8.2 8.2 0 0 1 9.2 4.2a8.2 8.2 0 1 0 10.6 10.6z"/><path d="M16 3.5v3M14.5 5h3"/></symbol>
+  <symbol id="diaper" viewBox="0 0 24 24"><path d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path d="M2.8 6.8H1.2M21.2 6.8h1.6"/><rect x="9.6" y="7.6" width="4.8" height="3.2" rx="1"/></symbol>
+  <symbol id="more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="18" cy="12" r="1"/></symbol>
+</defs></svg>
+
+<h2>Home while a timer runs: keep Today on screen, bigger</h2>
+<p class="subtitle">Same data as the idle Today strip, now in every state. The bar runs from midnight to now (sleep = bars, feed = ticks). Whatever is running is drawn live at the right edge. The totals are icon + number, kept well below the hero's size. Tap → History at today. Sample data at 15:11.</p>
+
+<div class="phones">
+
+<template id="phone">
+  <div class="ph">
+    <div class="sb"><span>15:11</span><span>68%</span></div>
+    <div class="hd"><div class="name">Marc <small>⌄</small></div><div class="mut" style="font-size:13px">2 weeks</div></div>
+    <div class="slot-hero"></div>
+    <div class="slot-strip"></div>
+    <div class="slot-dock"></div>
+    <div class="tabs"><div class="on">Home</div><div>History</div><div>Ask</div><div>Insights</div><div>Settings</div></div>
+  </div>
+</template>
+
+<template id="feedHero">
+  <div class="hero" style="padding-top:34px">
+    <div class="t feed"><span class="live"></span><svg class="ic" style="width:18px;height:18px"><use href="#dropR"/></svg>Right breast</div>
+    <div class="big">1:40</div>
+    <div class="since mut">since 15:09</div>
+    <div class="seg"><span><svg class="ic sleep" style="width:16px;height:16px"><use href="#moon"/></svg><span class="num">2m</span></span>
+      <span><svg class="ic diaper" style="width:16px;height:16px"><use href="#diaper"/></svg><span class="num">10h 31m</span></span></div>
+  </div>
+</template>
+
+<template id="sleepHero">
+  <div class="hero" style="padding-top:34px">
+    <div class="t sleep"><span class="live" style="background:#8A9BF0"></span><svg class="ic" style="width:18px;height:18px"><use href="#moon"/></svg>Asleep</div>
+    <div class="big">42:10</div>
+    <div class="since mut">since 14:29</div>
+    <div class="seg"><span><svg class="ic feed" style="width:16px;height:16px"><use href="#drop"/></svg><span class="num">1h 02m</span></span>
+      <span><svg class="ic diaper" style="width:16px;height:16px"><use href="#diaper"/></svg><span class="num">2h 15m</span></span></div>
+  </div>
+</template>
+
+<template id="feedDock">
+  <div class="dock">
+    <div class="btn stop">Stop</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:7px;margin-top:7px">
+      <div class="btn bgD diaper" style="height:40px"><svg class="ic"><use href="#diaper"/></svg></div>
+      <div class="btn ghost" style="height:40px"><svg class="ic"><use href="#more"/></svg></div>
+    </div>
+  </div>
+</template>
+
+<template id="sleepDock">
+  <div class="dock">
+    <div class="btn stop">Wake up</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:7px;margin-top:7px">
+      <div class="btn bgF feed" style="height:40px"><svg class="ic"><use href="#drop"/></svg></div>
+      <div class="btn bgD diaper" style="height:40px"><svg class="ic"><use href="#diaper"/></svg></div>
+      <div class="btn ghost" style="height:40px"><svg class="ic"><use href="#more"/></svg></div>
+    </div>
+  </div>
+</template>
+
+<div class="col" id="c0"><h3>Now · feed running</h3><p>Today strip hidden while anything runs; ~240pt of empty space between the status row and the dock.</p></div>
+<div class="col" id="c1"><h3>A · Today under the status row</h3><p>Reads top-down: what's running, then how today went. Leftover space sits above the dock.</p></div>
+<div class="col" id="c2"><h3>B · Today sits on the dock</h3><p>Hero keeps its breathing room; the strip anchors just above the dock, so the gap is in the middle.</p></div>
+<div class="col" id="c3"><h3>A · sleep running</h3><p>The running sleep is the live bar at the right edge, growing each minute.</p></div>
+
+</div>
+
+<script>
+// Minutes since midnight. "now" is 15:11 = 911.
+const NOW = 911;
+const m = (h, mm) => h * 60 + mm;
+const sleeps = [[m(0,20), m(2,40)], [m(3,30), m(6,10)], [m(7,45), m(9,0)], [m(10,30), m(12,5)], [m(13,35), m(15,9)]];
+const feeds = [m(0,5), m(2,50), m(6,20), m(9,10), m(12,15)];
+const pct = t => (t / NOW * 100).toFixed(2) + '%';
+
+function strip({ runningFeed, runningSleepFrom, feedCount, sleepTotal, diapers, ml }) {
+  const ss = runningSleepFrom != null ? sleeps.slice(0, 4).concat([[m(13,35), m(14,10)]]) : sleeps;
+  const fs = runningSleepFrom != null ? feeds.concat([m(14,15)]) : feeds;
+  let bar = '';
+  for (const h of [6, 12]) bar += `<div class="h" style="left:${pct(h * 60)}"></div>`;
+  for (const [a, b] of ss) bar += `<div class="s" style="left:${pct(a)};width:${((b - a) / NOW * 100).toFixed(2)}%"></div>`;
+  if (runningSleepFrom != null) bar += `<div class="s run" style="left:${pct(runningSleepFrom)};right:0"></div>`;
+  for (const f of fs) bar += `<div class="f" style="left:${pct(f)}"></div>`;
+  if (runningFeed) bar += `<div class="f run" style="left:calc(${pct(runningFeed)} - 1px);right:0;width:auto;min-width:4px"></div>`;
+  return `<div class="today">
+    <div class="top"><span class="mut">Today</span><span class="chev">›</span></div>
+    <div class="bar">${bar}</div>
+    <div class="axis"><span class="start">00</span><span style="left:${pct(360)}">06</span><span style="left:${pct(720)}">12</span><span class="end">now</span></div>
+    <div class="stats">
+      <div class="stat"><svg class="ic feed"><use href="#drop"/></svg><b>${feedCount}</b></div>
+      <div class="stat"><svg class="ic sleep"><use href="#moon"/></svg><b>${sleepTotal}</b></div>
+      <div class="stat"><svg class="ic diaper"><use href="#diaper"/></svg><b>${diapers}</b></div>
+      <div class="stat"><svg class="ic feed"><use href="#bottle"/></svg><b>${ml}</b></div>
+    </div></div>`;
+}
+
+function phone(col, hero, dock, stripHTML, stripStyle) {
+  const ph = document.getElementById('phone').content.cloneNode(true);
+  ph.querySelector('.slot-hero').replaceWith(document.getElementById(hero).content.cloneNode(true));
+  ph.querySelector('.slot-dock').replaceWith(document.getElementById(dock).content.cloneNode(true));
+  const s = ph.querySelector('.slot-strip');
+  if (stripHTML) { s.innerHTML = stripHTML; s.setAttribute('style', stripStyle); } else s.remove();
+  const c = document.getElementById(col);
+  c.insertBefore(ph, c.firstChild);
+}
+
+const feedData = { runningFeed: m(15,9), feedCount: 5, sleepTotal: '9h 41m', diapers: 5, ml: '120 ml' };
+phone('c0', 'feedHero', 'feedDock', null);
+phone('c1', 'feedHero', 'feedDock', strip(feedData), 'margin-top:30px');
+phone('c2', 'feedHero', 'feedDock', strip(feedData), 'position:absolute;left:0;right:0;bottom:196px');
+phone('c3', 'sleepHero', 'sleepDock', strip({ runningSleepFrom: m(14,29), feedCount: 6, sleepTotal: '9h 06m', diapers: 5, ml: '120 ml' }), 'margin-top:30px');
+</script>

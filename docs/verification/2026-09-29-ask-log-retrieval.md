@@ -1,0 +1,9 @@
+# Ask log retrieval, 2026-09-29
+
+The prior Ask prompt contained fixed calendar-day and seven-day summaries plus a bounded sample of recent entries. It had no exact rolling 24-hour bottle total, so a question spanning midnight could receive today's feed count instead of millilitres.
+
+The app-written bottle answer described below was replaced by the model-authored answer flow in `2026-09-29-ask-model-authored.md`.
+
+Ask now prefetches explicit local time windows and offers Apple's Foundation Models `Tool` a bounded read-only query of the selected child's local care log. The tool returns exact aggregate facts and up to 40 source-linked details per call, with at most four calls and a one-year window. It has no network or server access. Explicit bottle-volume questions use an app-calculated answer, avoiding model arithmetic and preserving a distinction between measured bottle volume and unmeasured breastfeeding. An empty log is described as missing entries, not zero actual intake. General parenting answers remain available.
+
+Verification: synthetic entries across midnight produced 170 ml from two selected-child bottles, excluding an older 70 ml bottle and a different child's 500 ml bottle. The yesterday follow-up produced 160 ml. Source links resolved to the contributing feed entries. The complete Swift gate passed 954 tests. An unsigned generic iOS Simulator build passed. A signed generic iOS device build passed `codesign --verify --deep --strict`; its executable SHA-256 is `251584581cb3442fd4166655b8fde0941149eca8c367f122dce0c2f8e19e2e54`. Its profile includes both paired phone UDIDs. `devicectl` installed the build on both phones and subsequent installed-app queries returned `com.olhapi.babytracker` version 1.0 on each. Neither app was launched, so Apple Intelligence availability and free-form tool-call quality on the paired iPhones remain unverified.

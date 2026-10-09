@@ -1,0 +1,386 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "Apple Intelligence is unavailable on this device.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Apple Intelligence недоступний на цьому пристрої."
+          }
+        }
+      }
+    },
+    "Ask": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запитати"
+          }
+        }
+      }
+    },
+    "Ask a question": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Поставте запитання"
+          }
+        }
+      }
+    },
+    "Ask about %@’s care, or ask a general parenting question.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запитайте про догляд за %@ або поставте загальне запитання про батьківство."
+          }
+        }
+      }
+    },
+    "Ask can't help with that one.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ask не може допомогти з цим запитанням."
+          }
+        }
+      }
+    },
+    "Cancel": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Скасувати"
+          }
+        }
+      }
+    },
+    "Catch me up": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Що нового?"
+          }
+        }
+      }
+    },
+    "Could not answer. Try again.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося відповісти. Спробуйте ще раз."
+          }
+        }
+      }
+    },
+    "Could not delete this chat.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося видалити цей чат."
+          }
+        }
+      }
+    },
+    "Could not load this chat.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося завантажити цей чат."
+          }
+        }
+      }
+    },
+    "Delete Chat": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Видалити чат"
+          }
+        }
+      }
+    },
+    "Delete this chat?": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Видалити цей чат?"
+          }
+        }
+      }
+    },
+    "Diaper": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Підгузок"
+          }
+        }
+      }
+    },
+    "Entry": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Запис"
+          }
+        }
+      }
+    },
+    "Explain this week’s Insights": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пояснити дані за тиждень"
+          }
+        }
+      }
+    },
+    "Feed": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Годування"
+          }
+        }
+      }
+    },
+    "From the log · %@": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Із журналу · %@"
+          }
+        }
+      }
+    },
+    "General information · not from the log": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Загальна інформація · не з журналу"
+          }
+        }
+      }
+    },
+    "Med": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medizin"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Med"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Medicina"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Médicament"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Farmaco"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Лік"
+          }
+        }
+      }
+    },
+    "New Chat": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Новий чат"
+          }
+        }
+      }
+    },
+    "Retry": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Повторити"
+          }
+        }
+      }
+    },
+    "Send": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Надіслати"
+          }
+        }
+      }
+    },
+    "Sleep": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Сон"
+          }
+        }
+      }
+    },
+    "That took too long. Try again.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Це зайняло забагато часу. Спробуйте ще раз."
+          }
+        }
+      }
+    },
+    "Thinking…": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Думаю…"
+          }
+        }
+      }
+    },
+    "This language is not supported by the on-device model.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Модель на пристрої не підтримує цю мову."
+          }
+        }
+      }
+    },
+    "This language isn't supported.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ця мова не підтримується."
+          }
+        }
+      }
+    },
+    "This removes the conversation for this child from this device.": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Розмову про цю дитину буде видалено з цього пристрою."
+          }
+        }
+      }
+    },
+    "What happened overnight?": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Що було вночі?"
+          }
+        }
+      }
+    },
+    "What's on your mind?": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Що вас цікавить?"
+          }
+        }
+      }
+    },
+    "diaper": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "підгузки"
+          }
+        }
+      }
+    },
+    "feeding": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "годування"
+          }
+        }
+      }
+    },
+    "sleep": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "сон"
+          }
+        }
+      }
+    },
+    "unavailable": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "недоступний"
+          }
+        }
+      }
+    },
+    "yesterday": {
+      "localizations": {
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "вчорашній день"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

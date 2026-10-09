@@ -1,0 +1,336 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Baby Tracker — app icon directions</title>
+<style>
+  :root {
+    --sf: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    --mono: ui-monospace, "SF Mono", Menlo, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: #17181c; color: #e8e6e3; font-family: var(--sf);
+    padding: 52px 32px 90px; -webkit-font-smoothing: antialiased;
+  }
+  .head { max-width: 1180px; margin: 0 auto 44px; }
+  .head h1 { font-size: 26px; font-weight: 600; letter-spacing: -0.02em; margin-bottom: 10px; }
+  .head p { color: #8e8d8a; font-size: 15px; max-width: 70ch; line-height: 1.6; }
+  .head code { font-family: var(--mono); font-size: 13px; color: #c9c7c3; }
+
+  .grid {
+    max-width: 1180px; margin: 0 auto;
+    display: grid; grid-template-columns: repeat(2, 1fr); gap: 52px 48px;
+  }
+  .opt { }
+  .opt-head { margin-bottom: 18px; }
+  .letter {
+    font-family: var(--mono); font-size: 11px; letter-spacing: .14em;
+    color: #6f6e6b; text-transform: uppercase; display: block; margin-bottom: 5px;
+  }
+  .opt-head h2 { font-size: 18px; font-weight: 600; letter-spacing: -0.01em; }
+  .opt-head p { font-size: 13.5px; color: #8e8d8a; line-height: 1.55; margin-top: 7px; }
+
+  .row { display: flex; align-items: flex-end; gap: 20px; flex-wrap: wrap; }
+  .cell { text-align: center; }
+  .cell .cap {
+    font-family: var(--mono); font-size: 9.5px; letter-spacing: .1em;
+    text-transform: uppercase; color: #64635f; margin-top: 9px;
+  }
+
+  /* the system applies the squircle mask; we simulate it for preview only */
+  .tile { border-radius: 22.5%; overflow: hidden; display: block; }
+  .t-lg { width: 168px; height: 168px; }
+  .t-md { width: 84px;  height: 84px;  border-radius: 22.5%; }
+  .t-sm { width: 46px;  height: 46px;  border-radius: 22.5%; }
+  .onlight { background: #dcdcdc; padding: 9px; border-radius: 14px; }
+
+  .notes { max-width: 1180px; margin: 56px auto 0; }
+  .notes h3 { font-size: 15px; margin-bottom: 12px; font-weight: 600; }
+  .notes table { border-collapse: collapse; width: 100%; font-size: 13.5px; }
+  .notes th, .notes td {
+    text-align: left; padding: 10px 14px 10px 0; vertical-align: top;
+    border-bottom: 1px solid #2a2b2f; color: #a3a19d; line-height: 1.55;
+  }
+  .notes th { color: #e8e6e3; font-weight: 600; width: 120px; }
+  .notes b { color: #cdcbc7; font-weight: 600; }
+
+  @media (max-width: 860px) {
+    body { padding: 26px 14px 60px; }
+    .grid { grid-template-columns: 1fr; gap: 40px; }
+    .row { gap: 14px; }
+    .t-lg { width: 132px; height: 132px; }
+  }
+</style>
+</head>
+<body>
+
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+          
+            <linearGradient id="a-bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#1F2A50"/><stop offset="1" stop-color="#0A0E1C"/>
+            </linearGradient>
+            <linearGradient id="a-mk" x1="0.2" y1="0" x2="0.8" y2="1">
+              <stop offset="0" stop-color="#F8D9A6"/><stop offset="1" stop-color="#EFA84E"/>
+            </linearGradient>
+            <mask id="a-crescent">
+              <rect width="1024" height="1024" fill="#000"/>
+              <circle cx="512" cy="512" r="300" fill="#fff"/>
+              <circle cx="512" cy="392" r="248" fill="#000"/>
+            </mask>
+          
+          
+            <linearGradient id="b-bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#1F2A50"/><stop offset="1" stop-color="#0A0E1C"/>
+            </linearGradient>
+            <linearGradient id="b-mk" x1="0.1" y1="0" x2="0.9" y2="1">
+              <stop offset="0" stop-color="#F8D9A6"/><stop offset="1" stop-color="#EFA84E"/>
+            </linearGradient>
+          
+          
+            <linearGradient id="c-bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#22305A"/><stop offset="1" stop-color="#0A0E1C"/>
+            </linearGradient>
+            <linearGradient id="c-mk" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#FBE3B8"/><stop offset="1" stop-color="#ED9F3E"/>
+            </linearGradient>
+            <clipPath id="c-clip"><rect x="0" y="0" width="1024" height="660"/></clipPath>
+          
+          
+            <linearGradient id="d-bg" x1="0" y1="0" x2="0" y2="1">
+              <stop offset="0" stop-color="#1F2A50"/><stop offset="1" stop-color="#0A0E1C"/>
+            </linearGradient>
+            <linearGradient id="d-mk" x1="0" y1="0" x2="1" y2="0.6">
+              <stop offset="0" stop-color="#FBE3B8"/><stop offset="1" stop-color="#ED9F3E"/>
+            </linearGradient>
+          
+  </defs>
+</svg>
+
+
+<div class="head">
+  <h1>App icon — four directions</h1>
+  <p>Real SVG, drawn on the <code>1024×1024</code> canvas Icon Composer expects, in discrete
+     layers. No blur, no drop shadow, no glass — Icon Composer applies all of that, plus the
+     squircle mask and the light/dark/tinted/clear variants. Each option is shown large, at
+     roughly Home Screen size, at Settings size, and flattened to monochrome, because
+     <b>tinted mode strips colour entirely</b> — if the mark does not survive as a silhouette,
+     it does not survive.</p>
+</div>
+
+<div class="grid">
+
+  <!-- ══════════════ A ══════════════ -->
+  <div class="opt">
+    <div class="opt-head">
+      <span class="letter">Option A</span>
+      <h2>Cradle</h2>
+      <p>A crescent opening upward, holding a single drop. Reads three ways at once —
+         moon, cradle, and the feed it's holding — without drawing any of them literally.</p>
+    </div>
+    <div class="row">
+      <div class="cell">
+        <svg class="tile t-lg" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+          <rect width="1024" height="1024" fill="url(#a-bg)"/>
+          <g mask="url(#a-crescent)">
+            <rect width="1024" height="1024" fill="url(#a-mk)"/>
+          </g>
+          <path d="M512 336 C 512 336 592 436 592 492 a 80 80 0 1 1 -160 0 C 432 436 512 336 512 336 Z"
+                fill="url(#a-mk)"/>
+        </svg>
+        <div class="cap">1024 · dark</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#a-bg)"/>
+          <g mask="url(#a-crescent)"><rect width="1024" height="1024" fill="url(#a-mk)"/></g>
+          <path d="M512 336 C 512 336 592 436 592 492 a 80 80 0 1 1 -160 0 C 432 436 512 336 512 336 Z" fill="url(#a-mk)"/>
+        </svg>
+        <div class="cap">home</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-sm" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#a-bg)"/>
+          <g mask="url(#a-crescent)"><rect width="1024" height="1024" fill="url(#a-mk)"/></g>
+          <path d="M512 336 C 512 336 592 436 592 492 a 80 80 0 1 1 -160 0 C 432 436 512 336 512 336 Z" fill="url(#a-mk)"/>
+        </svg>
+        <div class="cap">settings</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="#8b8b8f"/>
+          <g mask="url(#a-crescent)"><rect width="1024" height="1024" fill="#fff"/></g>
+          <path d="M512 336 C 512 336 592 436 592 492 a 80 80 0 1 1 -160 0 C 432 436 512 336 512 336 Z" fill="#fff"/>
+        </svg>
+        <div class="cap">tinted</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ B ══════════════ -->
+  <div class="opt">
+    <div class="opt-head">
+      <span class="letter">Option B</span>
+      <h2>The Arc</h2>
+      <p>The app's own seconds-hand, made into a mark. Abstract and unmistakably ours, since
+         it's the one element the product is built around. Asks more of the viewer.</p>
+    </div>
+    <div class="row">
+      <div class="cell">
+        <svg class="tile t-lg" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+          <rect width="1024" height="1024" fill="url(#b-bg)"/>
+          <circle cx="512" cy="512" r="266" fill="none" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="74"/>
+          <path d="M512 246 A 266 266 0 1 1 246 512" fill="none" stroke="url(#b-mk)"
+                stroke-width="74" stroke-linecap="round"/>
+          <circle cx="512" cy="512" r="56" fill="url(#b-mk)"/>
+        </svg>
+        <div class="cap">1024 · dark</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#b-bg)"/>
+          <circle cx="512" cy="512" r="266" fill="none" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="74"/>
+          <path d="M512 246 A 266 266 0 1 1 246 512" fill="none" stroke="url(#b-mk)" stroke-width="74" stroke-linecap="round"/>
+          <circle cx="512" cy="512" r="56" fill="url(#b-mk)"/>
+        </svg>
+        <div class="cap">home</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-sm" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#b-bg)"/>
+          <circle cx="512" cy="512" r="266" fill="none" stroke="#FFFFFF" stroke-opacity=".10" stroke-width="74"/>
+          <path d="M512 246 A 266 266 0 1 1 246 512" fill="none" stroke="url(#b-mk)" stroke-width="74" stroke-linecap="round"/>
+          <circle cx="512" cy="512" r="56" fill="url(#b-mk)"/>
+        </svg>
+        <div class="cap">settings</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="#8b8b8f"/>
+          <path d="M512 246 A 266 266 0 1 1 246 512" fill="none" stroke="#fff" stroke-width="74" stroke-linecap="round"/>
+          <circle cx="512" cy="512" r="56" fill="#fff"/>
+        </svg>
+        <div class="cap">tinted</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ C ══════════════ -->
+  <div class="opt">
+    <div class="opt-head">
+      <span class="letter">Option C</span>
+      <h2>Moonrise</h2>
+      <p>A half-disc cresting a horizon. The calmest and most legible of the four, and the
+         one a stranger reads fastest — at the cost of being the least specific to us.</p>
+    </div>
+    <div class="row">
+      <div class="cell">
+        <svg class="tile t-lg" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+          <rect width="1024" height="1024" fill="url(#c-bg)"/>
+          <g clip-path="url(#c-clip)">
+            <circle cx="512" cy="660" r="286" fill="url(#c-mk)"/>
+          </g>
+          <rect x="176" y="700" width="672" height="56" rx="28" fill="url(#c-mk)" opacity=".92"/>
+          <rect x="286" y="806" width="452" height="56" rx="28" fill="url(#c-mk)" opacity=".42"/>
+        </svg>
+        <div class="cap">1024 · dark</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#c-bg)"/>
+          <g clip-path="url(#c-clip)"><circle cx="512" cy="660" r="286" fill="url(#c-mk)"/></g>
+          <rect x="176" y="700" width="672" height="56" rx="28" fill="url(#c-mk)" opacity=".92"/>
+          <rect x="286" y="806" width="452" height="56" rx="28" fill="url(#c-mk)" opacity=".42"/>
+        </svg>
+        <div class="cap">home</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-sm" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#c-bg)"/>
+          <g clip-path="url(#c-clip)"><circle cx="512" cy="660" r="286" fill="url(#c-mk)"/></g>
+          <rect x="176" y="700" width="672" height="56" rx="28" fill="url(#c-mk)" opacity=".92"/>
+          <rect x="286" y="806" width="452" height="56" rx="28" fill="url(#c-mk)" opacity=".42"/>
+        </svg>
+        <div class="cap">settings</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="#8b8b8f"/>
+          <g clip-path="url(#c-clip)"><circle cx="512" cy="660" r="286" fill="#fff"/></g>
+          <rect x="176" y="700" width="672" height="56" rx="28" fill="#fff" opacity=".92"/>
+          <rect x="286" y="806" width="452" height="56" rx="28" fill="#fff" opacity=".45"/>
+        </svg>
+        <div class="cap">tinted</div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══════════════ D ══════════════ -->
+  <div class="opt">
+    <div class="opt-head">
+      <span class="letter">Option D</span>
+      <h2>Three Beats</h2>
+      <p>Feed, sleep, diaper as three marks on one curve — the night's rhythm rather than
+         its objects. Most conceptual; also the most likely to read as decoration.</p>
+    </div>
+    <div class="row">
+      <div class="cell">
+        <svg class="tile t-lg" viewBox="0 0 1024 1024" xmlns="http://www.w3.org/2000/svg">
+          <rect width="1024" height="1024" fill="url(#d-bg)"/>
+          <path d="M196 640 C 330 400 694 400 828 640" fill="none"
+                stroke="#FFFFFF" stroke-opacity=".13" stroke-width="30" stroke-linecap="round"/>
+          <circle cx="196" cy="640" r="84" fill="url(#d-mk)"/>
+          <circle cx="512" cy="470" r="104" fill="url(#d-mk)"/>
+          <circle cx="828" cy="640" r="84" fill="url(#d-mk)"/>
+        </svg>
+        <div class="cap">1024 · dark</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#d-bg)"/>
+          <path d="M196 640 C 330 400 694 400 828 640" fill="none" stroke="#FFFFFF" stroke-opacity=".13" stroke-width="30" stroke-linecap="round"/>
+          <circle cx="196" cy="640" r="84" fill="url(#d-mk)"/>
+          <circle cx="512" cy="470" r="104" fill="url(#d-mk)"/>
+          <circle cx="828" cy="640" r="84" fill="url(#d-mk)"/>
+        </svg>
+        <div class="cap">home</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-sm" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="url(#d-bg)"/>
+          <path d="M196 640 C 330 400 694 400 828 640" fill="none" stroke="#FFFFFF" stroke-opacity=".13" stroke-width="30" stroke-linecap="round"/>
+          <circle cx="196" cy="640" r="84" fill="url(#d-mk)"/>
+          <circle cx="512" cy="470" r="104" fill="url(#d-mk)"/>
+          <circle cx="828" cy="640" r="84" fill="url(#d-mk)"/>
+        </svg>
+        <div class="cap">settings</div>
+      </div>
+      <div class="cell">
+        <svg class="tile t-md" viewBox="0 0 1024 1024">
+          <rect width="1024" height="1024" fill="#8b8b8f"/>
+          <path d="M196 640 C 330 400 694 400 828 640" fill="none" stroke="#fff" stroke-opacity=".5" stroke-width="30" stroke-linecap="round"/>
+          <circle cx="196" cy="640" r="84" fill="#fff"/>
+          <circle cx="512" cy="470" r="104" fill="#fff"/>
+          <circle cx="828" cy="640" r="84" fill="#fff"/>
+        </svg>
+        <div class="cap">tinted</div>
+      </div>
+    </div>
+  </div>
+
+</div>
+
+<div class="notes">
+  <h3>How each survives the hard cases</h3>
+  <table>
+    <tr><th>A · Cradle</th><td><b>Holds up small.</b> Two shapes, high contrast, unambiguous silhouette. The drop-in-crescent reads as a single object rather than two stacked ones. Closest to the app's own vocabulary without repeating an icon from inside it.</td></tr>
+    <tr><th>B · Arc</th><td><b>Most distinctive, least literal.</b> Nothing else on a home screen looks like it, and it ties directly to the running-timer ring. Risk: an open ring with a dot is also just… a ring. Tells you nothing about what the app does until you've opened it once.</td></tr>
+    <tr><th>C · Moonrise</th><td><b>Reads fastest.</b> The horizon bars add stability and a hint of "record". But a crescent/moon is the single most common motif in sleep and baby apps — this is the option most likely to look like something you've already seen.</td></tr>
+    <tr><th>D · Three Beats</th><td><b>Weakest at size.</b> Three dots on an arc collapse into a smear at Settings size, and the concept (three trackers, one rhythm) is invisible without explanation. Included because the idea is right even if the execution isn't.</td></tr>
+  </table>
+</div>
+
+</body>
+</html>

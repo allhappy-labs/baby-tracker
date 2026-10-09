@@ -1,0 +1,41 @@
+{
+  "create_response": {
+    "protocol_version": "v1",
+    "id": "40000000-0000-4000-8000-000000000001",
+    "family_id": "30000000-0000-4000-8000-000000000001",
+    "role": "caregiver",
+    "status": "active",
+    "expires_at": "2026-09-27T12:00:00Z",
+    "created_at": "2026-09-26T12:00:00Z",
+    "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "link": "https://sync.example.test/invite#token=AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "secret_unavailable": false
+  },
+  "replay_response": {
+    "protocol_version": "v1",
+    "id": "40000000-0000-4000-8000-000000000001",
+    "family_id": "30000000-0000-4000-8000-000000000001",
+    "role": "caregiver",
+    "status": "active",
+    "expires_at": "2026-09-27T12:00:00Z",
+    "created_at": "2026-09-26T12:00:00Z",
+    "secret_unavailable": true
+  },
+  "preview_request": {
+    "protocol_version": "v1",
+    "capabilities": ["family-lifecycle-v1"],
+    "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  },
+  "preview_response": {
+    "protocol_version": "v1",
+    "family_display_name": "Our family",
+    "expires_at": "2026-09-27T12:00:00Z"
+  },
+  "redeem_request": {
+    "protocol_version": "v1",
+    "capabilities": ["family-lifecycle-v1"],
+    "command_id": "10000000-0000-4000-8000-000000000004",
+    "confirmed": true,
+    "token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+  }
+}

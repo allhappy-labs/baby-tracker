@@ -1,0 +1,151 @@
+{
+  "min": 29,
+  "max": 29,
+  "known": [
+    {
+      "version": 1,
+      "name": "000001_server_state.sql",
+      "sha256": "e6bf0d5b545b295f1a03c78d607ce8edc8bc2772d49f58bcbe77edb757266085"
+    },
+    {
+      "version": 2,
+      "name": "000002_tenancy.sql",
+      "sha256": "12546ac509f454c51d4bb17dca0fde50320ff2e453a5fe00b8005116230fc94e"
+    },
+    {
+      "version": 3,
+      "name": "000003_security_projection.sql",
+      "sha256": "636547efcdc42e2773955cb6105d8926f54f229367c6b6308417dace8ed8f427"
+    },
+    {
+      "version": 4,
+      "name": "000004_recovery_compatibility.sql",
+      "sha256": "ed1fc409bf95602c95f8a31b0838413368a5c72e11ae9a77456f37f818b938fe"
+    },
+    {
+      "version": 5,
+      "name": "000005_identity_sessions.sql",
+      "sha256": "a097a491190bd0d2c7193ecd07368e13e11412f30957dea73ed316bb81a5127a"
+    },
+    {
+      "version": 6,
+      "name": "000006_family_commands.sql",
+      "sha256": "4f2dd8081690bb636495396f8534116762ea0e8b74b4e7334b0c3d5b86a9cb31"
+    },
+    {
+      "version": 7,
+      "name": "000007_lifecycle.sql",
+      "sha256": "f20b9a4b6342127d00b3ba3535770ea674c1456f5edc473774049b95f9d7abed"
+    },
+    {
+      "version": 8,
+      "name": "000008_lifecycle_worker_resume.sql",
+      "sha256": "a4b74e36886deed380945becc3b431e3f418b48f21eb9832da59991201865685"
+    },
+    {
+      "version": 9,
+      "name": "000009_canonical_records.sql",
+      "sha256": "29803b437ab5e6e177b2144e612b82b8a569508d12ada6ed33b0fb30c93ccde3"
+    },
+    {
+      "version": 10,
+      "name": "000010_snapshot_staging.sql",
+      "sha256": "280c7c8cb1bd2ad3ce8dd2336b70e9c83b9222e175ff0eaab7db6114a2ba4188"
+    },
+    {
+      "version": 11,
+      "name": "000011_timer_commands.sql",
+      "sha256": "3525aa42589ba227c6056888ffcb8f56a00c108527ebcf137bc32314185def40"
+    },
+    {
+      "version": 12,
+      "name": "000012_import_resolver.sql",
+      "sha256": "c78f27460870b0682e3599cb1378108b3c6b6ff8e29b522c6e8e4322794d1e2f"
+    },
+    {
+      "version": 13,
+      "name": "000013_delivery_pending.sql",
+      "sha256": "1693627395740c2d4dc27a738b8b1d802343463646e12e6c7f1f6b0ebc19786c"
+    },
+    {
+      "version": 14,
+      "name": "000014_viewer_role.sql",
+      "sha256": "f121cd87c47066bc26071b24ecafdd6f779c10a39b73eee213aea02668fcd291"
+    },
+    {
+      "version": 15,
+      "name": "000015_member_role_projection.sql",
+      "sha256": "c1c68982050c2e7d8d1832b2b025bf4106165f05e12be8a881c409f5e6afd41e"
+    },
+    {
+      "version": 16,
+      "name": "000016_invitation_roles.sql",
+      "sha256": "99ad75e452da2832436f122eeda13f56fe5fbccaccba0cbff6158f84042b45c4"
+    },
+    {
+      "version": 17,
+      "name": "000017_feed_components.sql",
+      "sha256": "ff57ed9bd4de939fb0b899fa6b68ff3f2ec5df776330913aaf6530e8fd76a26f"
+    },
+    {
+      "version": 18,
+      "name": "000018_supplements.sql",
+      "sha256": "72eeec2d42b113071ffab5a00dbf0cb0f8d055f19c5c3daa431f0308e6b701f0"
+    },
+    {
+      "version": 19,
+      "name": "000019_exports.sql",
+      "sha256": "d734bc5b443f5ea803defd417bb85d727236cecf3a56ab2e1dc0275a5a39e3a0"
+    },
+    {
+      "version": 20,
+      "name": "000020_session_lineage_start.sql",
+      "sha256": "f6279ab98675117056b33c9c06e66202b1bba3d6f3c79eb19427cd385817aeb6"
+    },
+    {
+      "version": 21,
+      "name": "000021_timed_bottles.sql",
+      "sha256": "33255ba516121633cf7512772d8e15e5ae4cf766ff7d5fbc7fe207c4c1e8658f"
+    },
+    {
+      "version": 22,
+      "name": "000022_feed_sessions.sql",
+      "sha256": "640229a895c298a9f7b2fcfe6aefed1fef3fb97845ea20b33e38875f5120e0e4"
+    },
+    {
+      "version": 23,
+      "name": "000023_timer_pause.sql",
+      "sha256": "d9cb1c90e61a78ffa795d0188607f9175cb867e3818c3a795de24587ecfb84ba"
+    },
+    {
+      "version": 24,
+      "name": "000024_growth.sql",
+      "sha256": "7374e40af8e4c11ed3aeb896a12fd3924635c19435c3eb5cf63c4716fc94222f"
+    },
+    {
+      "version": 25,
+      "name": "000025_refresh_recovery.sql",
+      "sha256": "d019489c7f7165b1e8b967dc45abed0f91a0318abeeae6600d132b199a879574"
+    },
+    {
+      "version": 26,
+      "name": "000026_sleep_sessions.sql",
+      "sha256": "42944816f1b57bfa152ba9a3ab3553ac5e25b02b74c0f38539299ced07597bfe"
+    },
+    {
+      "version": 27,
+      "name": "000027_format_cleanup.sql",
+      "sha256": "2cfb9b7a3a9625c553542fc40261854d59aef1e72cbb091e1fb045c05064eab8"
+    },
+    {
+      "version": 28,
+      "name": "000028_live_activity_push.sql",
+      "sha256": "43b37464fd4570ae65eb2a84e3579e7e76dbc9e6c4b4ca3d598a2a74f3bc521e"
+    },
+    {
+      "version": 29,
+      "name": "000029_baby_icon.sql",
+      "sha256": "8a296b40a8a1aba5e8d4f0256a8bb2aa050c50c8ea30a6d9ae2d6cfd9e087288"
+    }
+  ]
+}

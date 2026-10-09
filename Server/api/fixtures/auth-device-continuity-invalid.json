@@ -1,0 +1,22 @@
+{
+  "missing_proof": {
+    "request": {
+      "protocol_version": "v1", "capabilities": ["identity-v1"],
+      "command_id": "30000000-0000-4000-8000-000000000003",
+      "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "identity_token": "fixture.identity.token", "authorization_code": "", "installation_id": "fixture-installation", "profile": null,
+      "device_continuity": {"device_id":"40000000-0000-4000-8000-000000000001","credential":""}
+    },
+    "response": {"error":{"code":"device_continuity_invalid","message":"Invalid request","request_id":"","retryable":false}}
+  },
+  "cross_account": {
+    "request": {
+      "protocol_version": "v1", "capabilities": ["identity-v1"],
+      "command_id": "30000000-0000-4000-8000-000000000004",
+      "challenge": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "identity_token": "other.account.identity.token", "authorization_code": "", "installation_id": "other-installation", "profile": null,
+      "device_continuity": {"device_id":"40000000-0000-4000-8000-000000000001","credential":"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+    },
+    "response": {"error":{"code":"device_continuity_invalid","message":"Invalid request","request_id":"","retryable":false}}
+  }
+}

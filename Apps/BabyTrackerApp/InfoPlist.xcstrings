@@ -1,0 +1,40 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "NSCameraUsageDescription": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baby Tracker verwendet die Kamera, um den QR-Code einer Betreuungseinladung zu scannen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baby Tracker utilise l’appareil photo pour scanner le code QR d’une invitation de proche aidant."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baby Tracker usa la cámara para escanear el código QR de una invitación a un cuidador."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baby Tracker usa la fotocamera per scansionare il codice QR di un invito per una persona che si prende cura del bebè."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Baby Tracker використовує камеру, щоб сканувати QR-код запрошення до сім’ї."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

@@ -1,0 +1,4 @@
+{
+  "refresh_attempt_conflict": {"error":{"code":"refresh_attempt_conflict","message":"Request conflicts with existing state","request_id":"","retryable":false}},
+  "refresh_receipt_unavailable": {"error":{"code":"refresh_receipt_unavailable","message":"Authentication failed","request_id":"","retryable":false}}
+}

@@ -1,0 +1,824 @@
+import SwiftUI
+import BabyCore
+import BabyStore
+import BabyUI
+
+public struct HistoryFocus: Equatable {
+    public let id = UUID()
+    /// An entry to open in its edit sheet (an Ask source).
+    public let entryID: UUID?
+    /// Trackers to show (Insights' All check-ins).
+    public let filter: Set<Tracker>?
+
+    public init(entryID: UUID) { self.entryID = entryID; self.filter = nil }
+    public init(filter: Set<Tracker>) { self.entryID = nil; self.filter = filter }
+}
+
+/// What a tap on History asks the app to open. HistoryFeature presents no
+/// editor itself: `RootView` maps each action to a LoggingFeature sheet, or
+/// to Home's running-timer editor, as it does Home's dock (ruling R4).
+public enum HistoryAction: Equatable {
+    /// One entry, in the sheet it was logged with, in edit mode.
+    case edit(EntryRef)
+    /// A feed or sleep of several parts, in the session sheet.
+    case session(SessionKind, rootID: UUID)
+    /// A running feed or sleep, in the running-timer editor (ruling H-R5).
+    case runningTimer(UUID)
+
+    init(_ target: HistoryRowTarget) {
+        switch target {
+        case .entry(let ref): self = .edit(ref)
+        case let .session(kind, rootID): self = .session(kind, rootID: rootID)
+        case .runningTimer(let id): self = .runningTimer(id)
+        }
+    }
+}
+
+/// The days, newest first: one row per feed or sleep session or entry, start
+/// over end on the left (mockup A2), under pinned day headers with icon
+/// totals. A tap opens the row's sheet through `onAction`; a swipe deletes,
+/// asking first for a whole session. A view-only caregiver reads the same
+/// list with nothing to tap or swipe (ruling H-R6).
+///
+/// Accessibility identifiers: `history.babyName` (or `history.babySwitcher`
+/// when the name switches babies), `history.export` (Export PDF; its sheet
+/// documents its own identifiers), `history.filter`, `history.filter.clear`,
+/// the filter sheet's `history.filter.<tracker>` and `history.filter.done`,
+/// `history.day.<n>`, `history.row.<n>` (counted down the whole list from 0;
+/// a running row's live duration is read as part of it, so it has no
+/// queryable identifier of its own), `history.loadingMore` (the paging footer), `history.delete` (the swipe action), `history.confirmDelete` and
+/// `history.keep` (a session's delete confirmation), `history.empty` and
+/// `history.empty.clearFilter`.
+public struct HistoryView: View {
+    private let store: BabyStore
+    private let volumeUnit: VolumeUnit
+    /// Shown in the header: a two-baby household needs to tell whose list
+    /// this is.
+    private let babyName: String
+    private let babyAvatar: BabyAvatar
+    private let babyID: UUID
+    private let focus: HistoryFocus?
+    /// Called once a focus is applied, so the app can drop it: the tabs
+    /// remount per baby, and a focus left standing would be applied again
+    /// to the next baby's History.
+    private let onFocusHandled: () -> Void
+    private let onAction: (HistoryAction) -> Void
+    /// The name is the baby switcher, as on Home, when the app offers one.
+    private let onSwitchBaby: (() -> Void)?
+    @State private var model: HistoryViewModel
+    @State private var isShowingFilter = false
+    @State private var isExporting = false
+    /// The session row whose swipe is waiting on "Delete this feed?".
+    @State private var pendingDelete: HistoryListRow?
+    @Environment(\.errorReporter) private var errorReporter
+    @Environment(\.scenePhase) private var scenePhase
+
+    /// Rows sit close, as in the mockup: the list's default insets around a
+    /// 44-point row left a day of entries spread over two screens.
+    private static let rowInsets = EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16)
+
+    public init(
+        store: BabyStore,
+        babyID: UUID,
+        babyName: String = "",
+        babyAvatar: BabyAvatar = .neutral,
+        volumeUnit: VolumeUnit = .millilitres,
+        focus: HistoryFocus? = nil,
+        onFocusHandled: @escaping () -> Void = {},
+        onSwitchBaby: (() -> Void)? = nil,
+        onAction: @escaping (HistoryAction) -> Void
+    ) {
+        self.store = store
+        self.babyID = babyID
+        self.volumeUnit = volumeUnit
+        self.babyName = babyName
+        self.babyAvatar = babyAvatar
+        self.focus = focus
+        self.onFocusHandled = onFocusHandled
+        self.onSwitchBaby = onSwitchBaby
+        self.onAction = onAction
+        _model = State(wrappedValue: HistoryViewModel(
+            store: store, babyID: babyID, volumeUnit: volumeUnit
+        ))
+    }
+
+    public var body: some View {
+        NavigationStack {
+            list
+                .navigationTitle(HistoryCopy.title)
+                #if os(iOS)
+                // The header is drawn below, so the bar would leave a tall
+                // empty band above it.
+                .toolbar(.hidden, for: .navigationBar)
+                #endif
+                .safeAreaInset(edge: .top, spacing: 0) { header }
+                .overlay {
+                    // While older days may still hold something, the footer
+                    // keeps paging rather than calling the list empty.
+                    if let empty = model.emptyState, empty == .noData || !model.hasMore { emptyView(empty) }
+                }
+        }
+        .sheet(isPresented: $isShowingFilter) {
+            HistoryFilterSheet(filter: model.filter, toggle: toggle) { isShowingFilter = false }
+        }
+        .sheet(isPresented: $isExporting) {
+            HistoryExportSheet(
+                model: HistoryExportViewModel(store: store, babyID: babyID, babyName: babyName, volumeUnit: model.volumeUnit)
+            ) { isExporting = false }
+        }
+        .confirmationDialog(
+            pendingDelete.map(HistoryCopy.deleteConfirmTitle) ?? "",
+            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
+            titleVisibility: .visible,
+            presenting: pendingDelete
+        ) { row in
+            Button(HistoryCopy.delete, role: .destructive) { deleteConfirmed(row) }
+                .accessibilityIdentifier("history.confirmDelete")
+            Button(HistoryCopy.keep, role: .cancel) {}
+                .accessibilityIdentifier("history.keep")
+        }
+        .task { reload(); openFocusedEntry() }
+        .onChange(of: focus?.id) { _, _ in openFocusedEntry() }
+        // A write anywhere in the app — a sheet, Home's quick log, the other
+        // phone through sync — bumps the revision, and the list follows.
+        .onChange(of: store.revision) { _, _ in reload() }
+        // The unit is a preference and can change while this screen is alive.
+        // Every volume on it is formatted by the view model, so a new unit
+        // has to be handed over and the screen re-derived.
+        .onChange(of: volumeUnit) { _, unit in
+            model.volumeUnit = unit
+            reload()
+        }
+        // A write from another process — the widget, an App Intent — does
+        // not bump `revision`. Coming back to the app is the moment to re-read.
+        .onChange(of: scenePhase) { _, phase in
+            if phase == .active { reload() }
+        }
+    }
+
+    // MARK: - List
+
+    private var list: some View {
+        let offsets = rowOffsets
+        return List {
+            ForEach(Array(model.days.enumerated()), id: \.element.id) { dayIndex, day in
+                Section {
+                    ForEach(Array(day.rows.enumerated()), id: \.element.id) { rowIndex, row in
+                        rowView(row, index: offsets[dayIndex] + rowIndex)
+                    }
+                } header: {
+                    HistoryDayHeader(day: day, volumeUnit: model.volumeUnit)
+                        .accessibilityIdentifier("history.day.\(dayIndex)")
+                }
+            }
+            if model.hasMore {
+                pageLoader
+            }
+        }
+        // Plain, so the day headers stay pinned while the day scrolls under.
+        .listStyle(.plain)
+    }
+
+    /// The end of the list while older days remain (ruling H-R23). Reaching
+    /// it loads the next page; keyed on the window, so a page that brought
+    /// no rows (a quiet fortnight) loads the next while this is still in
+    /// view, until rows push it off screen or there is nothing older.
+    private var pageLoader: some View {
+        ProgressView()
+            .frame(maxWidth: .infinity, minHeight: 44)
+            .listRowSeparator(.hidden)
+            .accessibilityIdentifier("history.loadingMore")
+            .task(id: model.dayCount) { loadMore() }
+    }
+
+    /// Where each day's rows start in the whole list's count, so a row's
+    /// identifier says where it is on screen.
+    private var rowOffsets: [Int] {
+        var offsets: [Int] = []
+        var next = 0
+        for day in model.days {
+            offsets.append(next)
+            next += day.rows.count
+        }
+        return offsets
+    }
+
+    @ViewBuilder
+    private func rowView(_ row: HistoryListRow, index: Int) -> some View {
+        let content = HistoryListRowView(row: row, index: index)
+        if model.canEdit {
+            Button { onAction(HistoryAction(row.target)) } label: {
+                // Load-bearing: a plain-styled button's hit region is
+                // otherwise only its drawn content.
+                content.contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .accessibilityIdentifier("history.row.\(index)")
+            .listRowSeparator(.hidden)
+            .listRowInsets(Self.rowInsets)
+            #if os(iOS)
+            .swipeActions(edge: .trailing, allowsFullSwipe: !row.deleteConfirmation) {
+                // A running timer is stopped or discarded in its own editor.
+                if !row.isRunning { deleteAction(row) }
+            }
+            #endif
+        } else {
+            content
+                .accessibilityIdentifier("history.row.\(index)")
+                .listRowSeparator(.hidden)
+                .listRowInsets(Self.rowInsets)
+        }
+    }
+
+    @ViewBuilder
+    private func deleteAction(_ row: HistoryListRow) -> some View {
+        if row.deleteConfirmation {
+            // No destructive role: that role removes the row at once, before
+            // the confirmation has been answered.
+            Button { pendingDelete = row } label: {
+                Label(HistoryCopy.delete, systemImage: "trash")
+            }
+            .tint(Palette.destructive)
+            .accessibilityIdentifier("history.delete")
+        } else {
+            Button(role: .destructive) { delete(row) } label: {
+                Label(HistoryCopy.delete, systemImage: "trash")
+            }
+            .accessibilityIdentifier("history.delete")
+        }
+    }
+
+    // MARK: - Header
+
+    /// The baby's name and the filter button, with the "Showing: …" chip
+    /// under them while a filter is on. Pinned above the list.
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            HStack(alignment: .center, spacing: 12) {
+                name
+                Spacer(minLength: 0)
+                exportButton
+                filterButton
+            }
+            if model.isFiltered {
+                showingChip
+            }
+        }
+        .padding(.horizontal, 16)
+        .padding(.top, 8)
+        .padding(.bottom, 8)
+        .background(.bar)
+    }
+
+    private var name: some View {
+        BabySwitcherHeader(babyName: babyName, avatar: babyAvatar,
+                           switcherID: "history.babySwitcher", headingID: "history.babyName",
+                           onSwitchBaby: onSwitchBaby)
+    }
+
+    private var exportButton: some View {
+        Button { isExporting = true } label: {
+            Image(systemName: "square.and.arrow.up")
+                .font(.body.weight(.semibold))
+                // Capped, as the filter button: a 44-point circle cannot hold
+                // an accessibility-size glyph.
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .foregroundStyle(Palette.secondaryText)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(Palette.secondaryText.opacity(0.14)))
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(HistoryCopy.exportPDF)
+        .accessibilityIdentifier("history.export")
+    }
+
+    private var filterButton: some View {
+        Button { isShowingFilter = true } label: {
+            Image(systemName: "line.3.horizontal.decrease")
+                .font(.body.weight(.semibold))
+                // Capped: a 44-point circle cannot hold an accessibility-size
+                // glyph, and the two header buttons would overlap.
+                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
+                .foregroundStyle(model.isFiltered ? Palette.primaryText : Palette.secondaryText)
+                .frame(width: 44, height: 44)
+                .background(Circle().fill(Palette.secondaryText.opacity(0.14)))
+                .overlay(alignment: .topTrailing) {
+                    if model.isFiltered {
+                        Circle()
+                            .fill(Palette.feed)
+                            .frame(width: 10, height: 10)
+                            .offset(x: -3, y: 3)
+                    }
+                }
+                .contentShape(Circle())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(HistoryCopy.filter)
+        .accessibilityValue(model.isFiltered ? HistoryCopy.showing(model.filter) : "")
+        .accessibilityIdentifier("history.filter")
+    }
+
+    /// One tap clears the filter.
+    private var showingChip: some View {
+        Button(action: clearFilter) {
+            HStack(spacing: 6) {
+                Text(HistoryCopy.showing(model.filter))
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Palette.primaryText)
+                    .multilineTextAlignment(.leading)
+                Image(systemName: "xmark")
+                    .font(.caption.weight(.bold))
+                    .foregroundStyle(Palette.secondaryText)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 6)
+            .frame(minHeight: 44)
+            .background(Capsule().fill(Palette.secondaryText.opacity(0.14)).padding(.vertical, 4))
+            .contentShape(Capsule())
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(HistoryCopy.showing(model.filter))
+        .accessibilityHint(HistoryCopy.clearFilter)
+        .accessibilityIdentifier("history.filter.clear")
+    }
+
+    // MARK: - Empty
+
+    @ViewBuilder
+    private func emptyView(_ empty: HistoryEmptyState) -> some View {
+        switch empty {
+        case .noData:
+            // One line with the icon: the list will fill in as things are
+            // logged, so there is nothing to explain.
+            Label {
+                Text(HistoryCopy.nothingLogged)
+            } icon: {
+                Image(systemName: "list.bullet").accessibilityHidden(true)
+            }
+            .font(.body)
+            .foregroundStyle(Palette.secondaryText)
+            .padding(24)
+            .accessibilityIdentifier("history.empty")
+        case .nothingMatches:
+            VStack(spacing: 12) {
+                Text(HistoryCopy.nothingMatches)
+                    .font(.headline)
+                    .foregroundStyle(Palette.primaryText)
+                    .multilineTextAlignment(.center)
+                    .accessibilityIdentifier("history.empty")
+                Button(HistoryCopy.clearFilter, action: clearFilter)
+                    .buttonStyle(.bordered)
+                    .frame(minHeight: 44)
+                    .accessibilityIdentifier("history.empty.clearFilter")
+            }
+            .padding(24)
+        case .nothingRecent(let dayCount):
+            ContentUnavailableView(
+                HistoryCopy.nothingRecentTitle(dayCount),
+                systemImage: "list.bullet",
+                description: Text(HistoryCopy.nothingRecentMessage(dayCount))
+            )
+            .accessibilityIdentifier("history.empty")
+        }
+    }
+
+    // MARK: - Actions
+
+    /// The one load path. A failure says so in the banner rather than leaving
+    /// the last-loaded list on screen with no explanation.
+    private func reload() {
+        do {
+            try model.reload()
+            // Only a stale load banner is cleared. A save failure's banner must
+            // survive a successful read: a parent who sees it vanish assumes
+            // the entry went in and does not re-log it.
+            if errorReporter.current == ErrorBannerCopy.loadFailed { errorReporter.clear() }
+        } catch {
+            errorReporter.report(ErrorBannerCopy.loadFailed, error: error, category: AppLog.store)
+        }
+    }
+
+    private func loadMore() {
+        do {
+            try model.loadMore()
+        } catch {
+            errorReporter.report(ErrorBannerCopy.loadFailed, error: error, category: AppLog.store)
+        }
+    }
+
+    private func toggle(_ tracker: Tracker) {
+        if model.filter.contains(tracker) {
+            // The last kind stays on: an empty filter shows nothing at all,
+            // which reads as lost data rather than a choice.
+            guard model.filter.count > 1 else { return }
+            model.filter.remove(tracker)
+        } else {
+            model.filter.insert(tracker)
+        }
+        reload()
+    }
+
+    private func clearFilter() {
+        model.filter = Set(HistoryViewModel.trackers)
+        reload()
+    }
+
+    /// An Ask source opens its entry's edit sheet with the filter cleared, so
+    /// its row is behind the sheet (ruling H-R9). Insights' All check-ins
+    /// sets the Growth filter. Either way the focus is then spent, and the
+    /// app is told so it does not outlive this History.
+    private func openFocusedEntry() {
+        guard let focus = model.consume(focus) else { return }
+        reload()
+        onFocusHandled()
+        guard let entryID = focus.entryID, model.canEdit else { return }
+        do {
+            if let ref = try model.entryRef(for: entryID) {
+                onAction(.edit(ref))
+            }
+        } catch {
+            errorReporter.report(ErrorBannerCopy.loadFailed, error: error, category: AppLog.store)
+        }
+    }
+
+    /// A confirmed session delete: nothing happens if the row changed under
+    /// the dialog (the list already shows how).
+    private func deleteConfirmed(_ row: HistoryListRow) {
+        do {
+            try model.deleteConfirmed(row)
+            errorReporter.clear()
+        } catch {
+            errorReporter.report(ErrorBannerCopy.deleteFailed(what: ErrorSubject.entry),
+                                 error: error, category: AppLog.store)
+        }
+    }
+
+    private func delete(_ row: HistoryListRow) {
+        do {
+            try model.delete(row)
+            errorReporter.clear()
+        } catch {
+            // The row springs back on its own; the banner says why it did.
+            errorReporter.report(ErrorBannerCopy.deleteFailed(what: ErrorSubject.entry),
+                                 error: error, category: AppLog.store)
+        }
+    }
+}
+
+public enum HistoryCopy {
+    public static let title = L10n.tr("History")
+    static let filter = L10n.tr("Filter")
+    static let clearFilter = L10n.tr("Clear filter")
+    static let delete = L10n.tr("Delete")
+    static let keep = L10n.tr("Keep it")
+    static let nothingLogged = L10n.tr("Nothing logged yet")
+    static let nothingMatches = L10n.tr("Nothing matches")
+    static let show = L10n.tr("Show")
+    static let done = L10n.tr("Done")
+    static let exportPDF = L10n.tr("Export PDF")
+    static let columnTime = L10n.tr("Time")
+    static let columnType = L10n.tr("Type")
+    static let columnDetails = L10n.tr("Details")
+    static let columnNote = L10n.tr("Note")
+
+    static func generated(_ when: String) -> String { L10n.fmt("Generated %@", when) }
+    static func page(_ number: Int, of total: Int) -> String { L10n.fmt("Page %lld of %lld", number, total) }
+
+    static func nothingRecentTitle(_ dayCount: Int) -> String {
+        L10n.plural("Nothing in the last %lld days", dayCount)
+    }
+
+    static func nothingRecentMessage(_ dayCount: Int) -> String {
+        L10n.plural("Older entries are still saved — this screen shows the last %lld days.", dayCount)
+    }
+
+    /// The filter sheet's name for a tracker: the plural a list of them
+    /// reads as ("Feeds", "Diapers").
+    static func filterName(_ tracker: Tracker) -> String {
+        switch tracker {
+        case .feed, .solids: L10n.tr("Feeds")
+        case .sleep: L10n.tr("Sleep")
+        case .diaper: L10n.tr("Diapers")
+        case .supplement: L10n.tr("Meds")
+        case .growth: L10n.tr("Growth")
+        }
+    }
+
+    /// "Showing: Feeds", "Showing: Feeds and Sleep", in filter-sheet order.
+    @MainActor static func showing(_ filter: Set<Tracker>) -> String {
+        let names = HistoryViewModel.trackers.filter(filter.contains).map(filterName)
+        return L10n.fmt("Showing: %@", names.formatted(.list(type: .and)))
+    }
+
+    static func deleteConfirmTitle(_ row: HistoryListRow) -> String {
+        row.tracker == .sleep ? L10n.tr("Delete this sleep?") : L10n.tr("Delete this feed?")
+    }
+}
+
+// MARK: - Day header
+
+/// "Today", then the day's icon totals: feeds, the asleep total, bottle
+/// volume, diapers. A tracker with nothing that day, or filtered out, shows
+/// no total.
+struct HistoryDayHeader: View {
+    let day: HistoryDay
+    let volumeUnit: VolumeUnit
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        Group {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: 4) {
+                    title
+                    totals
+                }
+            } else {
+                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                    title
+                    Spacer(minLength: 0)
+                    totals
+                }
+            }
+        }
+        .padding(.vertical, 4)
+        .textCase(nil)
+        .accessibilityElement(children: .ignore)
+        .accessibilityAddTraits(.isHeader)
+        .accessibilityLabel(([day.title] + spokenTotals).joined(separator: ", "))
+    }
+
+    private var title: some View {
+        Text(day.title)
+            .font(.headline)
+            .foregroundStyle(Palette.primaryText)
+    }
+
+    private var totals: some View {
+        HStack(spacing: 10) {
+            if day.totals.feeds > 0 {
+                total(Tracker.feed.icon, Tracker.feed.color, "\(day.totals.feeds)")
+            }
+            if !day.totals.sleep.isEmpty {
+                total(Tracker.sleep.icon, Tracker.sleep.color, day.totals.sleep)
+            }
+            if day.totals.bottleML > 0 {
+                total(.bottle, Tracker.feed.color, Volume(millilitres: day.totals.bottleML).formatted(as: volumeUnit))
+            }
+            if day.totals.diapers > 0 {
+                total(Tracker.diaper.icon, Tracker.diaper.color, "\(day.totals.diapers)")
+            }
+        }
+    }
+
+    private func total(_ icon: BabyIcon, _ color: Color, _ value: String) -> some View {
+        HStack(spacing: 3) {
+            BabyIconView(icon, size: 14)
+                .foregroundStyle(color)
+            Text(value)
+                .font(.footnote.weight(.bold))
+                .monospacedDigit()
+                .foregroundStyle(Palette.primaryText)
+        }
+    }
+
+    private var spokenTotals: [String] { day.totals.phrases(volumeUnit: volumeUnit) }
+}
+
+// MARK: - Row
+
+/// Start over end, the icon, then the parts as chips or the entry's text
+/// (mockup A2). A running row adds its live duration, ticking from the
+/// moment its current part began.
+struct HistoryListRowView: View {
+    let row: HistoryListRow
+    let index: Int
+    @ScaledMetric(relativeTo: .subheadline) private var timeWidth = 48
+
+    var body: some View {
+        HStack(alignment: .center, spacing: 10) {
+            VStack(alignment: .leading, spacing: 1) {
+                Text(row.start)
+                    .font(.subheadline.weight(.semibold))
+                    .foregroundStyle(Palette.primaryText)
+                if let end = row.end {
+                    Text(end)
+                        .font(.caption)
+                        .foregroundStyle(Palette.secondaryText)
+                }
+            }
+            .monospacedDigit()
+            .lineLimit(1)
+            .fixedSize()
+            .frame(minWidth: timeWidth, alignment: .leading)
+
+            TrackerIcon(row.tracker)
+                .foregroundStyle(row.tracker.color)
+                .accessibilityHidden(true)
+
+            ChipFlow(spacing: 6) {
+                if let text = row.text {
+                    Text(text)
+                        .font(.body)
+                        .foregroundStyle(Palette.primaryText)
+                }
+                ForEach(row.chips) { chip in
+                    HistoryChipView(chip: chip, tint: row.tracker.color)
+                }
+                if let since = row.runningSince {
+                    TimelineView(.periodic(from: .now, by: 1)) { context in
+                        Text(ElapsedFormatter.precise(Int(context.date.timeIntervalSince(since))))
+                            .font(.subheadline.weight(.semibold))
+                            .monospacedDigit()
+                            .foregroundStyle(row.tracker.color)
+                    }
+                    .accessibilityIdentifier("history.row.\(index).running")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .frame(minHeight: 40)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel(label)
+    }
+
+    /// "Diaper, Wet, at 13:20", "Feed, L 12m, R 15m, at 10:23–11:48". A
+    /// running row with no finished part yet has nothing to list, and says
+    /// "Sleep, at 15:41–now" rather than leave an empty item.
+    private var label: String {
+        let time = row.end.map { "\(row.start)–\($0)" } ?? row.start
+        return summary.isEmpty
+            ? L10n.fmt("%@, at %@", row.tracker.title, time)
+            : L10n.fmt("%@, %@, at %@", row.tracker.title, summary, time)
+    }
+
+    private var summary: String {
+        ([row.text].compactMap { $0 } + row.chips.map(\.text)).joined(separator: ", ")
+    }
+}
+
+/// One part of a feed: "L 12m", a bottle's volume, a solids feed's foods.
+private struct HistoryChipView: View {
+    let chip: HistoryChip
+    let tint: Color
+
+    var body: some View {
+        HStack(spacing: 3) {
+            if let icon = chip.icon {
+                BabyIconView(icon, size: 12)
+                    .foregroundStyle(tint)
+                    .accessibilityHidden(true)
+            }
+            Text(chip.text)
+                .font(.footnote.weight(.medium))
+                .foregroundStyle(Palette.primaryText)
+                .monospacedDigit()
+        }
+        .padding(.horizontal, 7)
+        .padding(.vertical, 2)
+        .background(Palette.secondaryText.opacity(0.16), in: Capsule())
+    }
+}
+
+/// Lays its children out left to right, wrapping to a new line when the
+/// next one would not fit — a row's chips at the largest text sizes.
+private struct ChipFlow: Layout {
+    var spacing: CGFloat
+
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+        let lines = arrange(subviews, width: proposal.width ?? .infinity)
+        let width = lines.map(\.width).max() ?? 0
+        let height = lines.map(\.height).reduce(0, +) + spacing * CGFloat(max(lines.count - 1, 0))
+        return CGSize(width: width, height: height)
+    }
+
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+        var y = bounds.minY
+        for line in arrange(subviews, width: bounds.width) {
+            var x = bounds.minX
+            for (index, size) in zip(line.indices, line.sizes) {
+                subviews[index].place(at: CGPoint(x: x, y: y + (line.height - size.height) / 2),
+                                      proposal: ProposedViewSize(size))
+                x += size.width + spacing
+            }
+            y += line.height + spacing
+        }
+    }
+
+    private struct Line {
+        var indices: [Int] = []
+        var sizes: [CGSize] = []
+        var width: CGFloat = 0
+        var height: CGFloat = 0
+    }
+
+    private func arrange(_ subviews: Subviews, width: CGFloat) -> [Line] {
+        var lines: [Line] = []
+        var line = Line()
+        for index in subviews.indices {
+            // A child wider than the line (long foods at XXXL) gets the
+            // line's width and wraps its own text.
+            var size = subviews[index].sizeThatFits(.unspecified)
+            if size.width > width {
+                size = subviews[index].sizeThatFits(ProposedViewSize(width: width, height: nil))
+            }
+            if !line.indices.isEmpty, line.width + spacing + size.width > width {
+                lines.append(line)
+                line = Line()
+            }
+            line.width += (line.indices.isEmpty ? 0 : spacing) + size.width
+            line.height = max(line.height, size.height)
+            line.indices.append(index)
+            line.sizes.append(size)
+        }
+        if !line.indices.isEmpty { lines.append(line) }
+        return lines
+    }
+}
+
+// MARK: - Filter sheet
+
+/// One icon toggle per tracker, all on by default. The last one on stays on.
+struct HistoryFilterSheet: View {
+    let filter: Set<Tracker>
+    let toggle: (Tracker) -> Void
+    let onDone: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
+
+    var body: some View {
+        NavigationStack {
+            Group {
+                if typeSize.isAccessibilitySize {
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
+                        }
+                        .padding(20)
+                    }
+                } else {
+                    HStack(alignment: .top, spacing: 8) {
+                        ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
+                    }
+                    .padding(.horizontal, 16)
+                    .padding(.top, 8)
+                    .frame(maxHeight: .infinity, alignment: .top)
+                }
+            }
+            .navigationTitle(HistoryCopy.show)
+            #if os(iOS)
+            .navigationBarTitleDisplayMode(.inline)
+            #endif
+            .toolbar {
+                ToolbarItem(placement: .confirmationAction) {
+                    Button(HistoryCopy.done, action: onDone)
+                        .accessibilityIdentifier("history.filter.done")
+                }
+            }
+        }
+        .sheetHeight(190)
+    }
+
+    private func toggleButton(_ tracker: Tracker) -> some View {
+        let isOn = filter.contains(tracker)
+        let isLast = isOn && filter.count == 1
+        return Button { toggle(tracker) } label: {
+            Group {
+                if typeSize.isAccessibilitySize {
+                    HStack(spacing: 12) {
+                        icon(tracker, isOn: isOn)
+                        Text(HistoryCopy.filterName(tracker))
+                            .font(.body.weight(.semibold))
+                        Spacer(minLength: 0)
+                    }
+                } else {
+                    VStack(spacing: 6) {
+                        icon(tracker, isOn: isOn)
+                        Text(HistoryCopy.filterName(tracker))
+                            .font(.caption.weight(.semibold))
+                            .lineLimit(2)
+                            .minimumScaleFactor(0.8)
+                            .multilineTextAlignment(.center)
+                    }
+                    .frame(maxWidth: .infinity)
+                }
+            }
+            .foregroundStyle(isOn ? Palette.primaryText : Palette.secondaryText)
+            .contentShape(Rectangle())
+        }
+        .buttonStyle(.plain)
+        .disabled(isLast)
+        .accessibilityLabel(HistoryCopy.filterName(tracker))
+        .accessibilityAddTraits(isOn ? [.isSelected] : [])
+        .accessibilityIdentifier("history.filter.\(tracker.rawValue)")
+    }
+
+    private func icon(_ tracker: Tracker, isOn: Bool) -> some View {
+        BabyIconView(tracker.icon, size: 24)
+            .foregroundStyle(isOn ? tracker.color : Palette.secondaryText)
+            .frame(width: 52, height: 52)
+            .background(Circle().fill(isOn ? tracker.color.opacity(0.20) : Palette.secondaryText.opacity(0.07)))
+            .overlay(Circle().strokeBorder(isOn ? tracker.color.opacity(0.85) : Palette.secondaryText.opacity(0.30),
+                                           lineWidth: 1))
+            .accessibilityHidden(true)
+    }
+}

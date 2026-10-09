@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "family_slot_occupied",
+    "message": "Request conflicts with existing family state",
+    "request_id": "",
+    "retryable": false
+  }
+}

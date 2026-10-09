@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "not_ready",
+    "message": "Service is not ready",
+    "request_id": "",
+    "retryable": true
+  }
+}

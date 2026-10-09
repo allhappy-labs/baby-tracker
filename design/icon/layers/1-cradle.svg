@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1024" height="1024" viewBox="0 0 1024 1024">
+  <defs>
+    <linearGradient id="cradle" x1="0.2" y1="0" x2="0.8" y2="1">
+      <stop offset="0" stop-color="#F8D9A6"/><stop offset="1" stop-color="#EFA84E"/>
+    </linearGradient>
+    <mask id="crescent">
+      <rect width="1024" height="1024" fill="#000"/>
+      <circle cx="512" cy="512" r="300" fill="#fff"/>
+      <circle cx="512" cy="392" r="248" fill="#000"/>
+    </mask>
+  </defs>
+  <g mask="url(#crescent)"><rect width="1024" height="1024" fill="url(#cradle)"/></g>
+</svg>

@@ -1,0 +1,346 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "Syncing…": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synchronisiert…"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Synchronisation…"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sincronizando…"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sincronizzazione…"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Синхронізація…"
+          }
+        }
+      }
+    },
+    "You're no longer in this family. Its shared entries have been removed from this device.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du gehörst nicht mehr zu dieser Familie. Ihre geteilten Einträge wurden von diesem Gerät entfernt."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous ne faites plus partie de cette famille. Ses entrées partagées ont été supprimées de cet appareil."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ya no perteneces a esta familia. Sus registros compartidos se han eliminado de este dispositivo."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non fai più parte di questa famiglia. Le sue voci condivise sono state rimosse da questo dispositivo."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вас більше немає в цій сім’ї. Її спільні записи видалено з цього пристрою."
+          }
+        }
+      }
+    },
+    "Sign in with Apple again to keep sharing with your family.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Melde dich erneut mit Apple an, um weiterhin mit deiner Familie zu teilen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reconnectez-vous avec Apple pour continuer à partager avec votre famille."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vuelve a iniciar sesión con Apple para seguir compartiendo con tu familia."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Accedi di nuovo con Apple per continuare a condividere con la tua famiglia."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Увійдіть з Apple ще раз, щоб і далі обмінюватися записами з сім’єю."
+          }
+        }
+      }
+    },
+    "You have view-only access, so your changes aren't shared.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Du hast nur Lesezugriff. Deine Änderungen werden nicht geteilt."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Vous avez un accès en lecture seule ; vos modifications ne sont pas partagées."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tienes acceso de solo lectura, por lo que tus cambios no se comparten."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Hai accesso in sola lettura, quindi le tue modifiche non vengono condivise."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ви маєте доступ лише для перегляду, тому ваші зміни не надсилаються сім’ї."
+          }
+        }
+      }
+    },
+    "This version of Baby Tracker is too old to sync with your family's server.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Version von Baby Tracker ist zu alt, um mit dem Familienserver zu synchronisieren."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette version de Baby Tracker est trop ancienne pour se synchroniser avec le serveur de votre famille."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta versión de Baby Tracker es demasiado antigua para sincronizarse con el servidor de tu familia."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa versione di Baby Tracker è troppo vecchia per sincronizzarsi con il server della tua famiglia."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ця версія Baby Tracker застаріла й не може синхронізуватися із сервером вашої сім’ї."
+          }
+        }
+      }
+    },
+    "One entry couldn't be shared with your family and has been set aside. It's still here on this device.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein Eintrag konnte nicht mit deiner Familie geteilt werden und wurde zurückgestellt. Er ist weiterhin auf diesem Gerät."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une entrée n’a pas pu être partagée avec votre famille et a été mise de côté. Elle est toujours sur cet appareil."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se ha podido compartir un registro con tu familia y se ha apartado. Sigue en este dispositivo."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una voce non può essere condivisa con la tua famiglia ed è stata messa da parte. È ancora su questo dispositivo."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Один запис не вдалося надіслати сім’ї. Він залишився на цьому пристрої."
+          }
+        }
+      }
+    },
+    "Another caregiver already started this timer, so theirs is the one that's running. Nothing you logged has been lost.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Eine andere Betreuungsperson hat diesen Timer bereits gestartet; ihr Timer läuft weiter. Deine Einträge sind nicht verloren gegangen."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une autre personne a déjà démarré ce minuteur ; c’est le sien qui continue. Aucun de vos enregistrements n’a été perdu."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Otra persona cuidadora ya inició este temporizador; el suyo sigue en marcha. No se ha perdido nada de lo que registraste."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Un’altra persona ha già avviato questo timer; il suo è quello in esecuzione. Nessuna delle tue registrazioni è andata persa."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Інша людина вже запустила цей таймер, тому працює її таймер. Ваші записи не втрачено."
+          }
+        }
+      }
+    },
+    "Your family needs a decision about which records belong to which baby.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deine Familie muss entscheiden, welche Einträge zu welchem Baby gehören."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Votre famille doit décider à quel bébé appartiennent les entrées."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tu familia debe decidir a qué bebé pertenece cada registro."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La tua famiglia deve decidere a quale bebè appartengono le voci."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Потрібно визначити, які записи належать якій дитині у вашій сім’ї."
+          }
+        }
+      }
+    },
+    "Some of your earlier entries couldn't be shared with your family yet. They're still on this device.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Einige deiner früheren Einträge konnten noch nicht mit deiner Familie geteilt werden. Sie sind weiterhin auf diesem Gerät."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Certaines de vos anciennes entrées n’ont pas encore pu être partagées avec votre famille. Elles sont toujours sur cet appareil."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Algunos de tus registros anteriores aún no se han podido compartir con tu familia. Siguen en este dispositivo."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alcune delle tue voci precedenti non possono ancora essere condivise con la tua famiglia. Sono ancora su questo dispositivo."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Деякі попередні записи ще не вдалося надіслати сім’ї. Вони залишилися на цьому пристрої."
+          }
+        }
+      }
+    },
+    "Couldn't finish setting up sharing yet. Your entries are safe; we'll try again.": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Freigabe konnte noch nicht fertig eingerichtet werden. Deine Einträge sind sicher; wir versuchen es erneut."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La configuration du partage n’a pas encore pu être terminée. Vos entrées sont en sécurité ; nous réessaierons."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aún no se ha podido terminar de configurar el uso compartido. Tus registros están a salvo; volveremos a intentarlo."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Non è stato ancora possibile completare la condivisione. Le tue voci sono al sicuro; riproveremo."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося завершити налаштування спільного доступу. Ваші записи збережено; ми спробуємо ще раз."
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

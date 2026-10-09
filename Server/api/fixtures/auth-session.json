@@ -1,0 +1,23 @@
+{
+  "initial_response": {
+    "protocol_version": "v1",
+    "access_token": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+    "refresh_token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "expires_at": "2026-09-20T12:10:00Z",
+    "reauthenticate_at": "2026-09-21T12:00:00Z",
+    "recovery_epoch": 7,
+    "device_id": "40000000-0000-4000-8000-000000000001",
+    "device_credential": "CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC",
+    "account": {"id":"30000000-0000-4000-8000-000000000001","display_name":"Parent","profile_required":false}
+  },
+  "refresh_response": {
+    "protocol_version": "v1",
+    "access_token": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "refresh_token": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+    "expires_at": "2026-09-20T12:20:00Z",
+    "reauthenticate_at": "2026-09-21T12:00:00Z",
+    "recovery_epoch": 7,
+    "device_id": "40000000-0000-4000-8000-000000000001",
+    "account": {"id":"30000000-0000-4000-8000-000000000001","display_name":"Parent","profile_required":false}
+  }
+}

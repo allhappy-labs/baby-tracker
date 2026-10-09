@@ -1,0 +1,122 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>sheets-v2</title><style>body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px}.subtitle{opacity:.7}.option,.pick{border:1px solid #333;border-radius:14px;padding:12px;margin:10px 0}.letter{display:inline-block;padding:2px 8px;background:#333;border-radius:6px;margin-right:8px}</style>
+<style>
+  .phones{display:flex;gap:22px;flex-wrap:wrap;justify-content:center;margin-top:18px}
+  .col{display:flex;flex-direction:column;align-items:center;gap:8px}
+  .col p{margin:0;max-width:260px;font-size:12px;opacity:.8;text-align:center}
+  .col h3{margin:0;font-size:14px}
+  .ph{width:260px;height:540px;border-radius:36px;background:#0B1020;position:relative;overflow:hidden;flex:none;
+      font-family:-apple-system,BlinkMacSystemFont,"Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 6px #1d2233,0 14px 30px rgba(0,0,0,.45)}
+  .dim{position:absolute;inset:0;background:rgba(0,0,0,.55)}
+  .sheet{position:absolute;left:0;right:0;bottom:0;background:#161B2E;border-radius:28px 28px 0 0;padding:10px 14px 22px}
+  .grab{width:36px;height:5px;border-radius:3px;background:rgba(255,255,255,.25);margin:0 auto 12px}
+  svg.ic{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}.meds{color:#C4A6F5}.sol{color:#E89A7B}.grow{color:#9FD27A}
+  .bgF{background:rgba(242,176,97,.14)}.bgD{background:rgba(95,211,196,.14)}.bgM{background:rgba(196,166,245,.14)}.bgO{background:rgba(232,154,123,.14)}.bgG{background:rgba(159,210,122,.14)}
+  .btn{border-radius:18px;display:flex;align-items:center;justify-content:center;gap:7px;font-weight:700}
+  .ghost{background:rgba(255,255,255,.07)}
+  .mut{color:#8B93AD}
+  .num{font-variant-numeric:tabular-nums;font-weight:700}
+  .row{display:flex;align-items:center;justify-content:space-between;font-size:13px;padding:10px 4px}
+  .seg{display:grid;grid-template-columns:repeat(3,1fr);background:rgba(255,255,255,.06);border-radius:14px;padding:3px;font-size:12px;font-weight:600}
+  .seg div{text-align:center;padding:9px 0;border-radius:11px}
+  .seg .on{background:rgba(242,176,97,.22);color:#F2B061}
+  .chips{display:grid;grid-template-columns:repeat(4,1fr);gap:6px}
+  .chips div{border-radius:12px;background:rgba(255,255,255,.07);text-align:center;padding:12px 0;font-size:13px;font-weight:700}
+  .chips .on{background:#F2B061;color:#0B1020}
+  .stop{background:#EEF1FA;color:#0B1020}
+</style>
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="bottle" viewBox="0 0 24 24"><path d="M10.4 2.6h3.2M9.6 6.2 10.4 2.6h3.2l.8 3.6z"/><rect x="7.2" y="6.2" width="9.6" height="15" rx="3"/><path d="M7.2 11h3.4M7.2 14.4h3.4M7.2 17.8h3.4"/></symbol>
+  <symbol id="diaper" viewBox="0 0 24 24"><path d="M2.8 5h18.4v3.6c-3 .6-5 3.4-5.4 10.4H8.2C7.8 12 5.8 9.2 2.8 8.6z"/><path d="M2.8 6.8H1.2M21.2 6.8h1.6"/><rect x="9.6" y="7.6" width="4.8" height="3.2" rx="1"/></symbol>
+  <symbol id="meds" viewBox="0 0 24 24"><rect x="2.6" y="8" width="13.5" height="6.4" rx="3.2" transform="rotate(-40 9.35 11.2)"/><path d="m7.2 9.1 4.4 4"/><path d="M18 13.2c1.8 2.1 3 3.7 3 5.1a3 3 0 0 1-6 0c0-1.4 1.2-3 3-5.1z"/></symbol>
+  <symbol id="bowl" viewBox="0 0 24 24"><path d="M3.5 12h17a8.5 7.5 0 0 1-17 0z"/><path d="M9 19.5h6M14.5 9.5 19 3.5"/></symbol>
+  <symbol id="scale" viewBox="0 0 24 24"><path d="M4 20.5h16l-1.6-9H5.6z"/><path d="M3 8.5c3-2.8 15-2.8 18 0M12 11.5V7"/></symbol>
+  <symbol id="clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="8.5"/><path d="M12 7.5V12l3 2"/></symbol>
+  <symbol id="wet" viewBox="0 0 24 24"><path d="M12 4c2.6 3.1 4.4 5.5 4.4 7.8a4.4 4.4 0 0 1-8.8 0C7.6 9.5 9.4 7.1 12 4z"/></symbol>
+  <symbol id="dot" viewBox="0 0 24 24"><circle cx="12" cy="12" r="5"/></symbol>
+  <symbol id="plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+</defs></svg>
+
+<h2>Sheets from the dock</h2>
+<p class="subtitle">Rule everywhere: the common case is one tap, time defaults to "Now" (tap it to change), details are optional and come after. No Save buttons where a tap can mean "log it".</p>
+
+<div class="phones">
+
+<div class="col">
+  <div class="ph"><div class="dim"></div>
+    <div class="sheet">
+      <div class="grab"></div>
+      <div class="row"><span class="mut">Diaper</span><span style="display:flex;gap:5px;align-items:center" class="mut"><svg class="ic" style="width:15px;height:15px"><use href="#clock"/></svg><span style="color:#EEF1FA">Now</span></span></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div class="btn bgD" style="height:84px;flex-direction:column"><svg class="ic" style="color:#7FD8FF;fill:#7FD8FF;stroke:none"><use href="#wet"/></svg><span style="font-size:13px">Wet</span></div>
+        <div class="btn bgD" style="height:84px;flex-direction:column"><svg class="ic" style="color:#C9A27A;fill:#C9A27A;stroke:none"><use href="#dot"/></svg><span style="font-size:13px">Dirty</span></div>
+        <div class="btn bgD" style="height:84px;flex-direction:column"><span style="display:flex"><svg class="ic" style="fill:#7FD8FF;stroke:none;width:18px"><use href="#wet"/></svg><svg class="ic" style="fill:#C9A27A;stroke:none;width:18px"><use href="#dot"/></svg></span><span style="font-size:13px">Mixed</span></div>
+      </div>
+      <div style="margin-top:10px;border-radius:16px;background:rgba(255,255,255,.05);padding:4px 12px">
+        <div class="row" style="padding:9px 0"><span>Details</span><span class="mut">⌃</span></div>
+        <div class="row" style="padding:8px 0;border-top:1px solid rgba(255,255,255,.06)"><span class="mut">Consistency</span><span style="color:#5b637d">Seedy, runny…</span></div>
+        <div class="row" style="padding:8px 0;border-top:1px solid rgba(255,255,255,.06)"><span class="mut">Colour</span><span style="color:#5b637d">Mustard, green…</span></div>
+        <div class="row" style="padding:8px 0;border-top:1px solid rgba(255,255,255,.06)"><span class="mut">Note</span><span style="color:#5b637d">Optional</span></div>
+      </div>
+      <div class="mut" style="font-size:11px;text-align:center;margin-top:10px">Details are filled first (optional), then the type tap logs everything at once.</div>
+    </div>
+  </div>
+  <h3>Diaper</h3>
+  <p>Same behaviour as today: Details accordion in the sheet (shown open here), tapping Wet / Dirty / Both logs with whatever details you filled.</p>
+</div>
+
+<div class="col">
+  <div class="ph"><div class="dim"></div>
+    <div class="sheet">
+      <div class="grab"></div>
+      <div class="row"><span class="mut">Bottle</span><span style="display:flex;gap:5px;align-items:center" class="mut"><svg class="ic" style="width:15px;height:15px"><use href="#clock"/></svg><span style="color:#EEF1FA">Now</span></span></div>
+      <div class="seg"><div class="on">Breast milk</div><div>Formula</div><div>Mixed</div></div>
+      <div class="btn stop" style="height:64px;margin-top:12px;font-size:16px">Start bottle</div>
+      <div class="mut" style="font-size:11px;margin:14px 2px 6px">or log what was drunk</div>
+      <div class="chips"><div>30</div><div>60</div><div>90</div><div>120</div></div>
+      <div class="mut" style="font-size:11px;text-align:center;margin-top:10px">ml · tap amount = logged · long-press for exact</div>
+    </div>
+  </div>
+  <h3>Bottle</h3>
+  <p>Contents remember your last choice. Start a timed bottle, or tap an amount to log a finished one instantly.</p>
+</div>
+
+<div class="col">
+  <div class="ph"><div class="dim"></div>
+    <div class="sheet">
+      <div class="grab"></div>
+      <div style="text-align:center;padding:6px 0 4px"><div class="feed" style="font-size:12px;font-weight:600">Bottle stopped · 11:40</div><div class="num" style="font-size:40px;margin-top:4px">90 <span style="font-size:18px" class="mut">ml</span></div></div>
+      <div class="chips"><div>30</div><div>60</div><div class="on">90</div><div>120</div></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:8px"><div class="btn ghost" style="height:44px;font-size:20px">−</div><div class="btn ghost" style="height:44px;font-size:20px">+</div></div>
+      <div class="btn stop" style="height:56px;margin-top:10px;font-size:15px">Done</div>
+    </div>
+  </div>
+  <h3>Bottle → Stop</h3>
+  <p>Only question after a timed bottle: how much. Preselected = last amount; ± steps by 10 ml (or ½ oz).</p>
+</div>
+
+<div class="col">
+  <div class="ph"><div class="dim"></div>
+    <div class="sheet">
+      <div class="grab"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <div class="btn bgO" style="height:76px;flex-direction:column;font-size:12px"><svg class="ic sol"><use href="#bowl"/></svg>Solids</div>
+        <div class="btn bgG" style="height:76px;flex-direction:column;font-size:12px"><svg class="ic grow"><use href="#scale"/></svg>Growth</div>
+        <div class="btn ghost" style="height:76px;flex-direction:column;font-size:12px"><svg class="ic mut"><use href="#clock"/></svg>Past entry</div>
+      </div>
+      <div class="mut" style="font-size:11px;margin:16px 4px 6px">Meds</div>
+      <div style="display:flex;gap:6px;overflow:hidden;margin-right:-14px;white-space:nowrap">
+        <div class="btn bgM" style="height:44px;padding:0 12px;font-size:13px;flex:none"><svg class="ic meds" style="width:17px;height:17px"><use href="#meds"/></svg>Vitamin D</div>
+        <div class="btn bgM" style="height:44px;padding:0 12px;font-size:13px;flex:none"><svg class="ic meds" style="width:17px;height:17px"><use href="#meds"/></svg>Iron</div>
+        <div class="btn bgM" style="height:44px;padding:0 12px;font-size:13px;flex:none"><svg class="ic meds" style="width:17px;height:17px"><use href="#meds"/></svg>Probiotic</div>
+        <div class="btn ghost" style="height:44px;width:44px;flex:none"><svg class="ic mut" style="width:17px;height:17px"><use href="#plus"/></svg></div>
+      </div>
+      <div class="mut" style="font-size:11px;text-align:center;margin-top:12px">← scrolls sideways · tap a med = logged now · + adds a new one (last)</div>
+    </div>
+  </div>
+  <h3>More (···)</h3>
+  <p>Core items first: Solids, Growth, Past entry. Meds below as a sideways-scrolling row; + is always the last chip.</p>
+</div>
+
+</div>

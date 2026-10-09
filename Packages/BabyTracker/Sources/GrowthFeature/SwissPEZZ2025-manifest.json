@@ -1,0 +1,205 @@
+{
+  "ageGrid": [
+    {
+      "month": 0,
+      "printedYears": "0"
+    },
+    {
+      "month": 1,
+      "printedYears": "0.083"
+    },
+    {
+      "month": 2,
+      "printedYears": "0.167"
+    },
+    {
+      "month": 3,
+      "printedYears": "0.25"
+    },
+    {
+      "month": 4,
+      "printedYears": "0.333"
+    },
+    {
+      "month": 5,
+      "printedYears": "0.417"
+    },
+    {
+      "month": 6,
+      "printedYears": "0.5"
+    },
+    {
+      "month": 7,
+      "printedYears": "0.583"
+    },
+    {
+      "month": 8,
+      "printedYears": "0.667"
+    },
+    {
+      "month": 9,
+      "printedYears": "0.75"
+    },
+    {
+      "month": 10,
+      "printedYears": "0.833"
+    },
+    {
+      "month": 11,
+      "printedYears": "0.917"
+    },
+    {
+      "month": 12,
+      "printedYears": "1"
+    },
+    {
+      "month": 13,
+      "printedYears": "1.083"
+    },
+    {
+      "month": 14,
+      "printedYears": "1.167"
+    },
+    {
+      "month": 15,
+      "printedYears": "1.25"
+    },
+    {
+      "month": 16,
+      "printedYears": "1.333"
+    },
+    {
+      "month": 17,
+      "printedYears": "1.417"
+    },
+    {
+      "month": 18,
+      "printedYears": "1.5"
+    },
+    {
+      "month": 19,
+      "printedYears": "1.583"
+    },
+    {
+      "month": 20,
+      "printedYears": "1.667"
+    },
+    {
+      "month": 21,
+      "printedYears": "1.75"
+    },
+    {
+      "month": 22,
+      "printedYears": "1.833"
+    },
+    {
+      "month": 23,
+      "printedYears": "1.917"
+    },
+    {
+      "month": 24,
+      "printedYears": "2"
+    },
+    {
+      "month": 30,
+      "printedYears": "2.5"
+    },
+    {
+      "month": 36,
+      "printedYears": "3"
+    },
+    {
+      "month": 42,
+      "printedYears": "3.5"
+    },
+    {
+      "month": 48,
+      "printedYears": "4"
+    },
+    {
+      "month": 54,
+      "printedYears": "4.5"
+    },
+    {
+      "month": 60,
+      "printedYears": "5"
+    }
+  ],
+  "articleURL": "https://www.mdpi.com/2077-0383/14/16/5912",
+  "attribution": {
+    "name": "SwissPEZZ2025-ATTRIBUTION.md",
+    "sha256": "ca240d34754fede9e144fcbd7e7e40be1d0af4203fdadc824d9f28b4319a2261"
+  },
+  "changeNotice": "Extracted only Tables S1, S2, S5, and S6 at printed ages 0 through 5 years; preserved published decimal precision and renamed P50 as M. Mapped rounded printed ages to exact calendar month-anniversary nodes 0–24, 30, 36, 42, 48, 54, and 60; this mapping is an app-authored inference. The app uses calendar month anniversaries and linear interpolation of L/M/S between these nodes, including across published model joins; this is an app-authored approximation, not the original continuous GAMLSS model. No daily rows, further rounding, smoothing, or extrapolation were introduced.",
+  "csv": {
+    "columns": [
+      "metric",
+      "sex",
+      "month",
+      "printedYears",
+      "p3",
+      "p10",
+      "p25",
+      "m",
+      "p75",
+      "p90",
+      "p97",
+      "l",
+      "s"
+    ],
+    "name": "SwissPEZZ2025.csv",
+    "rowCount": 124,
+    "sha256": "5f01d540dcab723a8a8b017bdbc639f53186f333d5c78a56cd02e47fb61de926"
+  },
+  "licenseURL": "https://creativecommons.org/licenses/by/4.0/",
+  "lmsTolerance": {
+    "centiles": [
+      3,
+      10,
+      25,
+      50,
+      75,
+      90,
+      97
+    ],
+    "lengthHeightCm": 0.01,
+    "weightKg": 0.003
+  },
+  "reference": "Swiss PEZZ 2025",
+  "schemaVersion": 1,
+  "source": {
+    "member": {
+      "name": "jcm-3796415 Supplemental material to Manuscript Cohort 2019+2025 Supp. Table S1-S8 Figure S1-S3. (Edited).pdf",
+      "sha256": "fb05a53a8ffbbac45201ad8407ff8c0810abd1fa15e38e4d964681f6043f141a"
+    },
+    "name": "jcm-14-05912-s001.zip",
+    "sha256": "0def88b3a5e0096b54064b7d9459e683081364943cab341e179f947a46d61336",
+    "url": "https://www.mdpi.com/article/10.3390/jcm14165912/s1"
+  },
+  "tables": {
+    "S1": {
+      "metric": "lengthHeight",
+      "rowCount": 31,
+      "sex": "girls",
+      "unit": "cm"
+    },
+    "S2": {
+      "metric": "lengthHeight",
+      "rowCount": 31,
+      "sex": "boys",
+      "unit": "cm"
+    },
+    "S5": {
+      "metric": "weight",
+      "rowCount": 31,
+      "sex": "girls",
+      "unit": "kg"
+    },
+    "S6": {
+      "metric": "weight",
+      "rowCount": 31,
+      "sex": "boys",
+      "unit": "kg"
+    }
+  }
+}

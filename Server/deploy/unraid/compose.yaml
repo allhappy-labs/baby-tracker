@@ -1,0 +1,106 @@
+services:
+  # Optional push uses a separate live-activity-push.yaml overlay so ordinary
+  # self-hosted deployments do not evaluate or mount absent APNs secrets.
+  db:
+    restart: unless-stopped
+
+  tailscale:
+    image: tailscale/tailscale:v1.98.3@sha256:854b77123b9536adae2e97f5a5fdb1790ed03438b911ab7f07780155e0af6ce2
+    hostname: baby-sync
+    environment:
+      TS_HOSTNAME: baby-sync
+      TS_STATE_DIR: /var/lib/tailscale
+      TS_SERVE_CONFIG: /config/serve.json
+      TS_ENABLE_HEALTH_CHECK: "true"
+      TS_LOCAL_ADDR_PORT: 127.0.0.1:9002
+      TS_USERSPACE: "false"
+      TS_AUTH_ONCE: "true"
+      TS_ACCEPT_DNS: "false"
+    volumes:
+      - ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/tailscale-state:/var/lib/tailscale
+      - ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/tailscale-run:/var/run/tailscale
+      - ./deploy/unraid/tailscale:/config:ro
+    devices:
+      - /dev/net/tun:/dev/net/tun
+    cap_drop: [ALL]
+    cap_add: [NET_ADMIN]
+    security_opt: [no-new-privileges:true]
+    read_only: true
+    tmpfs:
+      - /run:size=1m,mode=0755
+      - /tmp:size=16m,mode=1777
+    healthcheck:
+      test: [CMD, wget, --spider, -q, http://127.0.0.1:9002/healthz]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+    restart: unless-stopped
+
+  app:
+    build:
+      args:
+        BT_SOURCE_SHA: ${BT_SOURCE_SHA:?set BT_SOURCE_SHA}
+    environment:
+      BT_LISTEN_ADDRESS: :8080
+      # Two live sockets per phone, not one. A socket that dies without a
+      # close (Wi-Fi to cellular, a killed app) holds its slot until the
+      # server's ping times out, ~30 s; with one slot every reconnect in that
+      # window is a 429 and the phone is back on polling.
+      BT_SOCKET_DEVICE_LIMIT: "2"
+    ports: !reset []
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      tailscale:
+        condition: service_healthy
+
+  migrate:
+    build:
+      args:
+        BT_SOURCE_SHA: ${BT_SOURCE_SHA:?set BT_SOURCE_SHA}
+
+  tailscale-enroll:
+    image: tailscale/tailscale:v1.98.3@sha256:854b77123b9536adae2e97f5a5fdb1790ed03438b911ab7f07780155e0af6ce2
+    profiles: [enroll]
+    network_mode: service:tailscale
+    entrypoint: [/usr/local/bin/tailscale]
+    command:
+      - --socket=/var/run/tailscale/tailscaled.sock
+      - up
+      - --auth-key=file:/run/secrets/tailscale_auth_key
+      - --hostname=baby-sync
+      - --advertise-tags=tag:baby-sync
+      - --accept-dns=false
+    volumes:
+      - ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/tailscale-run:/var/run/tailscale
+    secrets: [tailscale_auth_key]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      tailscale:
+        condition: service_started
+
+volumes:
+  database:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/database
+  security_ledger:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/security-ledger
+  ledger_head:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/ledger-head
+
+secrets:
+  tailscale_auth_key:
+    file: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/secrets/tailscale_auth_key

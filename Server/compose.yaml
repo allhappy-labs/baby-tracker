@@ -1,0 +1,136 @@
+services:
+  db:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_DB: babytracker
+      POSTGRES_PASSWORD_FILE: /run/secrets/bootstrap_password
+    secrets: [bootstrap_password, migrator_password, runtime_password, projector_password, export_password]
+    volumes:
+      - database:/var/lib/postgresql/data
+      - ./deploy/postgres/init-roles.sql:/docker-entrypoint-initdb.d/10-init-roles.sql:ro
+      - ./deploy/postgres/init-users.sh:/docker-entrypoint-initdb.d/20-init-users.sh:ro
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -h 127.0.0.1 -U postgres -d babytracker"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+  app:
+    image: ${BT_IMAGE_NAME:-baby-tracker-server:local}
+    build: .
+    environment:
+      BT_MODE: ${BT_MODE:-self_hosted}
+      BT_LISTEN_ADDRESS: :8080
+      BT_DATABASE_URL_FILE: /run/secrets/runtime_database_url
+      BT_PROJECTOR_DATABASE_URL_FILE: /run/secrets/projector_database_url
+      BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE: ${BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE:-}
+      BT_EXPORT_DATABASE_URL_FILE: ${BT_EXPORT_DATABASE_URL_FILE:-}
+      BT_EXPORT_KEYS_FILE: ${BT_EXPORT_KEYS_FILE:-}
+      BT_EXPORT_KEY_ID: ${BT_EXPORT_KEY_ID:-}
+      BT_PUBLIC_ORIGIN: ${BT_PUBLIC_ORIGIN:-https://sync.example.test}
+      BT_SERVER_INSTANCE_ID: ${BT_SERVER_INSTANCE_ID:?set BT_SERVER_INSTANCE_ID}
+      BT_RECOVERY_EPOCH: ${BT_RECOVERY_EPOCH:-1}
+      BT_SECURITY_LEDGER_DIR: /var/lib/babytracker/security-ledger
+      BT_LEDGER_HEAD_DIR: /var/lib/babytracker/ledger-head
+      BT_APPLE_AUDIENCE: ${BT_APPLE_AUDIENCE:?set BT_APPLE_AUDIENCE}
+      BT_IDENTITY_KEY_ID: ${BT_IDENTITY_KEY_ID:-identity.v1}
+      BT_IDENTITY_PEPPER_FILE: /run/secrets/identity_pepper
+      BT_IDENTITY_PREVIOUS_KEYS_FILE: ${BT_IDENTITY_PREVIOUS_KEYS_FILE:-}
+      BT_SESSION_TOKEN_KEY_ID: ${BT_SESSION_TOKEN_KEY_ID:-session.v1}
+      BT_SESSION_TOKEN_PEPPER_FILE: /run/secrets/session_token_pepper
+      BT_SESSION_TOKEN_PREVIOUS_KEYS_FILE: ${BT_SESSION_TOKEN_PREVIOUS_KEYS_FILE:-}
+      BT_DEVICE_CONTINUITY_KEY_ID: ${BT_DEVICE_CONTINUITY_KEY_ID:-device.v1}
+      BT_DEVICE_CONTINUITY_PEPPER_FILE: /run/secrets/device_continuity_pepper
+      BT_DEVICE_CONTINUITY_PREVIOUS_KEYS_FILE: ${BT_DEVICE_CONTINUITY_PREVIOUS_KEYS_FILE:-}
+      BT_APPLE_NOTIFICATION_KEY_ID: ${BT_APPLE_NOTIFICATION_KEY_ID:-notification.v1}
+      BT_APPLE_NOTIFICATION_PEPPER_FILE: /run/secrets/apple_notification_pepper
+      BT_APPLE_NOTIFICATION_PREVIOUS_KEYS_FILE: ${BT_APPLE_NOTIFICATION_PREVIOUS_KEYS_FILE:-}
+      BT_INVITATION_KEY_ID: ${BT_INVITATION_KEY_ID:-invitation.v1}
+      BT_INVITATION_PEPPER_FILE: /run/secrets/invitation_pepper
+      BT_INVITATION_PREVIOUS_KEYS_FILE: ${BT_INVITATION_PREVIOUS_KEYS_FILE:-}
+      BT_PAGE_TOKEN_KEY_ID: ${BT_PAGE_TOKEN_KEY_ID:-page.v1}
+      BT_PAGE_TOKEN_KEY_FILE: /run/secrets/page_token_key
+      BT_PAGE_TOKEN_PREVIOUS_KEYS_FILE: ${BT_PAGE_TOKEN_PREVIOUS_KEYS_FILE:-}
+      BT_ACTOR_ID_PEPPER_FILE: /run/secrets/actor_id_pepper
+      BT_RATE_LIMIT_PEPPER_FILE: /run/secrets/rate_limit_pepper
+      BT_MAX_CAREGIVERS: ${BT_MAX_CAREGIVERS:-10}
+      BT_MAX_INVITATIONS: ${BT_MAX_INVITATIONS:-10}
+      BT_INVITATION_TTL: ${BT_INVITATION_TTL:-168h}
+      BT_MAX_CANONICAL_RECORDS_PER_FAMILY: ${BT_MAX_CANONICAL_RECORDS_PER_FAMILY:-100000}
+      BT_MAX_CHARGED_STORAGE_BYTES_PER_FAMILY: ${BT_MAX_CHARGED_STORAGE_BYTES_PER_FAMILY:-268435456}
+      BT_TRUSTED_PROXY_CIDRS: ${BT_TRUSTED_PROXY_CIDRS:-127.0.0.1/32}
+    secrets: [runtime_database_url, projector_database_url, identity_pepper, session_token_pepper, device_continuity_pepper, apple_notification_pepper, invitation_pepper, page_token_key, actor_id_pepper, rate_limit_pepper]
+    ports: ["127.0.0.1:${BT_HTTP_PORT:-8080}:8080"]
+    volumes:
+      - security_ledger:/var/lib/babytracker/security-ledger
+      - ledger_head:/var/lib/babytracker/ledger-head
+      - ${BT_KEYRING_DIR:-./deploy/keyrings}:/run/keyrings:ro
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    depends_on:
+      db:
+        condition: service_healthy
+  migrate:
+    image: ${BT_IMAGE_NAME:-baby-tracker-server:local}
+    build: .
+    profiles: [tools]
+    entrypoint: [/usr/local/bin/baby-tracker-admin]
+    command: [migrate]
+    environment:
+      BT_DATABASE_URL_FILE: /run/secrets/migrator_database_url
+      BT_PROJECTOR_DATABASE_URL_FILE: /run/secrets/projector_database_url
+      BT_SECURITY_LEDGER_DIR: /var/lib/babytracker/security-ledger
+      BT_LEDGER_HEAD_DIR: /var/lib/babytracker/ledger-head
+      BT_ACTOR_ID_PEPPER_FILE: /run/secrets/actor_id_pepper
+    secrets: [migrator_database_url, runtime_database_url, projector_database_url, actor_id_pepper]
+    volumes:
+      - security_ledger:/var/lib/babytracker/security-ledger
+      - ledger_head:/var/lib/babytracker/ledger-head
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    healthcheck:
+      disable: true
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  database:
+  security_ledger:
+  ledger_head:
+
+secrets:
+  bootstrap_password:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/bootstrap_password
+  migrator_password:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/migrator_password
+  runtime_password:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/runtime_password
+  projector_password:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/projector_password
+  export_password:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/export_password
+  migrator_database_url:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/migrator_database_url
+  runtime_database_url:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/runtime_database_url
+  projector_database_url:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/projector_database_url
+  identity_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/identity_pepper
+  session_token_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/session_token_pepper
+  device_continuity_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/device_continuity_pepper
+  apple_notification_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/apple_notification_pepper
+  invitation_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/invitation_pepper
+  page_token_key:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/page_token_key
+  actor_id_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/actor_id_pepper
+  rate_limit_pepper:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/rate_limit_pepper

@@ -1,0 +1,132 @@
+{
+  "normalization_version": "nfc-trim-fold-nfc-v1",
+  "mutation": {
+    "fixture": "feed-bottle.json",
+    "canonical_json": "{\"client_mutation_time\":\"2026-09-20T12:34:56.123456Z\",\"entity_id\":\"20000000-0000-4000-8000-000000000001\",\"entity_kind\":\"feed\",\"import_id\":null,\"observed_entity_version\":0,\"operation\":\"create\",\"payload\":{\"baby_id\":\"10000000-0000-4000-8000-000000000001\",\"components\":[{\"contents\":\"formula\",\"ended_at\":null,\"id\":\"31000000-0000-4000-8000-000000000001\",\"kind\":\"bottle\",\"seconds\":null,\"started_at\":null,\"volume_ml\":1}],\"ended_at\":null,\"feeding_session_id\":null,\"kind\":\"bottle\",\"note\":null,\"started_at\":\"2026-09-20T12:00:00.000000Z\",\"time_zone_id\":\"Europe/Zurich\"},\"payload_version\":4}",
+    "sha256": "4d28b2f9e3d1d1e59f45de30bd7a1aa362adcc6f1b3e06efb7f3b8a97b5fde11"
+  },
+  "timer_edit_mutation": {
+    "fixture": "mutations.json",
+    "key": "timer_edit",
+    "canonical_json": "{\"client_mutation_time\":\"2026-09-20T15:07:00.000000Z\",\"entity_id\":\"50000000-0000-4000-8000-000000000001\",\"entity_kind\":\"timer\",\"import_id\":null,\"observed_entity_version\":2,\"operation\":\"update\",\"payload\":{\"baby_id\":\"10000000-0000-4000-8000-000000000001\",\"components\":[{\"id\":\"30000000-0000-4000-8000-000000000011\",\"kind\":\"breast\",\"seconds\":300,\"side\":\"left\"},{\"contents\":\"formula\",\"id\":\"30000000-0000-4000-8000-000000000012\",\"kind\":\"bottle\",\"volume_ml\":70}],\"session_id\":null,\"started_at\":\"2026-09-20T14:58:00.000000Z\"},\"payload_version\":5}",
+    "sha256": "2722b6c67c424c981c7a41c252942b0aae5bc3291745bbccb288ebd985128e27"
+  },
+  "session_content_hashes": {
+    "sleep_v2": {
+      "entity_kind": "sleep",
+      "payload_version": 2,
+      "mutation_json": "{\"mutation_id\":\"01000000-0000-4000-8000-0000000000b1\",\"entity_id\":\"30000000-0000-4000-8000-0000000000b1\",\"entity_kind\":\"sleep\",\"operation\":\"create\",\"payload_version\":2,\"observed_entity_version\":0,\"client_mutation_time\":\"2026-10-01T10:30:00.000Z\",\"import_id\":null,\"payload\":{\"baby_id\":\"33333333-3333-4333-8333-333333333333\",\"started_at\":\"2026-10-01T10:00:00.000Z\",\"ended_at\":\"2026-10-01T11:00:00.000Z\",\"time_zone_id\":\"UTC\",\"note\":null,\"kind_override\":null,\"sleep_session_id\":\"44444444-4444-4444-8444-444444444444\"}}",
+      "sha256": "58c76cff971d19e441a151c7042e34542a7988a68c0c36f1c44e8dc62fe15092"
+    },
+    "timer_v5": {
+      "entity_kind": "timer",
+      "payload_version": 5,
+      "mutation_json": "{\"mutation_id\":\"01000000-0000-4000-8000-0000000000b2\",\"entity_id\":\"50000000-0000-4000-8000-0000000000b2\",\"entity_kind\":\"timer\",\"operation\":\"timer_start\",\"payload_version\":5,\"observed_entity_version\":0,\"client_mutation_time\":\"2026-10-01T12:00:00.000Z\",\"import_id\":null,\"payload\":{\"baby_id\":\"33333333-3333-4333-8333-333333333333\",\"timer_kind\":\"feed\",\"started_at\":\"2026-10-01T11:55:00.000Z\",\"time_zone_id\":\"UTC\",\"completed_components\":[],\"current_side\":null,\"current_side_started_at\":null,\"current_bottle_started_at\":null,\"session_id\":\"55555555-5555-4555-8555-555555555555\"}}",
+      "sha256": "dc7b76978e7f0cf5614d3d9b86374b42c2ff1ac5c3a8c940a9f0eee4d83ecfc5"
+    }
+  },
+  "decimals": [
+    {"input": "1", "canonical": "1"},
+    {"input": "1.0", "canonical": "1"},
+    {"input": "1e0", "canonical": "1"},
+    {"input": "-0", "canonical": "0"},
+    {"input": "-0.0000005", "canonical": "0"},
+    {"input": "1.2345665", "canonical": "1.234566"},
+    {"input": "1.2345675", "canonical": "1.234568"},
+    {"input": "2000.0000004", "canonical": "2000"},
+    {"input": "2000.0000005", "canonical": "2000"}
+  ],
+  "timestamps": [
+    {"input": "2026-09-20T12:00:00.1234565Z", "canonical": "2026-09-20T12:00:00.123456Z", "valid": true},
+    {"input": "2026-09-20T12:00:00.1234575Z", "canonical": "2026-09-20T12:00:00.123458Z", "valid": true},
+    {"input": "1899-12-31T23:59:59.9999995Z", "canonical": "1900-01-01T00:00:00.000000Z", "valid": true},
+    {"input": "2100-12-31T23:59:59.9999995Z", "canonical": "2101-01-01T00:00:00.000000Z", "valid": false}
+  ],
+  "unicode": {
+    "normalization": [
+      {"input": "  ÉLIE ", "canonical": "élie"},
+      {"input": "Straße", "canonical": "strasse"},
+      {"input": "İ", "canonical": "i̇"}
+    ],
+    "json": {
+      "actual": "before middle after",
+      "literal": "before\\u2028middle\\u2029after",
+      "canonical_json": "{\"actual\":\"before middle after\",\"literal\":\"before\\\\u2028middle\\\\u2029after\"}",
+      "sha256": "fc20ed0354e4ea9c5460865342bce7cbf5df2a1f23b4b90fc03bf4d0e199ea91"
+    }
+  },
+  "null_omitted_empty": {
+    "optional_scalar_omitted_canonical": null,
+    "optional_array_omitted_canonical": [],
+    "explicit_null_array_valid": false,
+    "empty_array_valid": true
+  },
+  "nested_duplicate_keys": [
+    {"json": "{\"payload\":{\"note\":\"a\",\"note\":\"b\"}}", "valid": false}
+  ],
+  "unknown_response_kinds": [
+    {"kind": "future", "optional": true, "result": "skip_and_advance"},
+    {"kind": "future", "optional": false, "result": "unsupported_resource"}
+  ],
+  "safe_integers": [
+    {"json": "0", "valid": true},
+    {"json": "9007199254740991", "valid": true},
+    {"json": "9007199254740992", "valid": false},
+    {"json": "1.0", "valid": false},
+    {"json": "1e0", "valid": false}
+  ],
+  "minimum_effective_limits": {
+    "max_live_babies": 1,
+    "max_canonical_records_per_family": 100,
+    "max_charged_storage_bytes_per_family": 16777216,
+    "sync_body_bytes": 65536,
+    "sync_batch_size": 1,
+    "sync_page_size": 1,
+    "sync_page_bytes": 1048576,
+    "sync_mutation_bytes": 4096,
+    "sync_page_ttl_seconds": 60,
+    "snapshot_ttl_seconds": 60,
+    "snapshot_max_entities": 1000,
+    "snapshot_max_bytes": 1048576,
+    "sync_transaction_seconds": 1,
+    "import_max_records": 100,
+    "import_max_babies": 1,
+    "import_chunk_size": 1,
+    "import_staging_ttl_hours": 1,
+    "import_max_sessions_per_family": 10,
+    "import_max_sessions_per_account": 1,
+    "active_snapshot_account_limit": 2,
+    "active_snapshot_family_limit": 8,
+    "unfinished_import_account_limit": 1,
+    "unfinished_import_family_limit": 4,
+    "socket_device_limit": 1,
+    "socket_account_limit": 1,
+    "socket_process_limit": 10,
+    "socket_attempt_ip_per_minute": 1,
+    "socket_attempt_device_per_minute": 1,
+    "socket_attempt_account_per_minute": 1,
+    "socket_attempt_family_per_minute": 1,
+    "max_capabilities": 16,
+    "max_name_scalars": 100,
+    "max_name_bytes": 400,
+    "max_note_bytes": 4096,
+    "max_food_scalars": 100,
+    "max_food_bytes": 400,
+    "max_foods": 50,
+    "max_side_intervals": 256,
+    "max_side_seconds": 604800,
+    "max_side_total_seconds": 604800,
+    "max_sort_order": 1000000,
+    "sync_mutation_device_per_minute": 1,
+    "sync_mutation_account_per_minute": 1,
+    "sync_mutation_family_per_minute": 1,
+    "sync_pull_device_per_minute": 1,
+    "sync_pull_account_per_minute": 1
+  },
+  "encoded_page_boundary": {
+    "maximum_bytes": 1048576,
+    "encoded_item_bytes": [1048575, 2],
+    "expected_page_item_counts": [1, 1],
+    "rule": "never_split_item_before_overflow"
+  }
+}

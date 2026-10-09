@@ -1,0 +1,27 @@
+{
+  "request": {
+    "protocol_version": "v1",
+    "capabilities": ["identity-v1", "refresh-recovery-v1"],
+    "refresh_token": "BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",
+    "refresh_attempt_id": "11111111-1111-4111-8111-111111111111",
+    "device_continuity": {"device_id":"40000000-0000-4000-8000-000000000001","credential":"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+  },
+  "response": {
+    "protocol_version": "v1",
+    "access_token": "DDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD",
+    "refresh_token": "EEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEEE",
+    "expires_at": "2026-09-20T12:20:00Z",
+    "reauthenticate_at": "2026-09-21T12:00:00Z",
+    "recovery_epoch": 7,
+    "device_id": "40000000-0000-4000-8000-000000000001",
+    "account": {"id":"30000000-0000-4000-8000-000000000001","display_name":"Parent","profile_required":false},
+    "refresh_attempt_id": "11111111-1111-4111-8111-111111111111",
+    "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d"
+  },
+  "ack_request": {
+    "protocol_version": "v1",
+    "capabilities": ["identity-v1", "refresh-recovery-v1"],
+    "refresh_attempt_id": "11111111-1111-4111-8111-111111111111",
+    "device_continuity": {"device_id":"40000000-0000-4000-8000-000000000001","credential":"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}
+  }
+}

@@ -1,0 +1,2007 @@
+{
+  "sourceLanguage": "en",
+  "strings": {
+    "%1$@ since %2$@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ seit %2$@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ since %2$@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ desde %2$@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ depuis le %2$@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ dal %2$@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%1$@ з %2$@"
+          }
+        }
+      }
+    },
+    "%@ cm": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ cm"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ cm"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ cm"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ cm"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ cm"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ см"
+          }
+        }
+      }
+    },
+    "%@ kg": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kg"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kg"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kg"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kg"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ kg"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "%@ кг"
+          }
+        }
+      }
+    },
+    "<3rd": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<3."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<3rd"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<3.º"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<3e"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<3°"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<3-го"
+          }
+        }
+      }
+    },
+    "<P3": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<P3"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<P3"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<P3"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<P3"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<P3"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "<P3"
+          }
+        }
+      }
+    },
+    ">97th": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">97."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">97th"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">97.º"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">97e"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">97°"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">97-го"
+          }
+        }
+      }
+    },
+    ">P97": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">P97"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">P97"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">P97"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">P97"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">P97"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": ">P97"
+          }
+        }
+      }
+    },
+    "A later due date supplies corrected age until the third chronological birthday. This is the app’s application of AAP guidance; the Swiss study did not validate preterm growth.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ein späterer Geburtstermin liefert bis zum dritten chronologischen Geburtstag das korrigierte Alter. Dies ist die Anwendung der AAP-Empfehlung durch die App; die Schweizer Studie validierte kein Frühgeborenenwachstum."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A later due date supplies corrected age until the third chronological birthday. This is the app’s application of AAP guidance; the Swiss study did not validate preterm growth."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una fecha prevista posterior aporta la edad corregida hasta el tercer cumpleaños cronológico. Es la aplicación de las pautas AAP por la app; el estudio suizo no validó el crecimiento prematuro."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Une date prévue plus tardive fournit l’âge corrigé jusqu’au troisième anniversaire chronologique. Il s’agit de l’application des recommandations AAP par l’app ; l’étude suisse n’a pas validé la croissance des prématurés."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Una data prevista successiva fornisce l’età corretta fino al terzo compleanno cronologico. È l’applicazione delle indicazioni AAP da parte dell’app; lo studio svizzero non ha validato la crescita dei prematuri."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Пізніша очікувана дата пологів задає скоригований вік до третього хронологічного дня народження. Це застосування настанов AAP у застосунку; швейцарське дослідження не перевіряло ріст недоношених дітей."
+          }
+        }
+      }
+    },
+    "A trend needs two measurements.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für einen Verlauf sind zwei Messungen nötig."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "A trend needs two measurements."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Se necesitan dos medidas para mostrar una tendencia."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Deux mesures sont nécessaires pour afficher une tendance."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Servono due misure per mostrare un andamento."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для відображення тенденції потрібні два вимірювання."
+          }
+        }
+      }
+    },
+    "AAP corrected-age guidance": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AAP-Empfehlung zum korrigierten Alter"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "AAP corrected-age guidance"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pautas AAP sobre edad corregida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Recommandations AAP sur l’âge corrigé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Indicazioni AAP sull’età corretta"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Настанови AAP щодо скоригованого віку"
+          }
+        }
+      }
+    },
+    "All check-ins": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Alle Messungen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "All check-ins"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Todas las mediciones"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Toutes les mesures"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tutte le misurazioni"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Усі вимірювання"
+          }
+        }
+      }
+    },
+    "Boys": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Jungen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Boys"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niños"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Garçons"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bambini"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Хлопчики"
+          }
+        }
+      }
+    },
+    "Choose a growth reference to enable comparisons.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wähle eine Wachstumsreferenz für Vergleiche."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose a growth reference to enable comparisons."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige una referencia de crecimiento para activar las comparaciones."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez une référence de croissance pour activer les comparaisons."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli un riferimento di crescita per abilitare i confronti."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оберіть еталон росту для порівняння."
+          }
+        }
+      }
+    },
+    "Choose lying down or standing up for a reference comparison.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wähle liegend oder stehend für einen Referenzvergleich."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose lying down or standing up for a reference comparison."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige tumbado o de pie para una comparación de referencia."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez couché ou debout pour une comparaison de référence."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli sdraiato o in piedi per un confronto."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Виберіть положення лежачи або стоячи для порівняння."
+          }
+        }
+      }
+    },
+    "Choose the girls’ or boys’ reference for comparisons. Your recorded measurements stay available.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Wähle zum Vergleichen die Referenz für Mädchen oder Jungen. Deine erfassten Messungen bleiben verfügbar."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choose the girls’ or boys’ reference for comparisons. Your recorded measurements stay available."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Elige la referencia de niñas o niños para las comparaciones. Las medidas registradas seguirán disponibles."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Choisissez la référence filles ou garçons pour les comparaisons. Vos mesures enregistrées restent disponibles."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Scegli il riferimento per bambine o bambini per i confronti. Le misure registrate restano disponibili."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оберіть еталон для дівчаток або хлопчиків для порівняння. Записані вимірювання залишаться доступними."
+          }
+        }
+      }
+    },
+    "Couldn’t save the reference. Try again.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Referenz konnte nicht gespeichert werden. Versuche es erneut."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Couldn’t save the reference. Try again."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No se pudo guardar la referencia. Inténtalo de nuevo."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossible d’enregistrer la référence. Réessayez."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Impossibile salvare il riferimento. Riprova."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Не вдалося зберегти еталон. Спробуйте знову."
+          }
+        }
+      }
+    },
+    "Creative Commons Attribution 4.0 (CC BY 4.0)": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creative Commons Attribution 4.0 (CC BY 4.0)"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creative Commons Attribution 4.0 (CC BY 4.0)"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creative Commons Attribution 4.0 (CC BY 4.0)"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creative Commons Attribution 4.0 (CC BY 4.0)"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creative Commons Attribution 4.0 (CC BY 4.0)"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Creative Commons Attribution 4.0 (CC BY 4.0)"
+          }
+        }
+      }
+    },
+    "Date": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Datum"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Date"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fecha"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Date"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Data"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дата"
+          }
+        }
+      }
+    },
+    "Estimated Swiss PEZZ 2025 percentile %@": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geschätztes Schweizer PEZZ-Perzentil 2025 %@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimated Swiss PEZZ 2025 percentile %@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentil suizo PEZZ 2025 estimado %@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentile suisse PEZZ 2025 estimé %@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentile svizzero PEZZ 2025 stimato %@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оцінений швейцарський перцентиль PEZZ 2025 %@"
+          }
+        }
+      }
+    },
+    "Estimated Swiss PEZZ 2025 percentile %@ · corrected age": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Geschätztes Schweizer PEZZ-Perzentil 2025 %@ · korrigiertes Alter"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estimated Swiss PEZZ 2025 percentile %@ · corrected age"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentil suizo PEZZ 2025 estimado %@ · edad corregida"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentile suisse PEZZ 2025 estimé %@ · âge corrigé"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Percentile svizzero PEZZ 2025 stimato %@ · età corretta"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Оцінений швейцарський перцентиль PEZZ 2025 %@ · скоригований вік"
+          }
+        }
+      }
+    },
+    "Extracted CSV SHA-256": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extrahierte CSV SHA-256"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Extracted CSV SHA-256"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 del CSV extraído"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 du CSV extrait"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 del CSV estratto"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 вибраного CSV"
+          }
+        }
+      }
+    },
+    "For standing measurements before the second reference-age birthday, only the comparison value receives +1 cm. Lying measurements from that birthday have no reference comparison. Recorded values stay unchanged.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bei Messungen im Stehen vor dem zweiten Geburtstag des Referenzalters erhält nur der Vergleichswert +1 cm. Für liegende Messungen ab diesem Geburtstag gibt es keinen Referenzvergleich. Messwerte bleiben unverändert."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "For standing measurements before the second reference-age birthday, only the comparison value receives +1 cm. Lying measurements from that birthday have no reference comparison. Recorded values stay unchanged."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "En medidas de pie antes del segundo cumpleaños de la edad de referencia, solo el valor de comparación recibe +1 cm. Las medidas tumbadas desde ese cumpleaños no tienen comparación. Los valores registrados no cambian."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pour les mesures debout avant le deuxième anniversaire de l’âge de référence, seule la valeur de comparaison reçoit +1 cm. Les mesures couchées dès cet anniversaire n’ont pas de comparaison. Les valeurs enregistrées restent inchangées."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Per le misure in piedi prima del secondo compleanno dell’età di riferimento, solo il valore di confronto riceve +1 cm. Le misure da sdraiati da quel compleanno non hanno confronto. I valori registrati restano invariati."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для вимірювань стоячи до другого дня народження за еталонним віком лише значення для порівняння отримує +1 см. Вимірювання лежачи від цього дня не мають порівняння. Записані значення не змінюються."
+          }
+        }
+      }
+    },
+    "Girls": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mädchen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Girls"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Niñas"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Filles"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Bambine"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дівчатка"
+          }
+        }
+      }
+    },
+    "Growth reference information": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informationen zur Wachstumsreferenz"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Growth reference information"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Información sobre la referencia de crecimiento"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informations sur la référence de croissance"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Informazioni sul riferimento di crescita"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Інформація про еталон росту"
+          }
+        }
+      }
+    },
+    "Head": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopf"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Head"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cabeza"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tête"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Testa"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Голова"
+          }
+        }
+      }
+    },
+    "Head circumference": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Kopfumfang"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Head circumference"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Perímetro cefálico"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Périmètre crânien"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Circonferenza cranica"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Окружність голови"
+          }
+        }
+      }
+    },
+    "Length": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Länge"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Length"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Longitud"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Taille"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lunghezza"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Зріст"
+          }
+        }
+      }
+    },
+    "Length / height": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Länge / Größe"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Length / height"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Longitud / estatura"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Longueur / taille"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lunghezza / altezza"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Довжина / зріст"
+          }
+        }
+      }
+    },
+    "Lying length has no reference comparison from the second reference-age birthday.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ab dem zweiten Geburtstag des Referenzalters gibt es für die Länge im Liegen keinen Referenzvergleich."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Lying length has no reference comparison from the second reference-age birthday."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La longitud tumbada no tiene comparación de referencia desde el segundo cumpleaños de la edad de referencia."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La longueur couchée n’a pas de comparaison de référence dès le deuxième anniversaire de l’âge de référence."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La lunghezza da sdraiati non ha confronto dal secondo compleanno dell’età di riferimento."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Для довжини лежачи немає порівняння від другого дня народження за еталонним віком."
+          }
+        }
+      }
+    },
+    "No measurements yet": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Noch keine Messungen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No measurements yet"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aún no hay medidas"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Aucune mesure pour le moment"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ancora nessuna misura"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вимірювань ще немає"
+          }
+        }
+      }
+    },
+    "No reference percentile in this release": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "In dieser Version kein Referenzperzentil"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "No reference percentile in this release"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Sin percentil de referencia en esta versión"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Pas de percentile de référence dans cette version"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Nessun percentile di riferimento in questa versione"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "У цій версії немає еталонного перцентиля"
+          }
+        }
+      }
+    },
+    "Official supplementary tables": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Offizielle Ergänzungstabellen"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Official supplementary tables"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tablas suplementarias oficiales"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tableaux supplémentaires officiels"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Tabelle supplementari ufficiali"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Офіційні додаткові таблиці"
+          }
+        }
+      }
+    },
+    "Original ZIP SHA-256": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Original-ZIP SHA-256"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Original ZIP SHA-256"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 del ZIP original"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 du ZIP original"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 dello ZIP originale"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "SHA-256 оригінального ZIP"
+          }
+        }
+      }
+    },
+    "P%@": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "P%@"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "P%@"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "P%@"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "P%@"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "P%@"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "P%@"
+          }
+        }
+      }
+    },
+    "Ranks are rounded estimates. Values below P3 or above P97 show <3rd or >97th rather than an extrapolated rank.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die Ränge sind gerundete Schätzungen. Werte unter P3 oder über P97 werden als <3. oder >97. statt als extrapolierter Rang angezeigt."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ranks are rounded estimates. Values below P3 or above P97 show <3rd or >97th rather than an extrapolated rank."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los rangos son estimaciones redondeadas. Por debajo de P3 o encima de P97 se muestra <3.º o >97.º en lugar de un rango extrapolado."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les rangs sont des estimations arrondies. Sous P3 ou au-dessus de P97, <3e ou >97e remplace un rang extrapolé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I ranghi sono stime arrotondate. Sotto P3 o sopra P97 si mostra <3° o >97° anziché un rango estrapolato."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ранги — округлені оцінки. Нижче P3 або вище P97 показано <3-го або >97-го замість екстрапольованого рангу."
+          }
+        }
+      }
+    },
+    "Reference comparison is unavailable for this measurement.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Für diese Messung ist kein Referenzvergleich verfügbar."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reference comparison is unavailable for this measurement."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La comparación de referencia no está disponible para esta medida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La comparaison de référence est indisponible pour cette mesure."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Il confronto con il riferimento non è disponibile per questa misura."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Порівняння з еталоном для цього вимірювання недоступне."
+          }
+        }
+      }
+    },
+    "Reference data is unavailable.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Referenzdaten sind nicht verfügbar."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Reference data is unavailable."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Los datos de referencia no están disponibles."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les données de référence sont indisponibles."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I dati di riferimento non sono disponibili."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Еталонні дані недоступні."
+          }
+        }
+      }
+    },
+    "Source and license": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Quelle und Lizenz"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source and license"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fuente y licencia"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Source et licence"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Fonte e licenza"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Джерело та ліцензія"
+          }
+        }
+      }
+    },
+    "Swiss PEZZ 2025 reference": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schweizer PEZZ-Referenz 2025"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swiss PEZZ 2025 reference"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Referencia suiza PEZZ 2025"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Référence suisse PEZZ 2025"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Riferimento svizzero PEZZ 2025"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Швейцарський еталон PEZZ 2025"
+          }
+        }
+      }
+    },
+    "Swiss median": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Schweizer Median"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Swiss median"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mediana suiza"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Médiane suisse"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Mediana svizzera"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Швейцарська медіана"
+          }
+        }
+      }
+    },
+    "The app extracts only supplementary Tables S1, S2, S5 and S6, preserving published precision. Printed ages are mapped to calendar month anniversaries. Linear interpolation of L/M/S between nodes, including model joins, is an app approximation of the published model; no extrapolation is used.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Die App extrahiert nur die Ergänzungstabellen S1, S2, S5 und S6 mit der veröffentlichten Genauigkeit. Gedruckte Alterswerte werden Kalendermonaten zugeordnet. Die lineare Interpolation von L/M/S zwischen Stützpunkten, auch an Modellübergängen, ist eine Näherung der App; es wird nicht extrapoliert."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The app extracts only supplementary Tables S1, S2, S5 and S6, preserving published precision. Printed ages are mapped to calendar month anniversaries. Linear interpolation of L/M/S between nodes, including model joins, is an app approximation of the published model; no extrapolation is used."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La app extrae solo las tablas suplementarias S1, S2, S5 y S6 conservando la precisión publicada. Las edades impresas se asignan a aniversarios mensuales. La interpolación lineal de L/M/S entre nodos, incluidas uniones de modelos, es una aproximación de la app; no se extrapola."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’app extrait uniquement les tableaux supplémentaires S1, S2, S5 et S6 en conservant la précision publiée. Les âges imprimés sont associés aux anniversaires mensuels. L’interpolation linéaire de L/M/S entre les points, y compris aux jonctions de modèles, est une approximation de l’app ; aucune extrapolation n’est utilisée."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "L’app estrae solo le tabelle supplementari S1, S2, S5 e S6 mantenendo la precisione pubblicata. Le età stampate sono associate agli anniversari mensili. L’interpolazione lineare di L/M/S tra nodi, incluse le giunzioni dei modelli, è un’approssimazione dell’app; non si estrapola."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Застосунок використовує лише додаткові таблиці S1, S2, S5 і S6, зберігаючи опубліковану точність. Наведений вік зіставлено з календарними місячними річницями. Лінійна інтерполяція L/M/S між вузлами, зокрема на стиках моделей, є наближенням застосунку; екстраполяція не використовується."
+          }
+        }
+      }
+    },
+    "The measurement date or time zone is unavailable for comparison.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Das Messdatum oder die Zeitzone ist für den Vergleich nicht verfügbar."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "The measurement date or time zone is unavailable for comparison."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La fecha o zona horaria de la medida no está disponible para la comparación."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La date ou le fuseau horaire de la mesure est indisponible pour la comparaison."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "La data o il fuso orario della misura non è disponibile per il confronto."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Дата або часовий пояс вимірювання недоступні для порівняння."
+          }
+        }
+      }
+    },
+    "These comparisons describe a population reference; they do not diagnose growth concerns.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Vergleiche beschreiben eine Bevölkerungsreferenz; sie diagnostizieren keine Wachstumsprobleme."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "These comparisons describe a population reference; they do not diagnose growth concerns."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Estas comparaciones describen una referencia poblacional; no diagnostican problemas de crecimiento."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ces comparaisons décrivent une référence de population ; elles ne diagnostiquent pas de problèmes de croissance."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questi confronti descrivono un riferimento della popolazione; non diagnosticano problemi di crescita."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Ці порівняння описують еталон популяції; вони не діагностують проблем росту."
+          }
+        }
+      }
+    },
+    "This reading is before the birth or corrected-age reference start.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Messung liegt vor der Geburt oder dem Beginn der Referenz für das korrigierte Alter."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This reading is before the birth or corrected-age reference start."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta medida es anterior al nacimiento o al inicio de la referencia con edad corregida."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette mesure précède la naissance ou le début de la référence à âge corrigé."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa misura precede la nascita o l’inizio del riferimento a età corretta."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Це вимірювання передує народженню або початку еталона за скоригованим віком."
+          }
+        }
+      }
+    },
+    "This reading is outside the birth-to-five reference range.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Diese Messung liegt außerhalb des Referenzbereichs von der Geburt bis fünf Jahre."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "This reading is outside the birth-to-five reference range."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Esta medida está fuera del intervalo de referencia desde el nacimiento hasta los cinco años."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Cette mesure est hors de la plage de référence de la naissance à cinq ans."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Questa misura è fuori dall’intervallo di riferimento dalla nascita ai cinque anni."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Це вимірювання поза еталонним діапазоном від народження до п’яти років."
+          }
+        }
+      }
+    },
+    "Weight": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gewicht"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weight"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peso"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Poids"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Peso"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Вага"
+          }
+        }
+      }
+    },
+    "Weight and length/height comparisons cover birth through the fifth calendar birthday. Head circumference keeps its recorded values and history without a reference percentile.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Gewicht und Länge/Größe werden von der Geburt bis zum fünften Kalendergeburtstag verglichen. Der Kopfumfang behält Messwerte und Verlauf ohne Referenzperzentil."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Weight and length/height comparisons cover birth through the fifth calendar birthday. Head circumference keeps its recorded values and history without a reference percentile."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Las comparaciones de peso y longitud/estatura abarcan desde el nacimiento hasta el quinto cumpleaños. El perímetro cefálico conserva sus valores e historial sin percentil de referencia."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Les comparaisons du poids et de la longueur/taille couvrent la naissance au cinquième anniversaire calendaire. Le périmètre crânien conserve ses valeurs et son historique sans percentile de référence."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "I confronti di peso e lunghezza/altezza coprono dalla nascita al quinto compleanno. La circonferenza cranica conserva valori e cronologia senza percentile di riferimento."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "Порівняння ваги та довжини/зросту охоплюють період від народження до п’ятого календарного дня народження. Окружність голови зберігає значення та історію без еталонного перцентиля."
+          }
+        }
+      }
+    },
+    "© 2025 by the authors; licensed to MDPI. Reference data and this extraction use CC BY 4.0. The app’s original code has separate licensing. No endorsement by the authors, PEZZ or MDPI is implied.": {
+      "extractionState": "manual",
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "© 2025 bei den Autoren; lizenziert an MDPI. Referenzdaten und Extraktion stehen unter CC BY 4.0. Der Originalcode der App hat eine separate Lizenz. Eine Empfehlung durch die Autoren, PEZZ oder MDPI wird nicht behauptet."
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "© 2025 by the authors; licensed to MDPI. Reference data and this extraction use CC BY 4.0. The app’s original code has separate licensing. No endorsement by the authors, PEZZ or MDPI is implied."
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "© 2025 los autores; bajo licencia de MDPI. Los datos y esta extracción usan CC BY 4.0. El código original de la app tiene otra licencia. No se implica el respaldo de los autores, PEZZ ni MDPI."
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "© 2025 les auteurs ; sous licence MDPI. Les données et cette extraction utilisent CC BY 4.0. Le code original de l’app a une licence distincte. Aucun soutien des auteurs, de PEZZ ou de MDPI n’est sous-entendu."
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "© 2025 degli autori; concesso in licenza a MDPI. I dati e questa estrazione usano CC BY 4.0. Il codice originale dell’app ha una licenza separata. Non si implica approvazione da autori, PEZZ o MDPI."
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "© 2025 автори; ліцензовано MDPI. Еталонні дані та ця вибірка використовують CC BY 4.0. Оригінальний код застосунку має окрему ліцензію. Схвалення авторами, PEZZ або MDPI не передбачається."
+          }
+        }
+      }
+    },
+    "≈ %@ / day": {
+      "localizations": {
+        "de": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≈ %@ / Tag"
+          }
+        },
+        "en": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≈ %@ / day"
+          }
+        },
+        "es": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≈ %@ / día"
+          }
+        },
+        "fr": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≈ %@ / jour"
+          }
+        },
+        "it": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≈ %@ / giorno"
+          }
+        },
+        "uk": {
+          "stringUnit": {
+            "state": "translated",
+            "value": "≈ %@ / день"
+          }
+        }
+      }
+    }
+  },
+  "version": "1.0"
+}

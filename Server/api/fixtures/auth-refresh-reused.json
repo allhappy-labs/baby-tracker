@@ -1,0 +1,8 @@
+{
+  "error": {
+    "code": "refresh_reused",
+    "message": "Authentication failed",
+    "request_id": "",
+    "retryable": false
+  }
+}

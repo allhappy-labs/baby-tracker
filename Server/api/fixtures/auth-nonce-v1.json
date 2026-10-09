@@ -1,0 +1,7 @@
+{
+  "version": "v1",
+  "canonical_origin": "https://sync.example.test",
+  "server_instance_id": "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d",
+  "challenge": "AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8",
+  "nonce": "6227c68e4a909c26acc63eaa3f0da6d0446d861a6edaf459330283c2e4afbbc1"
+}

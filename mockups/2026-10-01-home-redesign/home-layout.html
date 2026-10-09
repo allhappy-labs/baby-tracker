@@ -1,0 +1,181 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>home-layout</title><style>body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px}.subtitle{opacity:.7}</style>
+<style>
+  .phones{display:flex;gap:28px;flex-wrap:wrap;justify-content:center;margin-top:18px}
+  .pick{display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;border-radius:22px;padding:10px;border:2px solid transparent}
+  .pick.selected{border-color:#6c8cff}
+  .pick h3{margin:0}
+  .pick p{margin:0;max-width:290px;font-size:13px;opacity:.8;text-align:center}
+  .ph{width:290px;height:610px;border-radius:40px;background:#0B1020;position:relative;overflow:hidden;
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 7px #1d2233,0 18px 40px rgba(0,0,0,.45)}
+  .sb{display:flex;justify-content:space-between;padding:14px 26px 0;font-size:12px;font-weight:600}
+  .hd{display:flex;align-items:center;justify-content:space-between;padding:14px 20px 0}
+  .name{font-size:22px;font-weight:700;display:flex;align-items:center;gap:6px}
+  .name small{font-size:13px;opacity:.5}
+  .age{font-size:12px;color:#8B93AD}
+  .tabs{position:absolute;bottom:10px;left:12px;right:12px;height:50px;border-radius:25px;background:rgba(255,255,255,.07);
+        display:flex;justify-content:space-around;align-items:center;font-size:9px;color:#8B93AD}
+  .tabs div{display:flex;flex-direction:column;align-items:center;gap:2px}
+  .tabs .on{color:#EEF1FA}
+  .tabs i{width:18px;height:18px;border-radius:5px;background:currentColor;opacity:.8;display:block}
+  svg.ic{width:22px;height:22px;fill:none;stroke:currentColor;stroke-width:1.9;stroke-linecap:round;stroke-linejoin:round}
+  .feed{color:#F2B061}.sleep{color:#8A9BF0}.diaper{color:#5FD3C4}.supp{color:#C4A6F5}
+  .bgF{background:rgba(242,176,97,.14)}.bgS{background:rgba(138,155,240,.14)}.bgD{background:rgba(95,211,196,.14)}
+  .num{font-variant-numeric:tabular-nums;font-weight:700;letter-spacing:-.3px}
+  .mut{color:#8B93AD}
+  .thumb{position:absolute;left:0;right:0;bottom:0;height:46%;background:linear-gradient(to top,rgba(108,140,255,.10),transparent);
+         pointer-events:none;border-top:1px dashed rgba(108,140,255,.35)}
+  .thumb span{position:absolute;right:14px;top:-14px;font-size:9px;color:#6c8cff;letter-spacing:.5px}
+</style>
+
+<h2>Home, idle: which layout fits one-handed use best?</h2>
+<p class="subtitle">Same data in all three. Dashed blue area = where your thumb reaches when holding the phone in one hand. Icons are first drafts (new diaper included) — we'll do icons on the next screen.</p>
+
+<svg width="0" height="0" style="position:absolute">
+  <defs>
+    <symbol id="i-breast" viewBox="0 0 24 24"><path d="M12 3.5c3.6 4.3 6 7.6 6 10.6a6 6 0 0 1-12 0c0-3 2.4-6.3 6-10.6z"/></symbol>
+    <symbol id="i-bottle" viewBox="0 0 24 24"><path d="M10 2.8h4M10.2 2.8 9.4 6.5h5.2l-.8-3.7"/><rect x="7.5" y="6.5" width="9" height="14.5" rx="2.6"/><path d="M7.5 11h3.2M7.5 14.5h3.2"/></symbol>
+    <symbol id="i-sleep" viewBox="0 0 24 24"><path d="M19.5 14.6A8 8 0 0 1 9.4 4.5a8 8 0 1 0 10.1 10.1z"/></symbol>
+    <symbol id="i-diaper" viewBox="0 0 24 24"><path d="M2.8 6.5h18.4v3.4c-3.1.4-5.4 3.2-5.7 8.6H8.5C8.2 13.1 5.9 10.3 2.8 9.9z"/><path d="M5.6 6.5v3.2M18.4 6.5v3.2"/></symbol>
+    <symbol id="i-pill" viewBox="0 0 24 24"><rect x="3.2" y="8.3" width="17.6" height="7.4" rx="3.7" transform="rotate(-40 12 12)"/><path d="m9.2 9.6 5.6 4.8" /></symbol>
+    <symbol id="i-ruler" viewBox="0 0 24 24"><path d="M12 3v18M8.5 6.5h3.5M9.5 10h2.5M8.5 13.5h3.5M9.5 17h2.5"/><path d="M15 5h3v14h-3"/></symbol>
+    <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+    <symbol id="i-more" viewBox="0 0 24 24"><circle cx="6" cy="12" r="1.2"/><circle cx="12" cy="12" r="1.2"/><circle cx="18" cy="12" r="1.2"/></symbol>
+  </defs>
+</svg>
+
+<div class="phones">
+
+<!-- ============ A: action grid ============ -->
+<div class="pick" data-choice="a" onclick="toggleSelect(this)">
+  <div class="ph">
+    <div class="sb"><span>3:24</span><span>●●● ▮</span></div>
+    <div class="hd"><div class="name">Mila <small>⌄</small></div><div class="age">7 weeks</div></div>
+
+    <div style="display:flex;gap:8px;padding:16px 16px 0">
+      <div style="flex:1;border-radius:16px;background:rgba(255,255,255,.05);padding:10px">
+        <svg class="ic feed" style="width:18px;height:18px"><use href="#i-breast"/></svg>
+        <div class="num" style="font-size:18px;margin-top:4px;white-space:nowrap">2h 10m</div>
+        <div class="mut" style="font-size:11px">L · R 18m</div>
+      </div>
+      <div style="flex:1;border-radius:16px;background:rgba(255,255,255,.05);padding:10px">
+        <svg class="ic sleep" style="width:18px;height:18px"><use href="#i-sleep"/></svg>
+        <div class="num" style="font-size:18px;margin-top:4px;white-space:nowrap">40m</div>
+        <div class="mut" style="font-size:11px">awake</div>
+      </div>
+      <div style="flex:1;border-radius:16px;background:rgba(255,255,255,.05);padding:10px">
+        <svg class="ic diaper" style="width:18px;height:18px"><use href="#i-diaper"/></svg>
+        <div class="num" style="font-size:18px;margin-top:4px;white-space:nowrap">1h 5m</div>
+        <div class="mut" style="font-size:11px">wet</div>
+      </div>
+    </div>
+    <div class="mut" style="font-size:11px;padding:10px 20px 0">Today &nbsp;<b style="color:#EEF1FA">6</b> feeds · <b style="color:#EEF1FA">9h 40m</b> sleep · <b style="color:#EEF1FA">5</b> diapers</div>
+
+    <div style="position:absolute;left:14px;right:14px;bottom:74px;display:grid;grid-template-columns:1fr 1fr;gap:10px">
+      <div class="bgF feed" style="border-radius:20px;height:84px;padding:12px;position:relative">
+        <svg class="ic"><use href="#i-breast"/></svg><div style="font-size:26px;font-weight:800;position:absolute;right:14px;top:10px">L</div>
+        <div style="position:absolute;bottom:10px;left:12px;font-size:13px;font-weight:600;color:#EEF1FA">Left</div>
+      </div>
+      <div class="bgF feed" style="border-radius:20px;height:84px;padding:12px;position:relative;box-shadow:inset 0 0 0 2px #F2B061">
+        <svg class="ic"><use href="#i-breast"/></svg><div style="font-size:26px;font-weight:800;position:absolute;right:14px;top:10px">R</div>
+        <div style="position:absolute;bottom:10px;left:12px;font-size:13px;font-weight:600;color:#EEF1FA">Right · next</div>
+      </div>
+      <div class="bgF feed" style="border-radius:20px;height:64px;padding:12px;display:flex;align-items:center;gap:10px"><svg class="ic"><use href="#i-bottle"/></svg><span style="color:#EEF1FA;font-weight:600;font-size:14px">Bottle</span></div>
+      <div class="bgS sleep" style="border-radius:20px;height:64px;padding:12px;display:flex;align-items:center;gap:10px"><svg class="ic"><use href="#i-sleep"/></svg><span style="color:#EEF1FA;font-weight:600;font-size:14px">Sleep</span></div>
+      <div class="bgD diaper" style="border-radius:20px;height:64px;padding:12px;display:flex;align-items:center;gap:10px"><svg class="ic"><use href="#i-diaper"/></svg><span style="color:#EEF1FA;font-weight:600;font-size:14px">Diaper</span></div>
+      <div style="border-radius:20px;height:64px;padding:12px;display:flex;align-items:center;gap:10px;background:rgba(255,255,255,.06);color:#8B93AD"><svg class="ic"><use href="#i-more"/></svg><span style="color:#EEF1FA;font-weight:600;font-size:14px">More</span></div>
+    </div>
+    <div class="tabs"><div class="on"><i></i>Home</div><div><i></i>History</div><div><i></i>Ask</div><div><i></i>Insights</div><div><i></i>Settings</div></div>
+    <div class="thumb"><span>THUMB ZONE</span></div>
+  </div>
+  <h3>A · Action grid</h3>
+  <p>Status as 3 small tiles on top. Every start is one tap on a big tile at the bottom: Left, Right (suggested side outlined), Bottle, Sleep, Diaper, More (solids, supplements, growth).</p>
+</div>
+
+<!-- ============ B: activity rows ============ -->
+<div class="pick" data-choice="b" onclick="toggleSelect(this)">
+  <div class="ph">
+    <div class="sb"><span>3:24</span><span>●●● ▮</span></div>
+    <div class="hd"><div class="name">Mila <small>⌄</small></div><div class="age">7 weeks</div></div>
+    <div class="mut" style="font-size:11px;padding:8px 20px 0">Today &nbsp;<b style="color:#EEF1FA">6</b> feeds · <b style="color:#EEF1FA">9h 40m</b> sleep · <b style="color:#EEF1FA">5</b> diapers</div>
+
+    <div style="position:absolute;left:12px;right:12px;bottom:74px;display:flex;flex-direction:column;gap:10px">
+      <div style="border-radius:22px;background:rgba(255,255,255,.05);padding:14px">
+        <div style="display:flex;align-items:center;gap:10px">
+          <div class="bgF feed" style="width:38px;height:38px;border-radius:12px;display:grid;place-items:center"><svg class="ic"><use href="#i-breast"/></svg></div>
+          <div style="flex:1"><div class="num" style="font-size:22px">2h 10m</div><div class="mut" style="font-size:11px">L · R · 18m</div></div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:12px">
+          <div class="bgF" style="border-radius:14px;height:48px;display:grid;place-items:center;font-weight:700;font-size:17px">L</div>
+          <div class="bgF" style="border-radius:14px;height:48px;display:grid;place-items:center;font-weight:700;font-size:17px;box-shadow:inset 0 0 0 2px #F2B061">R</div>
+          <div class="bgF feed" style="border-radius:14px;height:48px;display:grid;place-items:center"><svg class="ic"><use href="#i-bottle"/></svg></div>
+        </div>
+      </div>
+      <div style="border-radius:22px;background:rgba(255,255,255,.05);padding:14px;display:flex;align-items:center;gap:10px">
+        <div class="bgS sleep" style="width:38px;height:38px;border-radius:12px;display:grid;place-items:center"><svg class="ic"><use href="#i-sleep"/></svg></div>
+        <div style="flex:1"><div class="num" style="font-size:22px">40m</div><div class="mut" style="font-size:11px">awake · napped 1h 20m</div></div>
+        <div class="bgS sleep" style="border-radius:14px;height:48px;width:78px;display:grid;place-items:center;font-weight:700;font-size:14px;color:#EEF1FA">Sleep</div>
+      </div>
+      <div style="border-radius:22px;background:rgba(255,255,255,.05);padding:14px;display:flex;align-items:center;gap:10px">
+        <div class="bgD diaper" style="width:38px;height:38px;border-radius:12px;display:grid;place-items:center"><svg class="ic"><use href="#i-diaper"/></svg></div>
+        <div style="flex:1"><div class="num" style="font-size:22px">1h 5m</div><div class="mut" style="font-size:11px">wet</div></div>
+        <div class="bgD diaper" style="border-radius:14px;height:48px;width:78px;display:grid;place-items:center"><svg class="ic"><use href="#i-plus"/></svg></div>
+      </div>
+      <div style="display:flex;gap:8px;justify-content:center">
+        <div style="flex:1;height:38px;border-radius:14px;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px" class="supp"><svg class="ic" style="width:16px;height:16px"><use href="#i-pill"/></svg><span style="color:#EEF1FA">Vitamin D</span></div>
+        <div style="flex:1;height:38px;border-radius:14px;background:rgba(255,255,255,.06);display:flex;align-items:center;justify-content:center;gap:6px;font-size:12px;color:#8B93AD"><svg class="ic" style="width:16px;height:16px"><use href="#i-more"/></svg><span style="color:#EEF1FA">More</span></div>
+      </div>
+    </div>
+    <div class="tabs"><div class="on"><i></i>Home</div><div><i></i>History</div><div><i></i>Ask</div><div><i></i>Insights</div><div><i></i>Settings</div></div>
+    <div class="thumb"><span>THUMB ZONE</span></div>
+  </div>
+  <h3>B · Activity rows</h3>
+  <p>One card per activity: how long since, plus its own start buttons right on the card. Status and action live together, so there's no separate dock. Pinned supplement and More underneath.</p>
+</div>
+
+<!-- ============ C: hero + dock ============ -->
+<div class="pick" data-choice="c" onclick="toggleSelect(this)">
+  <div class="ph">
+    <div class="sb"><span>3:24</span><span>●●● ▮</span></div>
+    <div class="hd"><div class="name">Mila <small>⌄</small></div><div class="age">7 weeks</div></div>
+
+    <div style="text-align:center;padding-top:44px">
+      <div class="sleep" style="font-size:12px;font-weight:600;display:flex;gap:6px;justify-content:center;align-items:center"><svg class="ic" style="width:16px;height:16px"><use href="#i-sleep"/></svg>Awake</div>
+      <div class="num" style="font-size:64px;line-height:1.05">40m</div>
+    </div>
+    <div style="display:flex;justify-content:center;gap:22px;margin-top:14px;font-size:13px">
+      <div style="display:flex;align-items:center;gap:6px"><svg class="ic feed" style="width:16px;height:16px"><use href="#i-breast"/></svg><span class="num">2h 10m</span></div>
+      <div style="display:flex;align-items:center;gap:6px"><svg class="ic diaper" style="width:16px;height:16px"><use href="#i-diaper"/></svg><span class="num">1h 5m</span></div>
+    </div>
+    <!-- 24h strip -->
+    <div style="margin:22px 22px 0;height:10px;border-radius:5px;background:rgba(255,255,255,.06);position:relative;overflow:hidden">
+      <div style="position:absolute;left:0;width:26%;height:100%;background:#8A9BF0;opacity:.7"></div>
+      <div style="position:absolute;left:38%;width:9%;height:100%;background:#8A9BF0;opacity:.7"></div>
+      <div style="position:absolute;left:62%;width:12%;height:100%;background:#8A9BF0;opacity:.7"></div>
+      <div style="position:absolute;left:27%;width:2%;height:100%;background:#F2B061"></div>
+      <div style="position:absolute;left:49%;width:2%;height:100%;background:#F2B061"></div>
+      <div style="position:absolute;left:76%;width:2%;height:100%;background:#F2B061"></div>
+      <div style="position:absolute;left:90%;width:2%;height:100%;background:#F2B061"></div>
+    </div>
+    <div class="mut" style="display:flex;justify-content:space-between;margin:4px 22px 0;font-size:9px"><span>midnight</span><span>now</span></div>
+
+    <div style="position:absolute;left:12px;right:12px;bottom:74px;border-radius:30px;background:rgba(255,255,255,.07);padding:12px">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+        <div class="bgF" style="height:64px;border-radius:20px;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700"><svg class="ic feed"><use href="#i-breast"/></svg>Left</div>
+        <div class="bgF" style="height:64px;border-radius:20px;display:flex;align-items:center;justify-content:center;gap:8px;font-weight:700;box-shadow:inset 0 0 0 2px #F2B061"><svg class="ic feed"><use href="#i-breast"/></svg>Right</div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;margin-top:8px">
+        <div class="bgF feed" style="height:54px;border-radius:18px;display:grid;place-items:center"><svg class="ic"><use href="#i-bottle"/></svg></div>
+        <div class="bgS sleep" style="height:54px;border-radius:18px;display:grid;place-items:center"><svg class="ic"><use href="#i-sleep"/></svg></div>
+        <div class="bgD diaper" style="height:54px;border-radius:18px;display:grid;place-items:center"><svg class="ic"><use href="#i-diaper"/></svg></div>
+        <div style="height:54px;border-radius:18px;display:grid;place-items:center;background:rgba(255,255,255,.06);color:#8B93AD"><svg class="ic"><use href="#i-more"/></svg></div>
+      </div>
+    </div>
+    <div class="tabs"><div class="on"><i></i>Home</div><div><i></i>History</div><div><i></i>Ask</div><div><i></i>Insights</div><div><i></i>Settings</div></div>
+    <div class="thumb"><span>THUMB ZONE</span></div>
+  </div>
+  <h3>C · Glance + dock</h3>
+  <p>The top is for looking: one big "what matters now" number, the other two small, plus a today strip (sleep bars, feed ticks). The bottom is for doing: a dock with big Left/Right and an icon row.</p>
+</div>
+
+</div>

@@ -1,0 +1,7 @@
+{
+  "protocol_version": "v1",
+  "family_id": "30000000-0000-4000-8000-000000000001",
+  "state": "deletion_pending",
+  "purge_after": "2026-10-21T12:00:00Z",
+  "can_recover": true
+}

@@ -1,0 +1,18 @@
+{
+  "first_page": {
+    "protocol_version": "v1",
+    "actors": [
+      {"account_id":"20000000-0000-4000-8000-000000000001","display_name":"Parent","former":false},
+      {"account_id":"20000000-0000-4000-8000-000000000002","display_name":"Caregiver","former":false}
+    ],
+    "high_water": "42",
+    "next_cursor": "20000000-0000-4000-8000-000000000002"
+  },
+  "continuation_page": {
+    "protocol_version": "v1",
+    "actors": [
+      {"account_id":"20000000-0000-4000-8000-000000000003","display_name":"Former caregiver","former":true}
+    ],
+    "high_water": "42"
+  }
+}

@@ -1,0 +1,37 @@
+{
+  "create_request": {
+    "protocol_version": "v1",
+    "capabilities": ["family-lifecycle-v1"],
+    "command_id": "10000000-0000-4000-8000-000000000002",
+    "display_name": "Our family"
+  },
+  "repair_request": {
+    "protocol_version": "v1",
+    "capabilities": ["family-lifecycle-v1"],
+    "command_id": "10000000-0000-4000-8000-000000000006",
+    "display_name": "Recovered family",
+    "confirmed": true
+  },
+  "repair_response": {
+    "protocol_version": "v1",
+    "id": "30000000-0000-4000-8000-000000000001",
+    "display_name": "Recovered family",
+    "status": "active",
+    "profile_required": false,
+    "members": [
+      {"account_id":"20000000-0000-4000-8000-000000000001","display_name":"Parent","role":"owner","status":"active"},
+      {"account_id":"20000000-0000-4000-8000-000000000002","display_name":"Caregiver","role":"caregiver","status":"active"}
+    ]
+  },
+  "response": {
+    "protocol_version": "v1",
+    "id": "30000000-0000-4000-8000-000000000001",
+    "display_name": "Our family",
+    "status": "active",
+    "profile_required": false,
+    "members": [
+      {"account_id":"20000000-0000-4000-8000-000000000001","display_name":"Parent","role":"owner","status":"active"},
+      {"account_id":"20000000-0000-4000-8000-000000000002","display_name":"Caregiver","role":"caregiver","status":"active"}
+    ]
+  }
+}

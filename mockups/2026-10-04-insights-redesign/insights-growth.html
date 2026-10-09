@@ -1,0 +1,140 @@
+<!doctype html><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>insights-growth</title>
+<style>
+  body{background:#1c1c1e;color:#eee;font-family:-apple-system,sans-serif;padding:24px;margin:0}
+  h2{margin:0 0 6px}.subtitle{opacity:.75;max-width:980px;line-height:1.45;margin:0}
+  .cards{display:flex;gap:26px;flex-wrap:wrap;justify-content:center;margin-top:20px}
+  .card{display:flex;flex-direction:column;align-items:center;gap:10px;cursor:pointer;border-radius:22px;padding:10px;border:2px solid transparent}
+  .card.selected{border-color:#6c8cff;background:rgba(108,140,255,.06)}
+  .card h3{margin:0}.card p.d{margin:0;max-width:310px;font-size:13px;opacity:.82;text-align:center;line-height:1.4}
+  .ph{width:310px;height:670px;border-radius:40px;background:#0B1020;position:relative;overflow:hidden;
+      font-family:-apple-system,BlinkMacSystemFont,"SF Pro Rounded","Helvetica Neue",sans-serif;color:#EEF1FA;
+      box-shadow:0 0 0 7px #1d2233,0 18px 40px rgba(0,0,0,.45)}
+  .scroll{position:absolute;top:0;left:0;right:0;bottom:0;overflow:hidden}
+  .sb{display:flex;justify-content:space-between;padding:14px 26px 0;font-size:12px;font-weight:600}
+  .ctx{padding:10px 16px 8px;font-size:11px;color:#5f6683;text-align:center}
+  .tabs{position:absolute;bottom:10px;left:12px;right:12px;height:50px;border-radius:25px;background:rgba(20,24,40,.95);
+        display:flex;justify-content:space-around;align-items:center;font-size:9px;color:#8B93AD;z-index:5}
+  .tabs div{display:flex;flex-direction:column;align-items:center;gap:2px}.tabs .on{color:#EEF1FA}
+  .tabs i{width:18px;height:18px;border-radius:5px;background:currentColor;opacity:.8;display:block}
+  svg.ic{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+  svg.sm{width:13px;height:13px}
+  .growth{color:#9FD27A}.mut{color:#8B93AD}
+  .sec{margin:0 12px 10px;background:rgba(255,255,255,.045);border-radius:18px;padding:12px 13px}
+  .sh{display:flex;align-items:center;gap:7px;font-size:13px;font-weight:700}
+  .big{font-size:24px;font-weight:800;font-variant-numeric:tabular-nums;letter-spacing:-.5px}
+  .small{font-size:12px;color:#C9CEDF;font-variant-numeric:tabular-nums}
+  .pill{font-size:11px;font-weight:700;padding:2px 7px;border-radius:8px;background:rgba(159,210,122,.16);color:#9FD27A;font-variant-numeric:tabular-nums}
+  .chips{display:flex;gap:6px;margin-top:8px}
+  .chip{flex:1;border-radius:12px;padding:7px 8px;background:rgba(255,255,255,.05);display:flex;flex-direction:column;gap:2px}
+  .chip.on{background:rgba(159,210,122,.14);box-shadow:inset 0 0 0 1.5px rgba(159,210,122,.6)}
+  .chip .k{font-size:10px;color:#8B93AD;font-weight:600}
+  .chip .v{font-size:14px;font-weight:800;font-variant-numeric:tabular-nums}
+  .chip .p{font-size:10.5px;color:#9FD27A;font-weight:700}
+  .link{display:flex;align-items:center;gap:5px;font-size:12px;color:#8A9BF0;margin-top:8px}
+  .row{display:flex;justify-content:space-between;align-items:center;font-size:12.5px;padding:6px 0;border-top:1px solid rgba(255,255,255,.06)}
+  .row b{font-variant-numeric:tabular-nums}
+  .callout{position:absolute;font-size:10.5px;background:#1d2338;border:1px solid rgba(255,255,255,.12);border-radius:8px;padding:4px 7px;white-space:nowrap;line-height:1.35}
+  .fade{position:absolute;left:0;right:0;bottom:0;height:90px;background:linear-gradient(transparent,#0B1020 70%);z-index:4}
+</style>
+
+<svg width="0" height="0" style="position:absolute"><defs>
+  <symbol id="scale" viewBox="0 0 24 24"><path d="M4 20.5h16l-1.6-9H5.6z"/><path d="M3 8.5c3-2.8 15-2.8 18 0M12 11.5V7"/></symbol>
+  <symbol id="info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 11v5M12 8h.01"/></symbol>
+  <symbol id="chev" viewBox="0 0 24 24"><path d="m9 5 7 7-7 7"/></symbol>
+  <!-- growth chart: band P3–P97, dashed median, baby's line -->
+  <symbol id="wchart" viewBox="0 0 280 120">
+    <path d="M18 92 C80 70 160 46 272 22 L272 62 C160 82 80 100 18 112 Z" fill="rgba(138,155,240,.14)"/>
+    <path d="M18 102 C80 85 160 64 272 42" fill="none" stroke="#8A9BF0" stroke-width="1" stroke-dasharray="4 4"/>
+    <path d="M18 103 L70 90 L120 76 L175 62 L230 52" fill="none" stroke="#9FD27A" stroke-width="2"/>
+    <g fill="#9FD27A"><circle cx="18" cy="103" r="3"/><circle cx="70" cy="90" r="3"/><circle cx="120" cy="76" r="3"/><circle cx="175" cy="62" r="3"/><circle cx="230" cy="52" r="4.5" stroke="#0B1020" stroke-width="2"/></g>
+    <g fill="#5f6683" font-size="9" font-family="-apple-system"><text x="0" y="26">6 kg</text><text x="0" y="70">5</text><text x="0" y="114">4</text>
+      <text x="18" y="119" opacity="0">.</text></g>
+  </symbol>
+  <symbol id="lchart" viewBox="0 0 280 120">
+    <path d="M18 96 C80 76 160 52 272 28 L272 64 C160 86 80 104 18 114 Z" fill="rgba(138,155,240,.14)"/>
+    <path d="M18 105 C80 90 160 70 272 46" fill="none" stroke="#8A9BF0" stroke-width="1" stroke-dasharray="4 4"/>
+    <path d="M18 104 L120 80 L230 56" fill="none" stroke="#9FD27A" stroke-width="2"/>
+    <g fill="#9FD27A"><circle cx="18" cy="104" r="3"/><circle cx="120" cy="80" r="3"/><circle cx="230" cy="56" r="3"/></g>
+  </symbol>
+</defs></svg>
+
+<h2>Growth inside Insights: which section layout?</h2>
+<p class="subtitle">The separate Growth details screen goes away. Growth sits at the bottom of the Insights scroll (it changes rarely) and <b>ignores Week/Month/All</b>: its charts always run from birth. Shaded band = Swiss PEZZ 3rd–97th percentile, dashed line = median, green = the baby. Head circumference has no reference, so it shows the raw chart only. <b>Editing and deleting a check-in moves to History</b> (filtered to Growth); new check-ins still start from Home → Measure. Tapping a point shows its date, value and percentile.</p>
+
+<div class="cards">
+
+<!-- G1 -->
+<div class="card" data-choice="G1-chips-one-chart" onclick="toggleSelect(this)">
+  <div class="ph"><div class="scroll">
+    <div class="sb"><span>9:41</span><span>●●● ▮</span></div>
+    <div class="ctx">… Feeding · Sleep · Diapers above …</div>
+    <div class="sec">
+      <div class="sh growth"><svg class="ic"><use href="#scale"/></svg>Growth <span class="mut" style="margin-left:auto;font-weight:500;font-size:11.5px">2 Oct · 9 wk</span></div>
+      <div class="chips">
+        <div class="chip on"><span class="k">Weight</span><span class="v">5.62 kg</span><span class="p">P48</span></div>
+        <div class="chip"><span class="k">Length</span><span class="v">58.5 cm</span><span class="p">P55</span></div>
+        <div class="chip"><span class="k">Head</span><span class="v">39.0 cm</span><span class="p mut" style="color:#5f6683">—</span></div>
+      </div>
+      <div class="small" style="margin-top:9px">+ 420 g since 18 Sep · ≈ 30 g / day</div>
+      <div style="position:relative;margin-top:6px">
+        <svg viewBox="0 0 280 120" style="width:100%;height:132px"><use href="#wchart"/></svg>
+        <div class="callout" style="left:150px;top:4px">2 Oct · 5.62 kg · P48</div>
+      </div>
+      <div style="display:flex;justify-content:space-between;font-size:10px;color:#5f6683;margin:-4px 0 0 18px"><span>Birth</span><span>1 mo</span><span>2 mo</span><span>3 mo</span></div>
+      <div class="link"><svg class="ic sm"><use href="#info"/></svg>Swiss PEZZ 2025 reference</div>
+      <div class="row" style="margin-top:6px"><span class="mut">All check-ins</span><span class="mut">5 <svg class="ic sm" style="vertical-align:-2px"><use href="#chev"/></svg></span></div>
+    </div>
+    </div><div class="fade"></div>
+    <div class="tabs"><div><i></i>Home</div><div><i></i>History</div><div class="on"><i></i>Insights</div><div><i></i>Ask</div></div>
+  </div>
+  <h3>G1 · Latest values + one chart</h3>
+  <p class="d">The three latest values with percentiles sit side by side, which is the doctor's answer at a glance. Tapping a chip switches the single chart below it. Underneath: gain since the previous check-in, the reference info link, and "All check-ins", which opens History filtered to Growth.</p>
+</div>
+
+<!-- G2 -->
+<div class="card" data-choice="G2-stacked-charts" onclick="toggleSelect(this)">
+  <div class="ph"><div class="scroll">
+    <div class="sb"><span>9:41</span><span>●●● ▮</span></div>
+    <div class="ctx">… Feeding · Sleep · Diapers above …</div>
+    <div class="sec">
+      <div class="sh growth"><svg class="ic"><use href="#scale"/></svg>Weight</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span class="big">5.62 kg</span><span class="pill">P48</span><span class="mut" style="font-size:11.5px;margin-left:auto">2 Oct</span></div>
+      <div class="small">+ 420 g since 18 Sep · ≈ 30 g / day</div>
+      <svg viewBox="0 0 280 120" style="width:100%;height:118px;margin-top:4px"><use href="#wchart"/></svg>
+    </div>
+    <div class="sec">
+      <div class="sh growth"><svg class="ic"><use href="#scale"/></svg>Length</div>
+      <div style="display:flex;align-items:baseline;gap:8px;margin-top:4px"><span class="big">58.5 cm</span><span class="pill">P55</span><span class="mut" style="font-size:11.5px;margin-left:auto">2 Oct</span></div>
+      <svg viewBox="0 0 280 120" style="width:100%;height:118px;margin-top:4px"><use href="#lchart"/></svg>
+    </div>
+    <div class="sec">
+      <div class="sh growth"><svg class="ic"><use href="#scale"/></svg>Head <span class="mut" style="margin-left:auto;font-weight:500">39.0 cm</span></div>
+    </div>
+    </div><div class="fade"></div>
+    <div class="tabs"><div><i></i>Home</div><div><i></i>History</div><div class="on"><i></i>Insights</div><div><i></i>Ask</div></div>
+  </div>
+  <h3>G2 · One card per measurement</h3>
+  <p class="d">Weight, Length and Head each get their own card with a full chart, so nothing is hidden behind a switch. The end of the Insights scroll gets much longer. The reference link and "All check-ins" would go after the last card.</p>
+</div>
+
+<!-- G3 -->
+<div class="card" data-choice="G3-compact-drill" onclick="toggleSelect(this)">
+  <div class="ph"><div class="scroll">
+    <div class="sb"><span>9:41</span><span>●●● ▮</span></div>
+    <div class="ctx">… Feeding · Sleep · Diapers above …</div>
+    <div class="sec">
+      <div class="sh growth"><svg class="ic"><use href="#scale"/></svg>Growth <span class="mut" style="margin-left:auto;font-weight:500;font-size:11.5px">2 Oct · 9 wk</span></div>
+      <div class="row" style="border-top:0;margin-top:4px"><span class="mut">Weight</span><span><b>5.62 kg</b> <span class="pill">P48</span></span></div>
+      <div class="row"><span class="mut">Length</span><span><b>58.5 cm</b> <span class="pill">P55</span></span></div>
+      <div class="row"><span class="mut">Head</span><span><b>39.0 cm</b></span></div>
+      <div class="row"><span class="mut">Weight gain</span><span><b>≈ 30 g / day</b></span></div>
+      <div class="row"><span class="mut">Charts &amp; check-ins</span><svg class="ic sm mut"><use href="#chev"/></svg></div>
+    </div>
+    </div><div class="fade"></div>
+    <div class="tabs"><div><i></i>Home</div><div><i></i>History</div><div class="on"><i></i>Insights</div><div><i></i>Ask</div></div>
+  </div>
+  <h3>G3 · Numbers only, charts one tap away</h3>
+  <p class="d">A compact table of numbers that matches the detail rows in Feeding and Sleep. The charts open on a pushed page, so it's close to today's separate screen, minus its history list and edit buttons.</p>
+</div>
+
+</div>
