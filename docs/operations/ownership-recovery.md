@@ -26,16 +26,18 @@ characters. One final LF is allowed. Direct-value environment fallbacks are
 rejected. Absence of a policy file disables only that command family.
 
 Keep evidence documents outside Baby Tracker under the approved operator
-policy. The ledger records only an HMAC of the opaque evidence reference, the
-opaque operator ID, policy ID, reason, affected IDs, and revision.
+policy. The family's audit chain records only an HMAC of the opaque evidence
+reference, the opaque operator ID, policy ID, reason, affected IDs, and
+revision.
 
 ## Procedure
 
-1. Run `security verify` and, if necessary, complete the documented
-   `security reconcile` procedure. Stop on any authority or projection
-   disagreement.
+1. Run `baby-tracker-admin authority verify` (as the migrator). Stop on any
+   failed scope or `actor_id_key_mismatch`.
 2. Verify the family, current frozen/unavailable owner, proposed replacement,
-   current entitlement inputs, and positive current security revision. The new
+   current entitlement inputs, and the family's positive current revision
+   (`baby-tracker-admin authority family-revision --family-id <uuid>`, its
+   audit sequence; pass it as `--expected-revision`). The new
    owner must already be an active caregiver. Never choose a target
    automatically.
 3. Create an opaque evidence reference and independently verify the evidence
@@ -45,8 +47,9 @@ opaque operator ID, policy ID, reason, affected IDs, and revision.
 5. Copy both the printed `confirmation.digest` and
    `confirmation.expires_at` into the matching `commit` command before the
    five-minute expiry. Do not modify or infer either value.
-6. Re-run `security verify`, confirm the resulting authorization and positive
-   revision, and confirm exactly one operator audit entry. For suspension,
+6. Re-run `authority verify` and `authority family-revision`, confirm the
+   resulting authorization and the revision one higher, and confirm exactly one
+   operator audit entry. For suspension,
    verify that the entitlement source remains `hosted_beta` and only its status
    changed.
 

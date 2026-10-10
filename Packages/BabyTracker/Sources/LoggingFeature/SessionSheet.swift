@@ -13,7 +13,11 @@ import BabyUI
 /// tap: no Join, Split, Add, Delete, swipe or editor.
 public struct SessionSheet: View {
     @State private var model: SessionSheetModel
-    @State private var path: [PartEditTarget] = []
+    /// The part being edited, in its own sheet over this one. Pushed inside
+    /// this sheet instead, the editor kept the session's taller layout until
+    /// the push finished, so its Save and Delete popped in late and the sheet
+    /// jumped.
+    @State private var editing: PartEditTarget?
     @State private var isConfirmingDelete = false
     /// `onDone` runs once even when a delete is followed by the revision
     /// bump that marks the session gone.
@@ -29,7 +33,7 @@ public struct SessionSheet: View {
     }
 
     public var body: some View {
-        NavigationStack(path: $path) {
+        NavigationStack {
             List {
                 if model.canEdit, model.join.previous != nil {
                     Section { JoinRow(model: model.join) }
@@ -49,6 +53,12 @@ public struct SessionSheet: View {
                     Section { deleteSessionButton }
                 }
             }
+            // Full height: a session holds a varying number of parts, and a
+            // sheet resized to each of them jumped.
+            .fullHeightSheet()
+            // The default bottom margin left a band of empty sheet under
+            // Delete.
+            .contentMargins(.bottom, 8, for: .scrollContent)
             // Gap rows are a line of small text, not a full row.
             .environment(\.defaultMinListRowHeight, 24)
             #if os(iOS)
@@ -57,18 +67,18 @@ public struct SessionSheet: View {
             // mockup; a bar above it would only leave an empty band.
             .toolbar(.hidden, for: .navigationBar)
             #endif
-            // What the pushed editor's back button reads.
             .navigationTitle(model.title)
             .safeAreaInset(edge: .top, spacing: 0) { header }
-            .navigationDestination(for: PartEditTarget.self) { target in
+            .fittedSheet(item: $editing) { target in
                 PartEditSheet(model: model.editorModel(for: target), showsJoinRow: false) {
-                    if path.last == target { path.removeLast() }
+                    if editing == target { editing = nil }
                 }
+                // A fitted sheet does not inherit custom environment values.
+                .environment(\.errorReporter, errorReporter)
             }
             .deleteConfirmation(isPresented: $isConfirmingDelete, title: deleteConfirmTitle,
                                 identifierPrefix: "sessionSheet", onDelete: deleteSession)
         }
-        .sheetHeight(height)
         .editLifecycle(revision: model.store.revision, isGone: model.isGone, reload: model.reload, onGone: finish)
     }
 
@@ -128,7 +138,19 @@ public struct SessionSheet: View {
 
         return Group {
             if model.canEdit {
-                NavigationLink(value: part.target) { content }
+                Button {
+                    editing = part.target
+                } label: {
+                    HStack(spacing: 8) {
+                        content
+                        Image(systemName: "chevron.right")
+                            .font(.footnote.weight(.semibold))
+                            .foregroundStyle(Palette.secondaryText)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(.rect)
+                }
+                .buttonStyle(.plain)
                     .swipeActions(edge: .trailing, allowsFullSwipe: true) {
                         Button(role: .destructive) {
                             deletePart(part)
@@ -257,24 +279,6 @@ public struct SessionSheet: View {
 
     private var tint: Color { model.kind == .feed ? Palette.feed : Palette.sleep }
 
-    /// Sized to the list at the default text size: the header, the Join row
-    /// when there is one, each part and gap row, Add part and Delete. With an
-    /// editor pushed, at least as tall as that editor needs.
-    private var height: CGFloat {
-        let gaps = model.parts.filter(showsGapRow).count
-        let list: CGFloat = 76
-            + (model.canEdit && model.join.previous != nil ? 72 : 0)
-            + CGFloat(model.parts.count) * 52 + CGFloat(gaps) * 36 + 20
-            + (model.canEdit ? 144 : 0)
-            + 40
-        guard let editing = path.last else { return list }
-        let editor: CGFloat = switch editing {
-        case .bottle: 780
-        case .breast, .sleep: 560
-        }
-        return max(list, editor)
-    }
-
     // MARK: - Actions
 
     private var subject: String { model.kind == .feed ? ErrorSubject.feed : ErrorSubject.sleep }
@@ -288,7 +292,7 @@ public struct SessionSheet: View {
         var added: PartEditTarget?
         if performEdit({ added = try model.addPart(kind) }, failure: ErrorBannerCopy.saveFailed(what: subject),
                        reporter: errorReporter), let added {
-            path.append(added)
+            editing = added
         }
     }
 

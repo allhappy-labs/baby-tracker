@@ -41,6 +41,9 @@ func TestDatabaseRunnerOwnsDisposableComposeProjectAndRequiredTestMode(t *testin
 		`BABY_TRACKER_TEST_DATABASE_URL=`,
 		`go test -p=1 -race -count=1`,
 		`BT_TEST_RUN`,
+		`case ${BT_TEST_RACE:-1} in`,
+		`0) go_test=(go test -p=1 -count=1) ;;`,
+		`go_test+=(-timeout "$BT_TEST_TIMEOUT")`,
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("test-db omits disposable integration-test contract %q", required)

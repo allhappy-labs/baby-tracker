@@ -55,7 +55,7 @@ const importCountSignature = "app.import_unfinished_session_count(uuid,timestamp
 func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 	fixture := testpg.New(t)
 	var current int64
-	if err := fixture.Owner.QueryRow(t.Context(), "SELECT current_version FROM schema_compatibility WHERE singleton").Scan(&current); err != nil || current != 29 {
+	if err := fixture.Owner.QueryRow(t.Context(), "SELECT current_version FROM schema_compatibility WHERE singleton").Scan(&current); err != nil || current != 32 {
 		t.Fatalf("schema version=%d err=%v", current, err)
 	}
 	var actualImportTables []string
@@ -131,7 +131,7 @@ func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 		"import_manifests_chunk_fk":             {"FOREIGN KEY (family_id, import_id, chunk_index)", "REFERENCES import_chunks(family_id, import_id, chunk_index)"},
 		"import_conflicts_manifest_fk":          {"FOREIGN KEY (family_id, import_id, record_id)", "REFERENCES import_record_manifests(family_id, import_id, record_id)"},
 		"import_mappings_candidate_fk":          {"FOREIGN KEY (family_id, import_id, local_baby_id)", "REFERENCES import_baby_candidates(family_id, import_id, local_baby_id)"},
-		"import_mappings_shared_baby_fk":        {"FOREIGN KEY (family_id, shared_baby_id)", "REFERENCES babies(family_id, id)"},
+		"import_mappings_shared_baby_fk":        {"FOREIGN KEY (family_id, shared_baby_id)", "REFERENCES care_entities(family_id, id)"},
 		"import_sessions_state_shape":           {"manifest_complete", "finalized_at", "mapping_complete", "mapping_completed_at", "expired_at"},
 		"import_conflicts_decision_state_shape": {"decision_choice", "decision_canonical_baby_id", "decision_account_id", "decision_revision", "decided_at"},
 	} {
@@ -148,7 +148,7 @@ func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 		}
 	}
 
-	if err := database.VerifyRoleSeparation(t.Context(), fixture.Runtime, fixture.Projector, 29); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
 		t.Fatalf("schema-twenty exact privilege snapshot rejected: %v", err)
 	}
 	var sessions, conflicts, immutable, denied, helper, secureHelper bool
@@ -162,13 +162,12 @@ func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 		 FROM unnest(ARRAY['public.import_chunks','public.import_baby_candidates','public.import_record_manifests',
 			'public.import_conflict_receipts','public.import_baby_mappings']) t),
 		NOT (SELECT bool_or(has_table_privilege(r,t,p))
-		 FROM unnest(ARRAY['public','baby_tracker_projector','baby_tracker_apple_revoker']) r
+		 FROM unnest(ARRAY['public','baby_tracker_maintenance']) r
 		 CROSS JOIN unnest($1::text[]) t
 		 CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE','REFERENCES','TRIGGER']) p),
 		has_function_privilege('baby_tracker_runtime',$2,'EXECUTE')
 			AND NOT has_function_privilege('public',$2,'EXECUTE')
-			AND NOT has_function_privilege('baby_tracker_projector',$2,'EXECUTE')
-			AND NOT has_function_privilege('baby_tracker_apple_revoker',$2,'EXECUTE'),
+			AND NOT has_function_privilege('baby_tracker_maintenance',$2,'EXECUTE'),
 		(SELECT prosecdef AND proconfig=ARRAY['search_path=pg_catalog']
 		 FROM pg_proc WHERE oid=$2::regprocedure)`, prefixedImportTables(), importCountSignature).Scan(
 		&sessions, &conflicts, &immutable, &denied, &helper, &secureHelper); err != nil {
@@ -193,8 +192,8 @@ func TestImportSchemaEnforcesTenantContextAndExactRuntimeDML(t *testing.T) {
 		accountB = "a2000000-0000-4000-8000-000000000001"
 		familyB  = "a2000000-0000-4000-8000-000000000002"
 	)
-	seedFamilyForRecordSchema(t, fixture, accountA, familyA)
-	seedFamilyForRecordSchema(t, fixture, accountB, familyB)
+	seedSchemaFamily(t, fixture, accountA, familyA)
+	seedSchemaFamily(t, fixture, accountB, familyB)
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 
 	tx, err := fixture.Runtime.Begin(t.Context())
@@ -287,8 +286,8 @@ func TestImportSchemaEnforcesTenantContextAndExactRuntimeDML(t *testing.T) {
 		}
 		_, insertErr := attempt.Exec(t.Context(), importSessionInsertSQL, familyA, "a1000000-0000-4000-8000-000000000009", accountA, deviceA, now, now.Add(time.Hour))
 		_ = attempt.Rollback(t.Context())
-		if postgresState(insertErr) != "42501" {
-			t.Fatalf("cross-context session insert err=%v state=%q", insertErr, postgresState(insertErr))
+		if sqlState(insertErr) != "42501" {
+			t.Fatalf("cross-context session insert err=%v state=%q", insertErr, sqlState(insertErr))
 		}
 	}
 }
@@ -304,7 +303,7 @@ func TestImportSchemaRejectsMalformedStateDigestsAndNonInjectiveMappings(t *test
 		babyB     = "b1000000-0000-4000-8000-000000000006"
 		sharedID  = "b1000000-0000-4000-8000-000000000007"
 	)
-	seedFamilyForRecordSchema(t, fixture, accountID, familyID)
+	seedSchemaFamily(t, fixture, accountID, familyID)
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	tx, err := fixture.Runtime.Begin(t.Context())
 	if err != nil {
@@ -389,14 +388,10 @@ func TestImportSchemaRejectsMalformedStateDigestsAndNonInjectiveMappings(t *test
 	if _, err := tx.Exec(t.Context(), "UPDATE families SET next_sequence=1 WHERE id=$1", familyID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := tx.Exec(t.Context(), `INSERT INTO mutation_journal(family_id,sequence,entity_kind,entity_id,entity_version,
-		actor_account_id,device_id,operation,canonical_entity,accepted_at)
-		VALUES($1,1,'baby',$2,1,$3,$4,'create','{}',$5)`, familyID, sharedID, accountID, deviceID, now); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := tx.Exec(t.Context(), `INSERT INTO babies(family_id,id,entity_version,creator_account_id,last_editor_account_id,
-		client_mutation_time,accepted_at,last_sequence,storage_bytes,name,normalized_name,normalization_version,birth_date,sort_order)
-		VALUES($1,$2,1,$3,$3,$4,$4,1,1,'Baby','baby','nfc-trim-fold-nfc-v1','2026-01-01',0)`, familyID, sharedID, accountID, now); err != nil {
+	if _, err := tx.Exec(t.Context(), `INSERT INTO care_entities(family_id,id,kind,entity_version,changed_seq,creator_account_id,
+		actor_account_id,device_id,operation,accepted_at,sort_order,name_hash,wire)
+		VALUES($1,$2,1,1,1,$3,$3,$4,'create',$5,0,decode(repeat('ab',32),'hex'),convert_to(repeat('x',80),'UTF8'))`,
+		familyID, sharedID, accountID, deviceID, now); err != nil {
 		t.Fatal(err)
 	}
 	for _, baby := range []string{babyA, babyB} {
@@ -404,8 +399,8 @@ func TestImportSchemaRejectsMalformedStateDigestsAndNonInjectiveMappings(t *test
 			published_revision,shared_baby_entity_version,shared_baby_cursor,storage_bytes,created_at)
 			VALUES($1,$2,$3,$4,1,1,1,1,$5)`, familyID, importID, baby, sharedID, now)
 		if baby == babyB {
-			if postgresState(err) != "23505" {
-				t.Fatalf("non-injective mapping err=%v state=%q", err, postgresState(err))
+			if sqlState(err) != "23505" {
+				t.Fatalf("non-injective mapping err=%v state=%q", err, sqlState(err))
 			}
 			break
 		}
@@ -424,8 +419,8 @@ func TestImportUnfinishedCountHelperIsGlobalAndTenantValidated(t *testing.T) {
 		accountB = "c1000000-0000-4000-8000-000000000004"
 		deviceA  = "c1000000-0000-4000-8000-000000000005"
 	)
-	seedFamilyForRecordSchema(t, fixture, accountA, familyA)
-	seedFamilyForRecordSchema(t, fixture, accountB, familyB)
+	seedSchemaFamily(t, fixture, accountA, familyA)
+	seedSchemaFamily(t, fixture, accountB, familyB)
 	now := time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC)
 	for index, family := range []string{familyA, familyB} {
 		tx, err := fixture.Owner.Begin(t.Context())
@@ -468,16 +463,16 @@ func TestImportUnfinishedCountHelperIsGlobalAndTenantValidated(t *testing.T) {
 	if err := read.QueryRow(t.Context(), "SELECT app.import_unfinished_session_count($1,$2)", accountA, now).Scan(&global); err != nil || global != 2 {
 		t.Fatalf("global helper after SET ROLE count=%d err=%v", global, err)
 	}
-	if err := read.QueryRow(t.Context(), "SELECT app.import_unfinished_session_count($1,$2)", accountB, now).Scan(&global); postgresState(err) != "42501" {
-		t.Fatalf("cross-account helper err=%v state=%q", err, postgresState(err))
+	if err := read.QueryRow(t.Context(), "SELECT app.import_unfinished_session_count($1,$2)", accountB, now).Scan(&global); sqlState(err) != "42501" {
+		t.Fatalf("cross-account helper err=%v state=%q", err, sqlState(err))
 	}
 	without, err := fixture.Runtime.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer without.Rollback(t.Context())
-	if err := without.QueryRow(t.Context(), "SELECT app.import_unfinished_session_count($1,$2)", accountA, now).Scan(&global); postgresState(err) != "42501" {
-		t.Fatalf("context-free helper err=%v state=%q", err, postgresState(err))
+	if err := without.QueryRow(t.Context(), "SELECT app.import_unfinished_session_count($1,$2)", accountA, now).Scan(&global); sqlState(err) != "42501" {
+		t.Fatalf("context-free helper err=%v state=%q", err, sqlState(err))
 	}
 }
 
@@ -499,8 +494,8 @@ func assertImportStatementState(t *testing.T, tx pgx.Tx, name, wantState, statem
 		t.Fatal(err)
 	}
 	_, err := tx.Exec(t.Context(), statement, args...)
-	if postgresState(err) != wantState {
-		t.Fatalf("%s err=%v state=%q want=%q", name, err, postgresState(err), wantState)
+	if sqlState(err) != wantState {
+		t.Fatalf("%s err=%v state=%q want=%q", name, err, sqlState(err), wantState)
 	}
 	if _, rollbackErr := tx.Exec(t.Context(), "ROLLBACK TO SAVEPOINT import_contract"); rollbackErr != nil {
 		t.Fatal(rollbackErr)
@@ -513,4 +508,32 @@ func prefixedImportTables() []string {
 		tables[index] = "public." + table
 	}
 	return tables
+}
+
+func seedSchemaFamily(t *testing.T, fixture *testpg.Fixture, accountID, familyID string) {
+	t.Helper()
+	tx, err := fixture.Owner.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	// Authority tables admit writes only from authority transactions.
+	if _, err := tx.Exec(t.Context(), "SELECT set_config('app.authority','1',true)"); err != nil {
+		t.Fatal(err)
+	}
+	if err := tenant.SetLocal(t.Context(), tx, tenant.Context{AccountID: accountID, FamilyID: familyID}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'Schema owner')", accountID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), "INSERT INTO families(id,display_name,owner_account_id) VALUES($1,'Schema family',$2)", familyID, accountID); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), "INSERT INTO memberships(family_id,account_id,role) VALUES($1,$2,'owner')", familyID, accountID); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }

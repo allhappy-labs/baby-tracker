@@ -64,7 +64,9 @@ import BabyCore
         #expect(feed.components == [.bottle(id: componentID, volumeML: 90, contents: .formula, startedAt: moved)])
     }
 
-    @Test func aTimedBottleKeepsItsLengthWhenMoved() throws {
+    /// Start and End are independent rows: moving a timed bottle's start
+    /// leaves its end where it was, and the length follows.
+    @Test func aTimedBottleKeepsItsEndWhenItsStartMoves() throws {
         let (store, baby, clock) = try fixture()
         let start = clock.now.addingTimeInterval(-3600)
         let feed = try store.logBottle(volumeML: 90, contents: .formula, for: baby, at: start)
@@ -80,10 +82,90 @@ import BabyCore
         model.start = moved
 
         #expect(try model.save())
-        #expect(feed.components == [.bottle(id: componentID, volumeML: 90, contents: .formula, seconds: 600,
-                                            startedAt: moved, endedAt: moved.addingTimeInterval(600))])
+        #expect(feed.components == [.bottle(id: componentID, volumeML: 90, contents: .formula, seconds: 900,
+                                            startedAt: moved, endedAt: start.addingTimeInterval(600))])
         #expect(feed.startedAt == moved)
-        #expect(feed.endedAt == moved.addingTimeInterval(600))
+        #expect(feed.endedAt == start.addingTimeInterval(600))
+    }
+
+    @Test func aBottleGainsAnEndAndKeepsItsStart() throws {
+        let (store, baby, clock) = try fixture()
+        let start = clock.now.addingTimeInterval(-1800)
+        let feed = try store.logBottle(volumeML: 90, contents: .formula, for: baby, at: start)
+        let componentID = try #require(feed.components.first?.id)
+        let model = PartEditModel(store: store, babyID: baby, target: .bottle(feedID: feed.id, componentID: componentID))
+        #expect(model.end == nil)
+
+        model.end = start.addingTimeInterval(900)
+
+        #expect(try model.save())
+        #expect(feed.components.first?.bottleSeconds == 900)
+        #expect(feed.components.first?.startedAt == start)
+        #expect(feed.components.first?.endedAt == start.addingTimeInterval(900))
+        #expect(feed.endedAt == start.addingTimeInterval(900))
+    }
+
+    /// A bottle that recorded only its length (as the running-timer editor
+    /// builds) opens with an end, so moving only its start keeps that end
+    /// and a length, rather than losing it.
+    @Test func aSecondsOnlyBottleKeepsItsLengthWhenItsStartMoves() throws {
+        let (store, baby, clock) = try fixture()
+        let start = clock.now.addingTimeInterval(-3600)
+        let feed = try store.logBottle(volumeML: 90, contents: .formula, for: baby, at: start)
+        let componentID = try #require(feed.components.first?.id)
+        feed.components = [.bottle(id: componentID, volumeML: 90, contents: .formula, seconds: 600)]
+        try store.update(feed)
+        let model = PartEditModel(store: store, babyID: baby, target: .bottle(feedID: feed.id, componentID: componentID))
+        #expect(model.end == start.addingTimeInterval(600))
+        let moved = start.addingTimeInterval(-300)
+
+        model.start = moved
+
+        #expect(try model.save())
+        #expect(feed.components.first?.bottleSeconds == 900)
+        #expect(feed.components.first?.startedAt == moved)
+        #expect(feed.components.first?.endedAt == start.addingTimeInterval(600))
+        #expect(feed.startedAt == moved)
+        #expect(feed.endedAt == start.addingTimeInterval(600))
+    }
+
+    /// An End-only edit of an old bottle that never recorded its time, in a
+    /// two-part entry, changes its length but invents no start.
+    @Test func anEndOnlyEditKeepsAnUntimedBottlesStartUnknown() throws {
+        let (store, baby, clock) = try fixture()
+        let start = clock.now.addingTimeInterval(-3600)
+        let feed = try store.logBreast(side: .left, from: start, to: start.addingTimeInterval(720), for: baby)
+        let breast = try #require(feed.components.first)
+        let bottleID = UUID()
+        feed.components = [breast, .bottle(id: bottleID, volumeML: 60, contents: .formula, seconds: 300)]
+        feed.endedAt = start.addingTimeInterval(1500)
+        try store.update(feed)
+        let model = PartEditModel(store: store, babyID: baby, target: .bottle(feedID: feed.id, componentID: bottleID))
+        #expect(model.end == model.start.addingTimeInterval(300))
+
+        model.end = model.start.addingTimeInterval(400)
+
+        #expect(try model.save())
+        #expect(feed.components == [breast, .bottle(id: bottleID, volumeML: 60, contents: .formula, seconds: 400)])
+        #expect(feed.startedAt == start)
+        #expect(feed.endedAt == start.addingTimeInterval(1500))
+    }
+
+    @Test func removingABottleEndBeforeSavingKeepsItAMoment() throws {
+        let (store, baby, clock) = try fixture()
+        let start = clock.now.addingTimeInterval(-1800)
+        let feed = try store.logBottle(volumeML: 90, contents: .formula, for: baby, at: start)
+        let componentID = try #require(feed.components.first?.id)
+        let model = PartEditModel(store: store, babyID: baby, target: .bottle(feedID: feed.id, componentID: componentID))
+
+        model.end = start.addingTimeInterval(900)
+        model.end = nil
+        model.volumeML = 120
+
+        #expect(try model.save())
+        #expect(feed.components.first?.bottleSeconds == nil)
+        #expect(feed.components.first?.endedAt == nil)
+        #expect(feed.endedAt == start)
     }
 
     @Test func zeroVolumeCannotBeSaved() throws {

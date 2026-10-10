@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 	"babytracker/server/internal/testkit"
 )
 
@@ -28,7 +27,8 @@ type workerClock struct {
 	now time.Time
 }
 
-func newWorkerClock() *workerClock { return &workerClock{now: time.Now()} }
+// newWorkerClock starts at the worker's clock on h (databaseClock).
+func newWorkerClock(h *testkit.Harness) *workerClock { return &workerClock{now: databaseClock(h)()} }
 
 func (c *workerClock) Now() time.Time {
 	c.mu.Lock()
@@ -78,19 +78,17 @@ func TestLiveActivityAdoptOwnCardRequiresALiveToken(t *testing.T) {
 func TestLiveActivitySwipedBreakCardIsNotAdoptedTwoLifecyclesLater(t *testing.T) {
 	const record = "88888888-8888-4888-8888-888888888888"
 	const second, third = "57000000-0000-4000-8000-000000000002", "57000000-0000-4000-8000-000000000003"
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Owner, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("owner"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 	var sent []PushRequest
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 		sent = append(sent, r)
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	}))
-	clock := newWorkerClock()
+	clock := newWorkerClock(h)
 	w.Now = clock.Now
 	step := func() {
 		t.Helper()
@@ -103,7 +101,7 @@ func TestLiveActivitySwipedBreakCardIsNotAdoptedTwoLifecyclesLater(t *testing.T)
 		t.Helper()
 		req := activityRequest(h, baby, id)
 		req.TokenVersion, req.Token, req.TimerID, req.SessionID, req.State = version, token, timer, session, state
-		if _, err := service.RegisterActivity(t.Context(), h.Owner, req); err != nil {
+		if _, err := reg.activity(t, t.Context(), h.AccessToken("owner"), req); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -134,7 +132,8 @@ func TestLiveActivitySwipedBreakCardIsNotAdoptedTwoLifecyclesLater(t *testing.T)
 	// The part stops into a record; the break is live. The phone's card now
 	// names the session, not the timer, and the parent swipes it away.
 	workerStopFeed(t, h, baby, testkit.TimerA)
-	h.ExecFamily(t, `UPDATE feed_entries SET started_at=clock_timestamp()-interval '20 minutes',ended_at=clock_timestamp()-interval '10 minutes' WHERE id=$1`, record)
+	now := h.DatabaseNow()
+	retimeFeed(t, h, dirty, record, now.Add(-20*time.Minute), now.Add(-10*time.Minute))
 	step()
 	if len(sent) != 2 || sent[1].Event != "update" || sent[1].Content.Phase != "feedBreak" {
 		t.Fatalf("break on the own card: %s", describePushes(sent))
@@ -189,20 +188,18 @@ func TestLiveActivitySwipedBreakCardIsNotAdoptedTwoLifecyclesLater(t *testing.T)
 // never targets the phone's winner. Mixed case is where a locale collation
 // would disagree with byte order.
 func TestLiveActivityDuplicateSurvivorFollowsByteOrder(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
 	h.StartFeed(t, h.Owner, testkit.TimerA)
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 	var sent []PushRequest
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 		sent = append(sent, r)
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	}))
-	clock := newWorkerClock()
+	clock := newWorkerClock(h)
 	w.Now = clock.Now
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatal(err)
@@ -214,7 +211,7 @@ func TestLiveActivityDuplicateSurvivorFollowsByteOrder(t *testing.T) {
 		req := activityRequest(h, baby, id)
 		req.Token = token
 		req.KnownGenerationID = &generation
-		if _, err := service.RegisterActivity(t.Context(), h.Caregiver, req); err != nil {
+		if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -240,22 +237,20 @@ func TestLiveActivityDuplicateSurvivorFollowsByteOrder(t *testing.T) {
 // A stale lease the worker cannot release is logged with a safe code, and the
 // worker carries on; nothing of the failure's message reaches the log.
 func TestLiveActivityStaleLeaseReleaseFailureIsLogged(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
 	h.StartFeed(t, h.Owner, testkit.TimerA)
-	realGuard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
-	guard := &interleavedSnapshotGuard{SnapshotGuard: realGuard}
+	guard := &interleavedSnapshotGuard{SnapshotGuard: h.Authority}
 	logs := captureDefaultLog(t)
 	var sent []PushRequest
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 		sent = append(sent, r)
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	}))
-	clock := newWorkerClock()
+	clock := newWorkerClock(h)
 	w.Now = clock.Now
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatal(err)
@@ -265,23 +260,26 @@ func TestLiveActivityStaleLeaseReleaseFailureIsLogged(t *testing.T) {
 	}
 	req := activityRequest(h, baby, "card")
 	req.KnownGenerationID = &sent[0].Content.Remote.GenerationID
-	if _, err := service.RegisterActivity(t.Context(), h.Caregiver, req); err != nil {
+	if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
 		t.Fatal(err)
 	}
 	// The worker may not release leases any more: an infrastructure fault
 	// confined to that one function.
-	if _, err := h.Migrator.Exec(t.Context(), `REVOKE EXECUTE ON FUNCTION app.release_stale_live_activity_lease(jsonb) FROM baby_tracker_live_activity`); err != nil {
+	if _, err := h.Migrator.Exec(t.Context(), `REVOKE EXECUTE ON FUNCTION app.release_stale_live_activity_lease(jsonb) FROM baby_tracker_maintenance`); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		if _, err := h.Migrator.Exec(context.Background(), `GRANT EXECUTE ON FUNCTION app.release_stale_live_activity_lease(jsonb) TO baby_tracker_live_activity`); err != nil {
+		if _, err := h.Migrator.Exec(context.Background(), `GRANT EXECUTE ON FUNCTION app.release_stale_live_activity_lease(jsonb) TO baby_tracker_maintenance`); err != nil {
 			t.Error(err)
 		}
 	})
 	// Newer family work lands between the confirmation update's two snapshots,
 	// so its acknowledgement is stale and the lease is due for release.
 	guard.feedReads = 0
-	guard.beforeSecond = func() { h.RenameBaby(t, baby, "renamed between snapshots") }
+	guard.beforeSecond = func() {
+		h.RenameBaby(t, baby, "renamed between snapshots")
+		flushDirtyNow(t, h, dirty)
+	}
 	clock.Advance(time.Second)
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatalf("a failed lease release stopped the worker: %v", err)
@@ -311,7 +309,7 @@ func TestLiveActivityAPNsPreflightRejectionIsNotSent(t *testing.T) {
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	defer server.Close()
-	transport := newAPNSTransport("TEAM123456", "KEY1234567", "com.example.baby", testAPNSKey(t), server.Client(), server.URL, server.URL)
+	transport := testAPNSTransport(t, server, nil)
 	invalid := testPushRequest("start", "bogus")
 	result, err := transport.Send(t.Context(), invalid)
 	if result.Classification != ConfigurationFailure || !errors.Is(err, ErrRequestNotSent) || requests.Load() != 0 {
@@ -336,17 +334,15 @@ func TestLiveActivityAPNsPreflightRejectionIsNotSent(t *testing.T) {
 func TestLiveActivityUnsentStartIsReleasedForRetry(t *testing.T) {
 	for _, reached := range []bool{false, true} {
 		t.Run(map[bool]string{false: "rejected_before_io", true: "answered_by_apple"}[reached], func(t *testing.T) {
-			h := testkit.New(t)
-			seedBaby(t, h)
-			service := NewService(h.Security, familyResolver{h.Family}, topic)
-			if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+			h, dirty, reg := workerHarness(t)
+			workerBaby(t, h)
+			if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 				t.Fatal(err)
 			}
 			h.StartFeed(t, h.Owner, testkit.TimerA)
-			guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 			logs := captureDefaultLog(t)
 			var sent []PushRequest
-			w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+			w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 				sent = append(sent, r)
 				if len(sent) > 1 {
 					return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
@@ -356,7 +352,7 @@ func TestLiveActivityUnsentStartIsReleasedForRetry(t *testing.T) {
 				}
 				return PushResult{Classification: ConfigurationFailure}, errors.Join(ErrRequestNotSent, errors.New("invalid live activity push request"))
 			}))
-			clock := newWorkerClock()
+			clock := newWorkerClock(h)
 			w.Now = clock.Now
 			w.Jitter = func(d time.Duration) time.Duration { return d }
 			if err := w.RunOnce(t.Context(), 32); err != nil {

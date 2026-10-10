@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
 	"github.com/jackc/pgx/v5"
 )
@@ -26,18 +27,46 @@ func newUUID() (string, error) {
 	return fmt.Sprintf("%s-%s-%s-%s-%s", s[:8], s[8:12], s[12:16], s[16:20], s[20:]), nil
 }
 
-func (s *Service) family(ctx context.Context, p access.Principal) (string, error) {
-	if s == nil || s.options.Resolver == nil || p.Scope != "family" || p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
+// sessionFamily is p's session family, checked with no database read: the
+// request authorized family policy for it, and the guarded transaction
+// re-reads the session and refuses any other family (withFamily). A
+// principal that is not a refreshed family session is owner_required, as
+// the legacy family read refused it.
+func (s *Service) sessionFamily(p access.Principal) (string, error) {
+	if s == nil || p.Scope != "family" || p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
 		return "", ErrOwnerRequired
 	}
-	id, err := s.options.Resolver.Current(ctx, p)
-	if err != nil {
-		return "", err
+	return p.SessionFamilyID, nil
+}
+
+// ValidCreateRequest reports whether request names an export Create
+// accepts: protocol v1, exactly the export capability and a request ID.
+// The HTTP route checks it before family policy, where Create's own check
+// always ranked.
+func ValidCreateRequest(request protocol.CreateExportRequest) bool {
+	return request.ProtocolVersion == "v1" && len(request.Capabilities) == 1 && request.Capabilities[0] == protocol.CapabilityExportV1 &&
+		protocol.ValidUUID(request.RequestID)
+}
+
+// withFamily runs run in one guarded export_family transaction for familyID,
+// the principal's session family: read-only and repeatable-read (one
+// snapshot) when read is set. The family and role come from the grant; a
+// grant for any other family or account is membership_revoked, as the legacy
+// guard refused a family mismatch.
+func (s *Service) withFamily(ctx context.Context, p access.Principal, familyID string, read bool, run func(pgx.Tx, access.Grant) error) error {
+	if s == nil || s.options.Authority == nil {
+		return ErrUnavailable
 	}
-	if id != p.SessionFamilyID {
-		return "", ErrOwnerRequired
+	guarded := s.options.Authority.WithFamilyTx
+	if read {
+		guarded = s.options.Authority.WithFamilyReadTx
 	}
-	return id, nil
+	return guarded(ctx, p, "export_family", func(tx pgx.Tx, grant access.Grant) error {
+		if grant.AccountID != p.AccountID || grant.FamilyID != familyID {
+			return authority.ErrMembershipRevoked
+		}
+		return run(tx, grant)
+	})
 }
 
 func statusFromJob(j Job, bytes *uint64, sha, code *string) protocol.ExportStatus {
@@ -48,17 +77,16 @@ func statusFromJob(j Job, bytes *uint64, sha, code *string) protocol.ExportStatu
 }
 
 func (s *Service) Create(ctx context.Context, p access.Principal, request protocol.CreateExportRequest) (protocol.ExportStatus, bool, error) {
-	if s == nil || s.options.Security == nil || request.ProtocolVersion != "v1" ||
-		len(request.Capabilities) != 1 || request.Capabilities[0] != protocol.CapabilityExportV1 || !protocol.ValidUUID(request.RequestID) {
+	if s == nil || s.options.Authority == nil || !ValidCreateRequest(request) {
 		return protocol.ExportStatus{}, false, ErrInvalidRequest
 	}
-	familyID, err := s.family(ctx, p)
+	familyID, err := s.sessionFamily(p)
 	if err != nil {
 		return protocol.ExportStatus{}, false, err
 	}
 	var result protocol.ExportStatus
 	created := false
-	err = s.options.Security.WithAuthorizedTransaction(ctx, p, familyID, "export_family", func(tx pgx.Tx, grant access.Grant) error {
+	err = s.withFamily(ctx, p, familyID, false, func(tx pgx.Tx, grant access.Grant) error {
 		if grant.Role != "owner" {
 			return ErrOwnerRequired
 		}
@@ -112,7 +140,7 @@ func (s *Service) Create(ctx context.Context, p access.Principal, request protoc
 		now := s.options.Now().UTC().Truncate(time.Microsecond)
 		j = Job{ID: id, FamilyID: familyID, RequesterAccountID: p.AccountID, RequestID: request.RequestID, State: "queued", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
 		if _, err := tx.Exec(ctx, `INSERT INTO public.export_jobs(id,family_id,requester_account_id,request_id,server_instance_id,recovery_epoch,security_revision,state,created_at,expires_at,next_attempt_at)
-			VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,$8)`, id, familyID, p.AccountID, request.RequestID, s.options.Identity.InstanceID, s.options.Identity.RecoveryEpoch, grant.Revision, now, j.ExpiresAt); err != nil {
+			VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,now())`, id, familyID, p.AccountID, request.RequestID, s.options.Identity.InstanceID, s.options.Identity.RecoveryEpoch, grant.Revision, now, j.ExpiresAt); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO public.export_rate_reservations(scope,key_id,request_id,accepted_at)
@@ -130,12 +158,12 @@ func (s *Service) Status(ctx context.Context, p access.Principal, id string) (pr
 	if !protocol.ValidUUID(id) {
 		return protocol.ExportStatus{}, ErrNotFound
 	}
-	familyID, err := s.family(ctx, p)
+	familyID, err := s.sessionFamily(p)
 	if err != nil {
 		return protocol.ExportStatus{}, err
 	}
 	var result protocol.ExportStatus
-	err = s.options.Security.WithAuthorizedSnapshot(ctx, p, familyID, "export_family", func(tx pgx.Tx, grant access.Grant) error {
+	err = s.withFamily(ctx, p, familyID, true, func(tx pgx.Tx, grant access.Grant) error {
 		if grant.Role != "owner" {
 			return ErrOwnerRequired
 		}
@@ -195,11 +223,11 @@ func (s *Service) Download(ctx context.Context, p access.Principal, id string, o
 	if !protocol.ValidUUID(id) || out == nil {
 		return ErrNotFound
 	}
-	familyID, err := s.family(ctx, p)
+	familyID, err := s.sessionFamily(p)
 	if err != nil {
 		return err
 	}
-	return s.options.Security.WithAuthorizedSnapshot(ctx, p, familyID, "export_family", func(tx pgx.Tx, grant access.Grant) error {
+	return s.withFamily(ctx, p, familyID, true, func(tx pgx.Tx, grant access.Grant) error {
 		if grant.Role != "owner" {
 			return ErrOwnerRequired
 		}

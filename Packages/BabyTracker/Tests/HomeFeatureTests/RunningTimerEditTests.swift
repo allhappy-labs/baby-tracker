@@ -63,9 +63,14 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
     #expect(editor.parts[0].seconds == 600)
     #expect(editor.parts[1].volumeML == 50)
     #expect(editor.parts[1].contents == .breastMilk)
-    #expect(editor.runningSideText?.hasPrefix("Right breast · since ") == true)
+    #expect(editor.parts[0].start == timer.startedAt)
+    #expect(editor.parts[0].end == timer.currentSideStartedAt)
+    #expect(editor.parts[1].start == nil)
+    #expect(editor.runningPart?.title == "Right breast")
+    #expect(editor.runningPart?.start == timer.currentSideStartedAt)
     #expect(editor.title == "Edit feed")
-    #expect(editor.durationText(for: editor.parts[0]) == "10m")
+    #expect(editor.lengthText(for: editor.parts[0]) == "10m")
+    #expect(editor.lengthText(for: editor.parts[1]) == nil)
     #expect(editor.volumeText(for: editor.parts[1]) == "50 ml")
 }
 
@@ -77,7 +82,7 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
 
     #expect(editor.title == "Edit sleep")
     #expect(editor.parts.isEmpty)
-    #expect(editor.runningSideText == nil)
+    #expect(editor.runningPart == nil)
 }
 
 @MainActor
@@ -147,7 +152,8 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
 
     editor.shiftStart(by: -600)
     // The side began with the feed, so the editor shows it moving too.
-    #expect(editor.runningSideText == "Left breast · since \(HomeCopy.clockTime(original.addingTimeInterval(-600), zone: timer.timeZoneID))")
+    #expect(editor.runningPart?.title == "Left breast")
+    #expect(editor.runningPart?.start == original.addingTimeInterval(-600))
     #expect(editor.canSave)
     #expect(try await editor.save())
 
@@ -165,7 +171,7 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
     let leftEnd = try #require(timer.completedComponents[0].endedAt)
     let editor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
 
-    editor.parts[0].seconds = 300
+    editor.parts[0].start = leftEnd.addingTimeInterval(-300)
     editor.parts[1].volumeML = 70
     editor.parts[1].contents = .formula
     #expect(try await editor.save())
@@ -177,6 +183,64 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
         .bottle(id: bottle, volumeML: 70, contents: .formula),
     ])
     #expect(timer.currentSide == .right)
+}
+
+@MainActor
+@Test func aFinishedSideIsEditedByItsEnd() async throws {
+    let (store, babyID, _, timer) = try feedWithParts()
+    let editor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
+    let left = editor.parts[0]
+    let start = try #require(left.start)
+    #expect(left.end == start.addingTimeInterval(600))
+
+    editor.parts[0].end = start.addingTimeInterval(480)
+
+    #expect(editor.canSave)
+    #expect(try await editor.save())
+    #expect(timer.completedComponents[0].durationSeconds == 480)
+    #expect(timer.completedComponents[0].endedAt == start.addingTimeInterval(480))
+}
+
+@MainActor
+@Test func aPartEndPastTheRunningSideIsRefused() throws {
+    let (store, babyID, _, timer) = try feedWithParts()
+    let editor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
+    let sideStart = try #require(timer.currentSideStartedAt)
+
+    editor.parts[0].end = sideStart.addingTimeInterval(30)
+
+    #expect(!editor.canSave)
+    #expect(editor.validationMessage == RunningTimerEditCopy.partsExceedElapsed)
+}
+
+/// Moved later without growing, the part still ends inside the running side.
+@MainActor
+@Test func aPartMovedIntoTheRunningSideIsRefused() async throws {
+    let (store, babyID, _, timer) = try feedWithParts()
+    let before = timer.completedComponents
+    let editor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
+    let start = timer.startedAt
+    let sideStart = try #require(timer.currentSideStartedAt)
+    #expect(editor.latestPartEnd == sideStart)
+
+    editor.parts[0].start = start.addingTimeInterval(100)
+    editor.parts[0].end = start.addingTimeInterval(630)
+
+    #expect(!editor.canSave)
+    #expect(editor.validationMessage == RunningTimerEditCopy.partsExceedElapsed)
+    #expect(try await !editor.save())
+    #expect(timer.completedComponents == before)
+}
+
+@MainActor
+@Test func aPartEndingBeforeItStartsIsRefused() throws {
+    let (store, babyID, _, timer) = try feedWithParts()
+    let editor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
+
+    editor.parts[0].end = timer.startedAt.addingTimeInterval(-60)
+
+    #expect(!editor.canSave)
+    #expect(editor.validationMessage == RunningTimerEditCopy.partsExceedElapsed)
 }
 
 @MainActor
@@ -209,9 +273,8 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
     #expect(editor.startRange.lowerBound == clock.now.addingTimeInterval(-86_400))
 
     // An untied side stays where it began whatever the start does.
-    let sideText = editor.runningSideText
     editor.shiftStart(by: -300)
-    #expect(editor.runningSideText == sideText)
+    #expect(editor.runningPart?.start == sideStart)
 
     editor.startedAt = sideStart.addingTimeInterval(30)
     #expect(!editor.canSave)
@@ -220,10 +283,11 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
 
 @MainActor
 @Test func partsLongerThanTheFeedHasRunAreExplained() throws {
-    let (store, babyID, _, _) = try feedWithParts()
+    let (store, babyID, _, timer) = try feedWithParts()
     let editor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
 
-    editor.parts[0].seconds = 660
+    // Begun a minute before the feed did.
+    editor.parts[0].start = timer.startedAt.addingTimeInterval(-60)
     #expect(!editor.canSave)
     #expect(editor.validationMessage == "The finished parts add up to more time than the feed has run. Shorten a part or move the start earlier.")
 
@@ -296,8 +360,13 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
     #expect(RunningTimerEditCopy.dialHint == "Edit the start time and the parts so far")
     #expect(RunningTimerEditCopy.startEarlier == "5 minutes earlier")
     #expect(RunningTimerEditCopy.startLater == "5 minutes later")
-    #expect(RunningTimerEditCopy.durationAccessibilityLabel("Left breast") == "Left breast duration")
+    #expect(RunningTimerEditCopy.partStart == "Start")
+    #expect(RunningTimerEditCopy.partEnd == "End")
+    #expect(RunningTimerEditCopy.running == "Running")
+    #expect(RunningTimerEditCopy.length == "Length")
     #expect(RunningTimerEditCopy.volumeAccessibilityLabel("Bottle 2") == "Bottle 2 volume")
+    #expect(RunningTimerEditCopy.partStartAccessibilityLabel("Left breast") == "Left breast start")
+    #expect(RunningTimerEditCopy.partEndAccessibilityLabel("Left breast") == "Left breast end")
 }
 
 /// The other phone made the same correction while the sheet was open: the
@@ -317,35 +386,6 @@ private func feedWithParts() throws -> (BabyStore, UUID, TestDateProvider, Activ
     #expect(try await editor.save())
     #expect(editor.validationMessage == nil)
     #expect(timer.startedAt == original.addingTimeInterval(-300))
-}
-
-/// Stated, not measured, so it has to follow what is on the sheet.
-@MainActor
-@Test func theSheetGrowsWithWhatIsOnIt() throws {
-    let (store, babyID, clock) = try freshStore()
-    let sleep = try store.startSleep(for: babyID)
-    let sleepEditor = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor())
-    let startOnly = sleepEditor.sheetHeight
-    sleepEditor.startedAt = clock.now.addingTimeInterval(600)
-    #expect(sleepEditor.sheetHeight > startOnly)   // the message row
-    clock.advance(by: 60)
-    _ = try store.stopSleep(sleep)
-
-    let feed = try store.startPart(.breast(.left), for: babyID)
-    let running = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor()).sheetHeight
-    #expect(running > startOnly)
-    clock.advance(by: 600)
-    // Two finished parts on one still-running timer can no longer be built
-    // live — built directly, as a legacy remote timer would leave it.
-    feed.completedComponents = [
-        .breast(id: UUID(), side: .left, seconds: 600, startedAt: feed.startedAt, endedAt: clock.now),
-        .bottle(id: UUID(), volumeML: 50, contents: .formula),
-    ]
-    feed.currentSide = .right
-    feed.currentSideStartedAt = clock.now
-    try store.context.save()
-    let withParts = try #require(HomeViewModel(store: store, babyID: babyID).makeTimerEditor()).sheetHeight
-    #expect(withParts > running)
 }
 
 /// The `-uiTestJoinedFeed` case: Right runs, joined to a Left part that ended

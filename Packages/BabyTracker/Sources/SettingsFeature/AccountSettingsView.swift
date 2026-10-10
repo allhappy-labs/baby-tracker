@@ -78,7 +78,7 @@ public struct AccountSettingsView<Model: FamilySyncSettingsModel>: View {
         .navigationTitle(AccountCopy.title)
         .task { await model.refreshExportAvailability() }
         .disabled(isWorking)
-        .sheet(isPresented: $showingDeletion) {
+        .fittedSheet(isPresented: $showingDeletion) {
             FamilyLifecycleConfirmationView(
                 confirmation: .init(
                     title: AccountCopy.deleteTitle, body: FamilyLifecycleCopy.deleteAccount,

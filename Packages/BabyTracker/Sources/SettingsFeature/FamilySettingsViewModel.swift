@@ -65,6 +65,21 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
     /// including for an engine built mid-session by creating or joining.
     @ObservationIgnored private var isForeground = false
 
+    /// Tells the push registrar when a family session is active and when it
+    /// ends. Nil in tests that are not about push, and in the UI-test graphs.
+    @ObservationIgnored public var pushLifecycle: PushLifecycle?
+    /// How the next successful activation came about. `.signedIn` from a
+    /// sign-in, create, join or recovery until an activation succeeds; a
+    /// launch or a `withSyncStopped` restart is `.restored`.
+    @ObservationIgnored private var nextPushActivation: PushActivation = .restored
+    /// The push work in flight, in order: an `activated` always runs after
+    /// the work before it, including an `ending`. Not awaited by activation:
+    /// an upload must not hold up sign-in or the launch sync.
+    @ObservationIgnored private var pushWork: Task<Void, Never>?
+    /// Bumped by every `endPush`. An `activated` still queued when push ends
+    /// belongs to the ended session and is dropped.
+    @ObservationIgnored private var pushGeneration = 0
+
     /// `makeEngine` is nil in tests that are not about sync, and the model
     /// then behaves exactly as it did before sync was wired.
     public init(
@@ -181,6 +196,9 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
             throw FamilySyncError.displayNameConfirmationRequired
         }
         if case .shared = coordinator.mode {
+            // A new session: the server may have swept this device's token
+            // with the old one.
+            owePushUpload()
             // Fresh Apple proof clears the old engine's sign-in-required
             // state even when the family key and recovery epoch are unchanged.
             await stopEngine()
@@ -201,6 +219,9 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         // still-authorized one gets its engine straight back.
         let state = try await withSyncStopped { try await coordinator.refreshAppleCredentialState() }
         if state.endsAuthorization {
+            // Only known afterwards, so the DELETE may be refused; the
+            // registrar forgets the session either way.
+            await endPush()
             // The shared realm was just purged, so a later sign-in has to
             // start from the family's records like any new device.
             leaveFamilySync(forgetting: syncedKey)
@@ -369,6 +390,9 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         // `.local` — this device's saved invitation codes belong to the
         // family it is about to leave, not whatever realm it lands on next.
         let codeStore = invitationCodeStore
+        // While the session can still authenticate the DELETE. A disconnect
+        // that fails brings sync back, and its activation uploads again.
+        await endPush()
         try await withSyncStopped {
             try await coordinator.revokeDeviceBindingAndSessions(familyKey, client: client)
         }
@@ -382,6 +406,7 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         confirmationCopy = FamilyLifecycleCopy.leave
         let codeStore = invitationCodeStore
         var serverLeft = false
+        await endPush()
         try await withSyncStopped(restartUnless: { serverLeft }) {
             try await client.leaveFamily()
             serverLeft = true
@@ -440,6 +465,7 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         if isOwner, hasFamily || isRecoveryOnly { throw FamilySyncError.ownerTransferRequired }
         let codeStore = invitationCodeStore
         var serverDeleted = false
+        await endPush()
         try await withSyncStopped(restartUnless: { serverDeleted }) {
             try await perform(.deleteAccount)
             serverDeleted = true
@@ -469,6 +495,9 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         members = try await client.recoverFamily()
         coordinator.completeRecovery()
         profile = CaregiverProfile(accountID: profile.accountID, displayName: profile.displayName, role: "owner")
+        // A recovery-only session had no family session, so the server's
+        // sweep may have dropped this device's token meanwhile.
+        owePushUpload()
         await installEngineForCurrentSession()
         await activate()
     }
@@ -477,6 +506,7 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         var forfeited: FamilySessionKey?
         if case .recovery(let familyKey) = coordinator.mode { forfeited = familyKey }
         let codeStore = invitationCodeStore
+        await endPush()
         try await client.forfeitFamilyRecovery()
         coordinator.forfeitRecovery()
         leaveFamilySync(forgetting: forfeited)
@@ -547,6 +577,33 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         engine?.localWriteHappened()
     }
 
+    /// A background push: one sync through the engine's ordinary path, as a
+    /// live hint would run it. True when the engine ended up to date.
+    ///
+    /// An engine that has not activated in this process activates instead,
+    /// as `sceneBecameActive` does. That is the case for a push that relaunched
+    /// the app in the background: the session was restored at launch, but
+    /// with no scene nothing called `startSyncing`. Activation is that
+    /// launch's one pull, and it finishes an owner's import. One already
+    /// running is joined through `syncNow` instead of started twice. Polling
+    /// is not started: there is no scene to poll for.
+    public func syncNowForBackgroundPush() async -> Bool {
+        guard case .shared = mode, let engine else { return false }
+        if activationPending && !activating {
+            await activate()
+        } else {
+            await engine.syncNow(.backgroundPush)
+        }
+        if case .upToDate = engine.status { return true }
+        return false
+    }
+
+    /// Waits for the push work started so far. For tests: activation hands
+    /// push its session without waiting for the upload.
+    func pushSettled() async {
+        await pushWork?.value
+    }
+
     // MARK: Internals
 
     /// Scoped to `store.activeRealm`, computed fresh on every use rather than
@@ -586,6 +643,7 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
 
     private func enterFamily(as entry: FamilyEntry) async throws {
         guard case .shared(let familyKey) = coordinator.mode else { return }
+        owePushUpload()
         // Recorded before anything else can fail: how this device entered is
         // what every later launch activates by, and guessing it wrong either
         // re-imports nothing for an owner or uploads a joiner's own history.
@@ -634,12 +692,18 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         guard let engine, let familyKey = engineKey else { return }
         activating = true
         defer { activating = false }
+        let pushGenerationBefore = pushGeneration
         do {
             switch FamilyEntryRecord.entry(for: familyKey, in: defaults) {
             case .owner: try await engine.activateAsOwner()
             case .joiner, nil: try await engine.activateAsJoiner()
             }
             activationPending = false
+            if let endpoint = coordinator.confirmedEndpoint,
+               mayHandPushTheSession(familyKey, endedSince: pushGenerationBefore) {
+                startPush(familyKey, endpoint, nextPushActivation)
+            }
+            nextPushActivation = .restored
         } catch {
             // Not the caller's error — the status line shows it — but the
             // one place that says why a phone is not syncing.
@@ -657,6 +721,80 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         case let error as URLError: "URLError \(error.code.rawValue)"
         default: String(reflecting: type(of: error))
         }
+    }
+
+    /// Whether an activation that just returned may hand push its session.
+    ///
+    /// An activation that "succeeded" does not prove the session is alive.
+    /// A removal found by its own sync purges the realm, marks the account
+    /// signed out and ends push from inside the engine call, and the call
+    /// still returns normally. A later launch restores the same Keychain
+    /// session, and the engine returns at once because the account may not
+    /// sync. Neither may re-register the token: the upload would only be
+    /// refused. The generation check covers any ending during the call; the
+    /// account check is the same gate the engine itself uses.
+    private func mayHandPushTheSession(_ familyKey: FamilySessionKey, endedSince generation: Int) -> Bool {
+        guard pushGeneration == generation else { return false }
+        return (try? store.accountAllowsOrdinarySync(familyKey.leaseKey)) == true
+    }
+
+    /// Hands push the session that just activated, after any push work
+    /// already queued, without waiting for it. Dropped if push ended while it
+    /// waited: that session is over.
+    private func startPush(_ familyKey: FamilySessionKey, _ endpoint: ConfirmedEndpoint, _ activation: PushActivation) {
+        guard let pushLifecycle else { return }
+        let previous = pushWork
+        let generation = pushGeneration
+        pushWork = Task { @MainActor [weak self] in
+            await previous?.value
+            guard let self, self.pushGeneration == generation else { return }
+            await pushLifecycle.activated(familyKey, endpoint, activation)
+        }
+    }
+
+    /// Sign-out, leaving, removal: the registrar deletes the token and
+    /// forgets the session. Awaited (the registrar bounds it), and before the
+    /// engine stops, while the session can still authenticate the DELETE.
+    /// `withSyncStopped`'s temporary stop never calls this.
+    ///
+    /// It does not wait for the push work before it. An upload stuck on the
+    /// network would hold up leaving. The registrar already lands an upload
+    /// in flight before its DELETE, within its own deadline. An activation
+    /// still queued is dropped by the generation bump. Later push work still
+    /// queues behind the ending, so a new session's upload follows the DELETE.
+    private func endPush() async {
+        await beginEndingPush()?.value
+    }
+
+    /// `endPush` without waiting for the DELETE: the generation bump and the
+    /// queueing happen before this returns.
+    private func beginEndingPush() -> Task<Void, Never>? {
+        guard let pushLifecycle else { return nil }
+        pushGeneration += 1
+        let previous = pushWork
+        let ending = Task { @MainActor in await pushLifecycle.ending() }
+        pushWork = Task { @MainActor in
+            await previous?.value
+            await ending.value
+        }
+        return ending
+    }
+
+    /// Ordinary sync found this device removed from the family, and the
+    /// engine has already purged the realm. Push ends in the same order as a
+    /// leave, but is not awaited: the engine calls this mid-sync, and the
+    /// DELETE will be refused anyway (the session is gone).
+    func membershipEndedBySync() {
+        _ = beginEndingPush()
+    }
+
+    /// A sign-in, join, re-authentication or recovery has begun. The upload
+    /// is owed from now: the next activation is `.signedIn`, and the stored
+    /// fingerprint is forgotten at once. If the activation fails and the app
+    /// is killed, the next launch's `.restored` activation still uploads.
+    private func owePushUpload() {
+        nextPushActivation = .signedIn
+        pushLifecycle?.invalidate()
     }
 
     /// Stops the engine and waits until nothing it started is in flight.

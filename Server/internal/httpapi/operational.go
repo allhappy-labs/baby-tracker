@@ -39,22 +39,17 @@ func serverHandler(options Options) http.HandlerFunc {
 			writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestIDFromContext(request.Context()), true)
 			return
 		}
-		// Application readiness is evaluated at most once per request.
-		checked, ready := false, false
-		applicationReady := func() bool {
-			if !checked {
-				checked = true
-				ready = options.Readiness != nil && options.Readiness.Check(request.Context()) == nil
-			}
-			return ready
-		}
+		// refresh-recovery-v1 is advertised from configuration alone, never
+		// withdrawn while the node is not ready: an iOS client awaiting a
+		// recovery acknowledgement treats its absence as terminal and signs
+		// the parent out, while the recovery routes already refuse with a
+		// retryable 503 until the node is ready.
 		capabilityOptions := options
-		// LiveActivityReadiness is the cheap worker-local state; check it first.
-		if options.LiveActivityService != nil && (options.LiveActivityReadiness == nil || options.LiveActivityReadiness.Check(request.Context()) != nil || !applicationReady()) {
+		// live-activity-push-v1 is advertised only while registration is
+		// served: the worker (its cheap local state first) and the node are
+		// ready (main's rule).
+		if liveActivityConfigured(options) && (options.LiveActivityReady(request.Context()) != nil || options.Readiness == nil || options.Readiness.Check(request.Context()) != nil) {
 			capabilityOptions.LiveActivityService = nil
-		}
-		if options.RecoveryEnabled && (!applicationReady() || options.RecoveryReadiness == nil || options.RecoveryReadiness.Check(request.Context()) != nil) {
-			capabilityOptions.RecoveryEnabled = false
 		}
 		writeJSON(w, http.StatusOK, protocol.ServerInfo{
 			InstanceID:             instanceID,

@@ -86,91 +86,110 @@ func validHostedEnvironment(t *testing.T) map[string]string {
 	pageTokenPepper := filepath.Join(directory, "page-token-pepper")
 	actorPepper := filepath.Join(directory, "actor-pepper")
 	ratePepper := filepath.Join(directory, "rate-pepper")
-	revocationDatabaseURL := filepath.Join(directory, "apple-revocation-database-url")
 	for index, path := range []string{identityPepper, sessionPepper, devicePepper, notificationPepper, invitationPepper, pageTokenPepper, actorPepper, ratePepper} {
 		if err := os.WriteFile(path, []byte(strings.Repeat(string("12345678"[index]), 64)), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(revocationDatabaseURL, []byte("postgres://apple-revoker@sync.example.test/babytracker\n"), 0o600); err != nil {
+	maintenanceURL := filepath.Join(directory, "maintenance-database-url")
+	if err := os.WriteFile(maintenanceURL, []byte("postgres://maintenance@sync.example.test/babytracker\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	return map[string]string{
-		"BT_MODE":                               "hosted",
-		"BT_DATABASE_URL":                       "postgres://sync.example.test/babytracker",
-		"BT_PROJECTOR_DATABASE_URL":             "postgres://projector@sync.example.test/babytracker",
-		"BT_PUBLIC_ORIGIN":                      "https://sync.example.test",
-		"BT_SERVER_INSTANCE_ID":                 "123e4567-e89b-12d3-a456-426614174000",
-		"BT_RECOVERY_EPOCH":                     "7",
-		"BT_HOSTED_PROVIDER_ID":                 "fixture-provider",
-		"BT_HOSTED_REGION":                      "eu-test-1",
-		"BT_HOSTED_APPROVED_REGIONS":            "eu-test-1,eu-test-2",
-		"BT_HOSTED_LEDGER_FAILURE_DOMAIN":       "ledger-domain",
-		"BT_HOSTED_HEAD_FAILURE_DOMAIN":         "head-domain",
-		"BT_HOSTED_LEDGER_KEY_ID":               "ledger-key-v1",
-		"BT_HOSTED_HEAD_KEY_ID":                 "head-key-v1",
-		"BT_HOSTED_VAULT_KEY_ID":                "vault-key-v1",
-		"BT_SECURITY_REPLAY_SCRATCH_PATH":       "/var/lib/babytracker/replay-scratch",
-		"BT_SECURITY_REPLAY_SCRATCH_MAX_BYTES":  "67108864",
-		"BT_APPLE_AUDIENCE":                     "com.example.babytracker",
-		"BT_SESSION_SIGNING_KEY_FILE":           sessionPepper,
-		"BT_IDENTITY_KEY_ID":                    "identity.v1",
-		"BT_IDENTITY_PEPPER_FILE":               identityPepper,
-		"BT_SESSION_TOKEN_KEY_ID":               "session.v1",
-		"BT_DEVICE_CONTINUITY_KEY_ID":           "device.v1",
-		"BT_DEVICE_CONTINUITY_PEPPER_FILE":      devicePepper,
-		"BT_APPLE_NOTIFICATION_KEY_ID":          "notification.v1",
-		"BT_APPLE_NOTIFICATION_PEPPER_FILE":     notificationPepper,
-		"BT_INVITATION_KEY_ID":                  "invitation.v1",
-		"BT_INVITATION_PEPPER_FILE":             invitationPepper,
-		"BT_PAGE_TOKEN_KEY_ID":                  "page.v1",
-		"BT_PAGE_TOKEN_KEY_FILE":                pageTokenPepper,
-		"BT_ACTOR_ID_PEPPER_FILE":               actorPepper,
-		"BT_RATE_LIMIT_PEPPER_FILE":             ratePepper,
-		"BT_TRUSTED_PROXY_CIDRS":                "10.0.0.0/8,192.168.0.0/16",
-		"BT_APPLE_REVOCATION_DATABASE_URL_FILE": revocationDatabaseURL,
-		"BT_APPLE_REVOCATION_WORKER_ID":         "hosted-worker-1",
+		"BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE": maintenanceURL,
+		"BT_MODE":                           "hosted",
+		"BT_DATABASE_URL":                   "postgres://sync.example.test/babytracker",
+		"BT_PUBLIC_ORIGIN":                  "https://sync.example.test",
+		"BT_SERVER_INSTANCE_ID":             "123e4567-e89b-12d3-a456-426614174000",
+		"BT_RECOVERY_EPOCH":                 "7",
+		"BT_APPLE_AUDIENCE":                 "com.example.babytracker",
+		"BT_SESSION_SIGNING_KEY_FILE":       sessionPepper,
+		"BT_IDENTITY_KEY_ID":                "identity.v1",
+		"BT_IDENTITY_PEPPER_FILE":           identityPepper,
+		"BT_SESSION_TOKEN_KEY_ID":           "session.v1",
+		"BT_DEVICE_CONTINUITY_KEY_ID":       "device.v1",
+		"BT_DEVICE_CONTINUITY_PEPPER_FILE":  devicePepper,
+		"BT_APPLE_NOTIFICATION_KEY_ID":      "notification.v1",
+		"BT_APPLE_NOTIFICATION_PEPPER_FILE": notificationPepper,
+		"BT_INVITATION_KEY_ID":              "invitation.v1",
+		"BT_INVITATION_PEPPER_FILE":         invitationPepper,
+		"BT_PAGE_TOKEN_KEY_ID":              "page.v1",
+		"BT_PAGE_TOKEN_KEY_FILE":            pageTokenPepper,
+		"BT_ACTOR_ID_PEPPER_FILE":           actorPepper,
+		"BT_RATE_LIMIT_PEPPER_FILE":         ratePepper,
+		"BT_TRUSTED_PROXY_CIDRS":            "10.0.0.0/8,192.168.0.0/16",
 	}
 }
 
-func TestLoadSeparatesRuntimeAndProjectorCredentials(t *testing.T) {
-	values := validHostedEnvironment(t)
-	cfg, err := Load(mapGetter(values))
-	if err != nil {
+// writeCredentialFile writes a one-line database URL file and returns its path.
+func writeCredentialFile(t *testing.T, url string) string {
+	t.Helper()
+	path := filepath.Join(t.TempDir(), "database-url")
+	if err := os.WriteFile(path, []byte(url+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if cfg.ProjectorDatabaseURL != values["BT_PROJECTOR_DATABASE_URL"] {
-		t.Fatal("projector database credential was not loaded")
-	}
-	if !cfg.Lifecycle.Enabled || cfg.Lifecycle.WorkerID != "hosted-worker-1" || cfg.Lifecycle.DatabaseURL != "postgres://apple-revoker@sync.example.test/babytracker" {
-		t.Fatalf("lifecycle worker configuration was not loaded: %+v", cfg.Lifecycle)
-	}
-	for _, test := range []struct {
-		name   string
-		mutate func(map[string]string)
-	}{
-		{name: "missing", mutate: func(values map[string]string) { delete(values, "BT_PROJECTOR_DATABASE_URL") }},
-		{name: "same as runtime", mutate: func(values map[string]string) { values["BT_PROJECTOR_DATABASE_URL"] = values["BT_DATABASE_URL"] }},
-	} {
-		t.Run(test.name, func(t *testing.T) {
-			values := maps.Clone(validHostedEnvironment(t))
-			test.mutate(values)
-			if _, err := Load(mapGetter(values)); err == nil {
-				t.Fatal("unsafe database role configuration was accepted")
+	return path
+}
+
+func TestLoadNeedsTheRuntimeAndMaintenanceCredentials(t *testing.T) {
+	for _, mode := range []string{"hosted", "self_hosted", "development"} {
+		t.Run(mode, func(t *testing.T) {
+			values := validHostedEnvironment(t)
+			values["BT_MODE"] = mode
+			cfg, err := Load(mapGetter(values))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if cfg.DatabaseURL != values["BT_DATABASE_URL"] {
+				t.Fatal("runtime database credential was not loaded")
+			}
+			if !cfg.RecoveryCleanup.Enabled || cfg.RecoveryCleanup.WorkerDatabaseURL != "postgres://maintenance@sync.example.test/babytracker" {
+				t.Fatalf("maintenance database credential was not loaded: %+v", cfg.RecoveryCleanup)
 			}
 		})
 	}
+	values := validHostedEnvironment(t)
+	values["BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE"] = writeCredentialFile(t, values["BT_DATABASE_URL"])
+	if _, err := Load(mapGetter(values)); err == nil || !strings.Contains(err.Error(), "recovery maintenance credential must differ") {
+		t.Fatalf("recovery maintenance sharing the runtime credential: %v", err)
+	}
+}
 
-	projectorFile := filepath.Join(t.TempDir(), "projector-database-url")
-	if err := os.WriteFile(projectorFile, []byte("postgres://projector-file@sync.example.test/babytracker\n"), 0o600); err != nil {
+// Decision D3: retention, the family purge and wakes run as the
+// maintenance principal, so every mode refuses to start without its
+// credential, naming both settings that supply it. The export credential
+// alone supplies it.
+func TestMaintenanceCredentialIsRequired(t *testing.T) {
+	for _, mode := range []string{"hosted", "self_hosted", "development"} {
+		t.Run(mode, func(t *testing.T) {
+			values := validHostedEnvironment(t)
+			values["BT_MODE"] = mode
+			delete(values, "BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE")
+			_, err := Load(mapGetter(values))
+			if err == nil {
+				t.Fatal("configuration without a maintenance credential accepted")
+			}
+			for _, name := range []string{"BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE", "BT_EXPORT_DATABASE_URL_FILE", "maintenance principal"} {
+				if !strings.Contains(err.Error(), name) {
+					t.Fatalf("refusal does not name %s: %v", name, err)
+				}
+			}
+		})
+	}
+	values := validHostedEnvironment(t)
+	delete(values, "BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE")
+	keys := filepath.Join(t.TempDir(), "export-keys.json")
+	if err := os.WriteFile(keys, []byte(`{"export.v1":"`+strings.Repeat("ab", 32)+`"}`), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	values = validHostedEnvironment(t)
-	delete(values, "BT_PROJECTOR_DATABASE_URL")
-	values["BT_PROJECTOR_DATABASE_URL_FILE"] = projectorFile
-	cfg, err = Load(mapGetter(values))
-	if err != nil || cfg.ProjectorDatabaseURL != "postgres://projector-file@sync.example.test/babytracker" {
-		t.Fatalf("projector file credential not loaded: cfg=%+v err=%v", cfg, err)
+	values["BT_EXPORT_DATABASE_URL_FILE"] = writeCredentialFile(t, "postgres://export@sync.example.test/babytracker")
+	values["BT_EXPORT_KEYS_FILE"], values["BT_EXPORT_KEY_ID"] = keys, "export.v1"
+	cfg, err := Load(mapGetter(values))
+	if err != nil {
+		t.Fatalf("export credential alone refused: %v", err)
+	}
+	if !cfg.RecoveryCleanup.Enabled || cfg.RecoveryCleanup.WorkerDatabaseURL != "postgres://export@sync.example.test/babytracker" {
+		t.Fatalf("export credential did not supply maintenance: %+v", cfg.RecoveryCleanup)
 	}
 }
 
@@ -185,8 +204,8 @@ func TestLoadRejectsUnsafeProductionConfiguration(t *testing.T) {
 		"invalid instance id":           func(v map[string]string) { v["BT_SERVER_INSTANCE_ID"] = "shared" },
 		"zero recovery epoch":           func(v map[string]string) { v["BT_RECOVERY_EPOCH"] = "0" },
 		"unsafe integer recovery epoch": func(v map[string]string) { v["BT_RECOVERY_EPOCH"] = "9007199254740992" },
-		"missing hosted provider":       func(v map[string]string) { delete(v, "BT_HOSTED_PROVIDER_ID") },
-		"same ledger and head domain":   func(v map[string]string) { v["BT_HOSTED_HEAD_FAILURE_DOMAIN"] = v["BT_HOSTED_LEDGER_FAILURE_DOMAIN"] },
+		"retired ledger directory":      func(v map[string]string) { v["BT_SECURITY_LEDGER_DIR"] = "/var/lib/babytracker/security-ledger" },
+		"retired projector credential":  func(v map[string]string) { v["BT_PROJECTOR_DATABASE_URL_FILE"] = "/run/secrets/projector_database_url" },
 	}
 	for name, mutate := range tests {
 		t.Run(name, func(t *testing.T) {

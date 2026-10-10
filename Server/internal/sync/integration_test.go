@@ -14,10 +14,13 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/care"
+	"babytracker/server/internal/delivery"
 	"babytracker/server/internal/diagnostics"
+	"babytracker/server/internal/family"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
-	"babytracker/server/internal/security"
+	"babytracker/server/internal/realtime"
 	familysync "babytracker/server/internal/sync"
 	"babytracker/server/internal/testkit"
 	"github.com/jackc/pgx/v5"
@@ -29,35 +32,44 @@ func TestMutationDiagnosticsRunAfterAuthorizedFenceRelease(t *testing.T) {
 	var phases []diagnostics.Phase
 	var blocked []diagnostics.Phase
 	ctx := diagnostics.WithRecorder(t.Context(), func(_ context.Context, phase diagnostics.Phase, _ time.Duration) {
-		// ExecutePrepared needs an exclusive authority fence. If this callback
-		// runs inside the mutation's shared lease, it times out as security_busy.
+		// The mutation's guarded transaction holds the family row lock until
+		// it ends. An independent authority transaction that takes the same
+		// lock without waiting succeeds only if this callback runs after it.
 		reentryCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 		defer cancel()
-		_, err := h.Security.ExecutePrepared(reentryCtx, func(context.Context, security.AuthoritySnapshot) (security.PreparedCommand, error) {
-			return security.PreparedCommand{}, nil
-		})
-		if security.Code(err) == "security_busy" {
+		tx, err := h.Migrator.Begin(reentryCtx)
+		if err != nil {
+			t.Errorf("independent authority reentry for %s: %v", phase, err)
+			return
+		}
+		defer tx.Rollback(reentryCtx)
+		if _, err = tx.Exec(reentryCtx, `SELECT set_config('app.authority','1',true)`); err == nil {
+			_, err = tx.Exec(reentryCtx, `SELECT 1 FROM families WHERE id=$1 FOR UPDATE NOWAIT`, h.FamilyID)
+		}
+		var pgErr *pgconn.PgError
+		if errors.As(err, &pgErr) && pgErr.Code == "55P03" {
 			blocked = append(blocked, phase)
-		} else if security.Code(err) != "invalid_command" {
+		} else if err != nil {
 			t.Errorf("independent authority reentry for %s returned %v", phase, err)
 		}
 		phases = append(phases, phase)
 	})
 	mutation := testkit.MustMutation(t, "baby.json")
-	outcome, err := h.Service.Apply(ctx, h.Owner, h.FamilyID, mutation)
+	service := newService(h, h.Authority, h.Limits, func() time.Time { return h.Now }, delivery.NewObserver(discardHints{}, nil))
+	outcome, err := service.Apply(ctx, h.Owner, h.FamilyID, mutation)
 	if err != nil || outcome.Status != "applied" {
 		t.Fatalf("mutation outcome status=%q err=%v", outcome.Status, err)
 	}
 	var database, observer int
 	for _, phase := range phases {
 		if phase == diagnostics.Database {
-			database++ // guarded transaction plus actual repository Apply
+			database++ // the guarded transaction
 		}
 		if phase == diagnostics.Observer {
-			observer++ // actual hosted Schedule
+			observer++ // the post-commit publish
 		}
 	}
-	if database < 2 || observer < 1 || len(blocked) != 0 {
+	if database < 1 || observer < 1 || len(blocked) != 0 {
 		t.Fatalf("diagnostic phases=%v, callbacks blocked under fence=%v", phases, blocked)
 	}
 }
@@ -76,9 +88,9 @@ func TestReceiptReplayPreservesFirstResult(t *testing.T) {
 	if !reflect.DeepEqual(first.CanonicalEntity, again.CanonicalEntity) || first.Cursor == nil || again.Cursor == nil || *first.Cursor != *again.Cursor {
 		t.Fatal("replay changed accepted result")
 	}
-	journalCount, receiptCount := h.Count(t, "mutation_journal", h.FamilyID), h.Count(t, "mutation_receipts", h.FamilyID)
-	if journalCount != 1 || receiptCount != 1 {
-		t.Fatalf("durable counts journal=%d receipt=%d", journalCount, receiptCount)
+	sequence, receiptCount := int(h.FamilySequence(t)), h.Count(t, "care_receipts", h.FamilyID)
+	if sequence != 1 || receiptCount != 1 {
+		t.Fatalf("durable counts sequence=%d receipt=%d", sequence, receiptCount)
 	}
 }
 
@@ -102,7 +114,7 @@ func TestOrdinaryUpdateReportsOverwrittenVersionForEveryCanonicalKind(t *testing
 			t.Fatalf("%s update=%+v err=%v", fixture, updated, err)
 		}
 	}
-	if h.Count(t, "feed_entries", h.FamilyID) != 1 || h.Count(t, "sleep_entries", h.FamilyID) != 1 || h.Count(t, "diaper_entries", h.FamilyID) != 1 || h.Count(t, "supplement_entries", h.FamilyID) != 1 {
+	if h.CareCount(t, "feed", h.FamilyID) != 1 || h.CareCount(t, "sleep", h.FamilyID) != 1 || h.CareCount(t, "diaper", h.FamilyID) != 1 || h.CareCount(t, "supplement", h.FamilyID) != 1 {
 		t.Fatal("typed rows missing")
 	}
 }
@@ -129,8 +141,8 @@ func TestTombstoneCannotResurrect(t *testing.T) {
 	if err != nil || later.Status != "superseded" || later.Code == nil || *later.Code != "entity_deleted" || later.CanonicalEntity == nil || later.CanonicalEntity.Payload != nil {
 		t.Fatalf("later=%+v err=%v", later, err)
 	}
-	if h.Count(t, "mutation_journal", h.FamilyID) != 3 || h.Count(t, "mutation_receipts", h.FamilyID) != 4 {
-		t.Fatalf("journal=%d receipts=%d", h.Count(t, "mutation_journal", h.FamilyID), h.Count(t, "mutation_receipts", h.FamilyID))
+	if int(h.FamilySequence(t)) != 3 || h.Count(t, "care_receipts", h.FamilyID) != 4 {
+		t.Fatalf("sequence=%d receipts=%d", int(h.FamilySequence(t)), h.Count(t, "care_receipts", h.FamilyID))
 	}
 }
 
@@ -148,7 +160,7 @@ func TestPermanentRejectionReplaysAfterDomainChanges(t *testing.T) {
 	if err != nil || again.Status != "already_applied" || again.OriginalStatus == nil || *again.OriginalStatus != "rejected" {
 		t.Fatalf("again=%+v err=%v", again, err)
 	}
-	if h.Count(t, "feed_entries", h.FamilyID) != 0 {
+	if h.CareCount(t, "feed", h.FamilyID) != 0 {
 		t.Fatal("replayed rejection wrote record")
 	}
 }
@@ -190,7 +202,7 @@ func TestDecodedSemanticValidationFailuresAreStableReceiptedRejections(t *testin
 			}
 		})
 	}
-	if h.Count(t, "mutation_receipts", h.FamilyID) != 4 || h.Count(t, "mutation_journal", h.FamilyID) != 0 {
+	if h.Count(t, "care_receipts", h.FamilyID) != 4 || int(h.FamilySequence(t)) != 0 {
 		t.Fatal("stable validation rejection durability mismatch")
 	}
 }
@@ -210,7 +222,7 @@ func TestMutationByteBoundaryIsStableAndMinimumPageSurvivesConfigLowering(t *tes
 		t.Fatalf("canonical bytes=%d err=%v", len(canonical), err)
 	}
 	h.Limits.SyncMutationBytes = len(canonical) - 1
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	rejected, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, large)
 	if err != nil || rejected.Status != "rejected" || rejected.Code == nil || *rejected.Code != "mutation_too_large" {
 		t.Fatalf("rejected=%+v err=%v", rejected, err)
@@ -225,7 +237,7 @@ func TestMutationByteBoundaryIsStableAndMinimumPageSurvivesConfigLowering(t *tes
 	accepted.EntityID = "30000000-0000-4000-8000-000000000710"
 	h.Limits.SyncMutationBytes = len(canonical)
 	h.Limits.SyncPageBytes = 4 << 20
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	outcome, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, accepted)
 	if err != nil || outcome.Status != "applied" {
 		t.Fatalf("boundary outcome=%+v err=%v", outcome, err)
@@ -234,8 +246,9 @@ func TestMutationByteBoundaryIsStableAndMinimumPageSurvivesConfigLowering(t *tes
 	// Page admission is permanently based on the legal 64 KiB minimum, so a
 	// later operator restart may lower the configured page bound safely.
 	h.Limits.SyncPageBytes = protocol.MinimumSyncPageBytes
-	h.RebuildSyncService(t)
-	page, err := h.Service.ApplyAndPull(t.Context(), h.Owner, h.SyncRequest(h.Cursor(1), nil))
+	h.RebuildSyncService(t, h.Limits)
+	response, err := h.Service.ApplyAndPull(t.Context(), h.Owner, h.SyncRequest(h.Cursor(1), nil))
+	page := testkit.Decoded(t, response)
 	if err != nil || len(page.Changes) != 1 || page.Changes[0].EntityID != accepted.EntityID {
 		t.Fatalf("lowered page=%+v err=%v", page, err)
 	}
@@ -255,7 +268,7 @@ func TestReceiptDifferentHashRejected(t *testing.T) {
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, changed); !errors.Is(err, familysync.ErrMutationIDReused) {
 		t.Fatalf("err=%v", err)
 	}
-	if h.Count(t, "mutation_journal", h.FamilyID) != 1 || h.Count(t, "mutation_receipts", h.FamilyID) != 1 {
+	if int(h.FamilySequence(t)) != 1 || h.Count(t, "care_receipts", h.FamilyID) != 1 {
 		t.Fatal("collision changed storage")
 	}
 }
@@ -280,137 +293,136 @@ func TestReceiptSurvivesAuthenticatedDeviceReauthentication(t *testing.T) {
 	}
 }
 
-type harnessResolver struct{ h *testkit.Harness }
-
-func (r harnessResolver) Current(ctx context.Context, p access.Principal) (string, error) {
-	view, err := r.h.Family.Current(ctx, p)
-	return view.ID, err
+// newService is the harness sync service over guard, limits, clock and
+// publisher (nil: none).
+func newService(h *testkit.Harness, guard authority.RequestGuard, limits protocol.Limits, now func() time.Time, publisher care.Publisher) *familysync.Service {
+	info := h.Info
+	info.Limits = &limits
+	service := familysync.New(familysync.Options{Guard: guard, Server: info, Limits: limits, Now: now,
+		Publisher: publisher, PageKeys: testkit.PageKeyring("page.v1", 0x77), Allowed: family.Allowed})
+	service.SetImportAdmission(h.Importer)
+	return service
 }
 
-type captureObserver struct {
-	schedules, publishes      int
-	grant                     access.Grant
-	device                    string
-	failSchedule, failPublish bool
+type discardHints struct{}
+
+func (discardHints) Publish(context.Context, realtime.Hint) {}
+
+// capturePublisher records post-commit publishes.
+type capturePublisher struct {
+	publishes   int
+	cursors     []protocol.Cursor
+	failPublish bool
 }
 
-var errInjectedCommitBoundary = errors.New("injected commit boundary failure")
-
-type errorRow struct{ err error }
-
-func (r errorRow) Scan(...any) error { return r.err }
-
-type faultTx struct {
-	pgx.Tx
-	mode string
-}
-
-func (tx faultTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
-	if tx.mode == "after_entity" && strings.Contains(sql, "INSERT INTO mutation_journal") {
-		return pgconn.CommandTag{}, errInjectedCommitBoundary
-	}
-	if tx.mode == "after_journal" && strings.Contains(sql, "SET last_sequence=$3") {
-		return pgconn.CommandTag{}, errInjectedCommitBoundary
-	}
-	// Child cascades journal bounded homogeneous batches. Let the root batch
-	// complete, then fail the first dependent batch to retain the original
-	// after-first-journal atomicity coverage.
-	if tx.mode == "after_journal" && strings.Contains(sql, "child-cascade-journal") && len(args) > 6 && args[6] == "feed" {
-		return pgconn.CommandTag{}, errInjectedCommitBoundary
-	}
-	return tx.Tx.Exec(ctx, sql, args...)
-}
-func (tx faultTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
-	if tx.mode == "before_receipt" && strings.Contains(sql, "app.save_mutation_receipt") {
-		return errorRow{errInjectedCommitBoundary}
-	}
-	return tx.Tx.QueryRow(ctx, sql, args...)
-}
-
-type faultGuard struct {
-	inner records.Guard
-	mode  string
-}
-
-func (g faultGuard) WithAuthorizedTransaction(ctx context.Context, p access.Principal, familyID, action string, run func(pgx.Tx, access.Grant) error) error {
-	return g.inner.WithAuthorizedTransaction(ctx, p, familyID, action, func(tx pgx.Tx, grant access.Grant) error { return run(faultTx{Tx: tx, mode: g.mode}, grant) })
-}
-
-func (o *captureObserver) Schedule(_ context.Context, _ pgx.Tx, grant access.Grant, device string, _ protocol.Cursor) error {
-	o.schedules++
-	o.grant, o.device = grant, device
-	if o.failSchedule {
-		return errors.New("schedule failed")
-	}
-	return nil
-}
-func (o *captureObserver) Publish(_ context.Context, _ string, _ protocol.Cursor) error {
+func (o *capturePublisher) Publish(_ context.Context, _ string, cursor protocol.Cursor) error {
 	o.publishes++
+	o.cursors = append(o.cursors, cursor)
 	if o.failPublish {
 		return errors.New("publish failed")
 	}
 	return nil
 }
 
-func TestCommitObserverSchedulesInTransactionAndPublishesOnlyAfterCommit(t *testing.T) {
+var errInjectedCommitBoundary = errors.New("injected commit boundary failure")
+
+// faultTx fails a write transaction at its commit boundary: the write
+// batch (care_entities upsert, receipts, family row) runs, then its results
+// report an injected failure, so the transaction must roll back with
+// everything the batch wrote.
+type faultTx struct{ pgx.Tx }
+
+type faultResults struct{ pgx.BatchResults }
+
+func (r faultResults) Close() error {
+	_ = r.BatchResults.Close()
+	return errInjectedCommitBoundary
+}
+
+func (tx faultTx) SendBatch(ctx context.Context, b *pgx.Batch) pgx.BatchResults {
+	for _, query := range b.QueuedQueries {
+		if strings.Contains(query.SQL, "INSERT INTO care_entities") {
+			return faultResults{tx.Tx.SendBatch(ctx, b)}
+		}
+	}
+	return tx.Tx.SendBatch(ctx, b)
+}
+
+type faultGuard struct{ authority.RequestGuard }
+
+func (g faultGuard) WithFamilyTx(ctx context.Context, p access.Principal, action string, run func(pgx.Tx, access.Grant) error) error {
+	return g.RequestGuard.WithFamilyTx(ctx, p, action, func(tx pgx.Tx, grant access.Grant) error { return run(faultTx{Tx: tx}, grant) })
+}
+
+// WithRequestTx faults the request seam's transaction the same way, so
+// ServeSync meets the write-boundary failure too.
+func (g faultGuard) WithRequestTx(ctx context.Context, req authority.Request, action string, run func(pgx.Tx, access.Principal, access.Grant) error) error {
+	return g.RequestGuard.WithRequestTx(ctx, req, action, func(tx pgx.Tx, p access.Principal, grant access.Grant) error {
+		return run(faultTx{Tx: tx}, p, grant)
+	})
+}
+
+// The new high water is published once, after the commit, with the batch's
+// last sequence; the write transaction schedules nothing.
+func TestPublisherRunsOnlyAfterCommitWithTheHighWater(t *testing.T) {
 	h := testkit.New(t)
-	observer := &captureObserver{}
-	service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, observer)
+	publisher := &capturePublisher{}
+	service := newService(h, h.Authority, h.Limits, func() time.Time { return h.Now }, publisher)
 	outcome, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json"))
 	if err != nil || outcome.Status != "applied" {
 		t.Fatalf("outcome=%+v err=%v", outcome, err)
 	}
-	if observer.schedules != 1 || observer.publishes != 1 || observer.grant.AccountID != h.Owner.AccountID || observer.device != h.Owner.DeviceID {
-		t.Fatalf("observer=%+v", observer)
+	if publisher.publishes != 1 || publisher.cursors[0] != *outcome.Cursor {
+		t.Fatalf("publisher=%+v outcome cursor=%+v", publisher, outcome.Cursor)
 	}
 }
 
-func TestCommitObserverScheduleFailureRollsBackAndPublishFailureDoesNotLieAboutCommit(t *testing.T) {
-	t.Run("schedule", func(t *testing.T) {
+func TestFailedWriteTransactionPublishesNothingAndPublishFailureDoesNotLieAboutCommit(t *testing.T) {
+	t.Run("rolled back", func(t *testing.T) {
 		h := testkit.New(t)
-		observer := &captureObserver{failSchedule: true}
-		service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, observer)
-		if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err == nil {
-			t.Fatal("schedule failure accepted")
+		publisher := &capturePublisher{}
+		service := newService(h, faultGuard{RequestGuard: h.Authority}, h.Limits, func() time.Time { return h.Now }, publisher)
+		if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); !errors.Is(err, errInjectedCommitBoundary) {
+			t.Fatalf("err=%v", err)
 		}
-		if h.Count(t, "babies", h.FamilyID) != 0 || h.Count(t, "mutation_journal", h.FamilyID) != 0 || h.Count(t, "mutation_receipts", h.FamilyID) != 0 || observer.publishes != 0 {
-			t.Fatal("schedule failure left durable or published state")
+		if h.CareCount(t, "baby", h.FamilyID) != 0 || h.FamilySequence(t) != 0 || h.Count(t, "care_receipts", h.FamilyID) != 0 || publisher.publishes != 0 {
+			t.Fatal("rolled back write left durable or published state")
 		}
 	})
 	t.Run("publish", func(t *testing.T) {
 		h := testkit.New(t)
-		observer := &captureObserver{failPublish: true}
-		service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, observer)
+		publisher := &capturePublisher{failPublish: true}
+		service := newService(h, h.Authority, h.Limits, func() time.Time { return h.Now }, publisher)
 		outcome, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json"))
 		if err != nil || outcome.Status != "applied" {
 			t.Fatalf("outcome=%+v err=%v", outcome, err)
 		}
-		if h.Count(t, "mutation_receipts", h.FamilyID) != 1 || observer.publishes != 1 {
+		if h.Count(t, "care_receipts", h.FamilyID) != 1 || publisher.publishes != 1 {
 			t.Fatal("post-commit publish changed commit result")
 		}
 	})
 }
 
-func TestCommitObserverIgnoresCursorBearingNoopAndReceiptReplay(t *testing.T) {
-	h := testkit.New(t)
-	observer := &captureObserver{}
-	service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, observer)
+func TestPublisherIgnoresCursorBearingNoopAndReceiptReplay(t *testing.T) {
+	h := testkit.NewAtFixtureClock(t) // timer-feed.json's start is a day before it; an edit reaches a week back
+	publisher := &capturePublisher{}
+	service := newService(h, h.Authority, h.Limits, func() time.Time { return h.Now }, publisher)
 	h.Service = service
 	baby := testkit.MustMutation(t, "baby.json")
 	if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, baby); err != nil {
 		t.Fatal(err)
 	}
-	observer.schedules, observer.publishes = 0, 0
+	publisher.publishes = 0
 	if replay, err := service.Apply(t.Context(), h.Owner, h.FamilyID, baby); err != nil || replay.Status != "already_applied" {
 		t.Fatalf("replay=%+v err=%v", replay, err)
 	}
-	if observer.schedules != 0 || observer.publishes != 0 {
-		t.Fatalf("receipt replay observed schedules=%d publishes=%d", observer.schedules, observer.publishes)
+	if publisher.publishes != 0 {
+		t.Fatalf("receipt replay published %d", publisher.publishes)
 	}
 	started := h.StartFeed(t, h.Owner, testkit.TimerA)
 	payload := started.CanonicalEntity.Payload.(protocol.TimerStartPayload)
 	before := h.FamilySequence(t)
-	observer.schedules, observer.publishes = 0, 0
+	publisher.publishes = 0
 	startedAt := payload.StartedAt
 	edit := protocol.Mutation{MutationID: h.CommandID(), EntityID: testkit.TimerA, EntityKind: "timer", Operation: "update",
 		PayloadVersion: 5, ClientMutationTime: startedAt,
@@ -422,23 +434,24 @@ func TestCommitObserverIgnoresCursorBearingNoopAndReceiptReplay(t *testing.T) {
 	if noop.Status != "applied" || noop.Cursor == nil || noop.Cursor.Sequence != before || h.FamilySequence(t) != before {
 		t.Fatalf("unchanged-edit noop=%+v before=%d after=%d", noop, before, h.FamilySequence(t))
 	}
-	if observer.schedules != 0 || observer.publishes != 0 {
-		t.Fatalf("unchanged-edit no-op observed schedules=%d publishes=%d", observer.schedules, observer.publishes)
+	if publisher.publishes != 0 {
+		t.Fatalf("unchanged-edit no-op published %d", publisher.publishes)
 	}
 }
 
-func TestMutationFaultsRollbackAfterEntityAfterJournalAndBeforeReceipt(t *testing.T) {
-	for _, mode := range []string{"after_entity", "after_journal", "before_receipt"} {
-		t.Run(mode, func(t *testing.T) {
-			h := testkit.New(t)
-			service := familysync.NewServiceWithResolver(faultGuard{inner: h.Security, mode: mode}, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
-			if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); !errors.Is(err, errInjectedCommitBoundary) {
-				t.Fatalf("err=%v", err)
-			}
-			if h.Count(t, "babies", h.FamilyID) != 0 || h.Count(t, "mutation_journal", h.FamilyID) != 0 || h.Count(t, "mutation_receipts", h.FamilyID) != 0 || h.FamilySequence(t) != 0 {
-				t.Fatal("fault left partial transaction")
-			}
-		})
+// A failure at the write batch's commit boundary (rows, receipts and the
+// family row already sent) rolls the whole transaction back.
+func TestMutationFaultAtTheWriteBatchRollsBackEverything(t *testing.T) {
+	h := testkit.New(t)
+	service := newService(h, faultGuard{RequestGuard: h.Authority}, h.Limits, func() time.Time { return h.Now }, nil)
+	if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); !errors.Is(err, errInjectedCommitBoundary) {
+		t.Fatalf("err=%v", err)
+	}
+	if h.CareCount(t, "baby", h.FamilyID) != 0 || h.Count(t, "care_receipts", h.FamilyID) != 0 || h.FamilySequence(t) != 0 {
+		t.Fatal("fault left partial transaction")
+	}
+	if outcome, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil || outcome.Status != "applied" {
+		t.Fatalf("retry=%+v err=%v", outcome, err)
 	}
 }
 
@@ -447,16 +460,16 @@ func TestTransientQuotaRollbackHasNoReceiptOrPartialState(t *testing.T) {
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 		t.Fatal(err)
 	}
-	h.ExecFamily(t, `UPDATE family_record_usage SET charged_storage_bytes=$2 WHERE family_id=$1`, h.FamilyID, h.Limits.MaxChargedStorageBytesPerFamily-1)
-	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "feed-bottle.json")); !errors.Is(err, records.ErrQuotaExceeded) {
+	h.ExecFamily(t, `UPDATE families SET care_charged_bytes=$2 WHERE id=$1`, h.FamilyID, h.Limits.MaxChargedStorageBytesPerFamily-1)
+	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "feed-bottle.json")); !errors.Is(err, care.ErrQuotaExceeded) {
 		t.Fatalf("err=%v", err)
 	}
-	if h.Count(t, "feed_entries", h.FamilyID) != 0 || h.Count(t, "mutation_journal", h.FamilyID) != 1 || h.Count(t, "mutation_receipts", h.FamilyID) != 1 {
+	if h.CareCount(t, "feed", h.FamilyID) != 0 || int(h.FamilySequence(t)) != 1 || h.Count(t, "care_receipts", h.FamilyID) != 1 {
 		t.Fatal("quota failure left partial durable state")
 	}
 }
 
-func TestTimerStopFaultAfterFirstJournalRollsBackAtomically(t *testing.T) {
+func TestTimerStopFaultAtTheWriteBatchRollsBackAtomically(t *testing.T) {
 	h := testkit.New(t)
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 		t.Fatal(err)
@@ -466,16 +479,16 @@ func TestTimerStopFaultAfterFirstJournalRollsBackAtomically(t *testing.T) {
 		t.Fatal(err)
 	}
 	stop := timerStopMutation(t, start, fixtureUUID(910), "20000000-0000-4000-8000-000000000910")
-	service := familysync.NewServiceWithResolver(faultGuard{inner: h.Security, mode: "after_journal"}, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
+	service := newService(h, faultGuard{RequestGuard: h.Authority}, h.Limits, func() time.Time { return h.Now }, nil)
 	if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, stop); !errors.Is(err, errInjectedCommitBoundary) {
 		t.Fatalf("err=%v", err)
 	}
-	if h.Count(t, "feed_entries", h.FamilyID) != 0 || h.Count(t, "mutation_journal", h.FamilyID) != 2 || h.Count(t, "mutation_receipts", h.FamilyID) != 2 || h.FamilySequence(t) != 2 {
+	if h.CareCount(t, "feed", h.FamilyID) != 0 || int(h.FamilySequence(t)) != 2 || h.Count(t, "care_receipts", h.FamilyID) != 2 || h.FamilySequence(t) != 2 {
 		t.Fatal("fault left partial timer completion")
 	}
 	stop.MutationID = fixtureUUID(911)
 	outcome, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, stop)
-	if err != nil || outcome.Status != "applied" || h.Count(t, "feed_entries", h.FamilyID) != 1 {
+	if err != nil || outcome.Status != "applied" || h.CareCount(t, "feed", h.FamilyID) != 1 {
 		t.Fatalf("retry=%+v err=%v", outcome, err)
 	}
 }
@@ -493,15 +506,15 @@ func TestTimerStopQuotaRollbackAndRecordCountAccounting(t *testing.T) {
 	if count != 0 {
 		t.Fatalf("active timer counted as canonical record: %d", count)
 	}
-	h.ExecFamily(t, `UPDATE family_record_usage SET canonical_record_count=$2 WHERE family_id=$1`, h.FamilyID, h.Limits.MaxCanonicalRecordsPerFamily)
+	h.ExecFamily(t, `UPDATE families SET care_record_count=$2 WHERE id=$1`, h.FamilyID, h.Limits.MaxCanonicalRecordsPerFamily)
 	stop := timerStopMutation(t, start, fixtureUUID(920), "20000000-0000-4000-8000-000000000920")
-	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, stop); !errors.Is(err, records.ErrQuotaExceeded) {
+	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, stop); !errors.Is(err, care.ErrQuotaExceeded) {
 		t.Fatalf("err=%v", err)
 	}
-	if h.Count(t, "feed_entries", h.FamilyID) != 0 || h.Count(t, "mutation_journal", h.FamilyID) != 2 || h.Count(t, "mutation_receipts", h.FamilyID) != 2 {
+	if h.CareCount(t, "feed", h.FamilyID) != 0 || int(h.FamilySequence(t)) != 2 || h.Count(t, "care_receipts", h.FamilyID) != 2 {
 		t.Fatal("quota failure left partial timer state")
 	}
-	h.ExecFamily(t, `UPDATE family_record_usage SET canonical_record_count=0 WHERE family_id=$1`, h.FamilyID)
+	h.ExecFamily(t, `UPDATE families SET care_record_count=0 WHERE id=$1`, h.FamilyID)
 	stop.MutationID = fixtureUUID(921)
 	if outcome, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, stop); err != nil || outcome.Status != "applied" {
 		t.Fatalf("stop=%+v err=%v", outcome, err)
@@ -512,7 +525,7 @@ func TestTimerStopQuotaRollbackAndRecordCountAccounting(t *testing.T) {
 	}
 }
 
-func TestChildCascadeFaultAfterFirstJournalRollsBackAtomically(t *testing.T) {
+func TestChildCascadeFaultAtTheWriteBatchRollsBackAtomically(t *testing.T) {
 	h := testkit.New(t)
 	baby := testkit.MustMutation(t, "baby.json")
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, baby); err != nil {
@@ -523,11 +536,11 @@ func TestChildCascadeFaultAfterFirstJournalRollsBackAtomically(t *testing.T) {
 	}
 	deleted := baby
 	deleted.MutationID, deleted.Operation, deleted.Payload = fixtureUUID(930), "delete", protocol.DeletePayload{}
-	service := familysync.NewServiceWithResolver(faultGuard{inner: h.Security, mode: "after_journal"}, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
+	service := newService(h, faultGuard{RequestGuard: h.Authority}, h.Limits, func() time.Time { return h.Now }, nil)
 	if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, deleted); !errors.Is(err, errInjectedCommitBoundary) {
 		t.Fatalf("err=%v", err)
 	}
-	if h.Count(t, "mutation_journal", h.FamilyID) != 2 || h.Count(t, "mutation_receipts", h.FamilyID) != 2 || h.FamilySequence(t) != 2 {
+	if int(h.FamilySequence(t)) != 2 || h.Count(t, "care_receipts", h.FamilyID) != 2 || h.FamilySequence(t) != 2 {
 		t.Fatal("cascade fault left partial durable state")
 	}
 	deleted.MutationID = fixtureUUID(931)
@@ -558,13 +571,13 @@ func TestRecordDeleteReceiptRemainsQuotaExempt(t *testing.T) {
 			if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, feed); err != nil {
 				t.Fatal(err)
 			}
-			h.ExecFamily(t, `UPDATE family_record_usage SET canonical_record_count=$2,charged_storage_bytes=$3 WHERE family_id=$1`, h.FamilyID, test.count, test.bytes)
+			h.ExecFamily(t, `UPDATE families SET care_record_count=$2,care_charged_bytes=$3 WHERE id=$1`, h.FamilyID, test.count, test.bytes)
 			limits := h.Limits
 			limits.MaxCanonicalRecordsPerFamily = 100
 			limits.MaxChargedStorageBytesPerFamily = 16 << 20
 			info := h.Info
 			info.Limits = &limits
-			service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), info, limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
+			service := newService(h, h.Authority, limits, func() time.Time { return h.Now }, nil)
 			babyID := feed.Payload.(protocol.FeedPayload).BabyID
 			del := protocol.Mutation{MutationID: fixtureUUID(550), EntityID: feed.EntityID, EntityKind: "feed", Operation: "delete", PayloadVersion: 1, ObservedEntityVersion: 1, ClientMutationTime: "2026-09-20T15:00:00.000000Z", Payload: protocol.DeletePayload{BabyID: &babyID}}
 			outcome, err := service.Apply(t.Context(), h.Owner, h.FamilyID, del)
@@ -575,14 +588,14 @@ func TestRecordDeleteReceiptRemainsQuotaExempt(t *testing.T) {
 			if count != test.count-1 {
 				t.Fatalf("count=%d want=%d", count, test.count-1)
 			}
-			if h.Count(t, "mutation_receipts", h.FamilyID) != 3 {
+			if h.Count(t, "care_receipts", h.FamilyID) != 3 {
 				t.Fatal("delete receipt missing")
 			}
 		})
 	}
 }
 
-func TestRejectedDeleteAboveQuotaDoesNotPersistReceipt(t *testing.T) {
+func TestRejectedDeleteAboveQuotaIsRefusedLikeLegacy(t *testing.T) {
 	h := testkit.New(t)
 	first := testkit.MustMutation(t, "baby.json")
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, first); err != nil {
@@ -601,7 +614,7 @@ func TestRejectedDeleteAboveQuotaDoesNotPersistReceipt(t *testing.T) {
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, feed); err != nil {
 		t.Fatal(err)
 	}
-	h.ExecFamily(t, `UPDATE family_record_usage SET canonical_record_count=101,charged_storage_bytes=$2 WHERE family_id=$1`, h.FamilyID, (16<<20)+(1<<20))
+	h.ExecFamily(t, `UPDATE families SET care_record_count=101,care_charged_bytes=$2 WHERE id=$1`, h.FamilyID, (16<<20)+(1<<20))
 	wrongParent := second.EntityID
 	del := protocol.Mutation{MutationID: fixtureUUID(561), EntityID: feed.EntityID, EntityKind: "feed", Operation: "delete", PayloadVersion: 1, ObservedEntityVersion: 1, ClientMutationTime: "2026-09-20T15:00:00.000000Z", Payload: protocol.DeletePayload{BabyID: &wrongParent}}
 	limits := h.Limits
@@ -609,22 +622,26 @@ func TestRejectedDeleteAboveQuotaDoesNotPersistReceipt(t *testing.T) {
 	limits.MaxChargedStorageBytesPerFamily = 16 << 20
 	info := h.Info
 	info.Limits = &limits
-	service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), info, limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
-	if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, del); !errors.Is(err, records.ErrQuotaExceeded) {
-		t.Fatalf("err=%v", err)
+	service := newService(h, h.Authority, limits, func() time.Time { return h.Now }, nil)
+	// Receipts are charged (docs/protocol/v1.md, quota; Ruling R1-I2), as
+	// the legacy store charged them: a delete that is rejected releases
+	// nothing, so its receipt over the quota is refused, and nothing is
+	// written. Only an applied delete's receipt is never refused.
+	if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, del); !errors.Is(err, care.ErrQuotaExceeded) {
+		t.Fatalf("over-quota rejected delete: %v", err)
 	}
-	if h.Count(t, "mutation_receipts", h.FamilyID) != 3 || h.Count(t, "mutation_journal", h.FamilyID) != 3 {
-		t.Fatal("over-quota rejected delete persisted")
+	if h.Count(t, "care_receipts", h.FamilyID) != 3 || int(h.FamilySequence(t)) != 3 {
+		t.Fatal("the refused delete wrote a receipt or a change")
 	}
 }
 
 func TestTransientRollbackHasNoReceipt(t *testing.T) {
 	h := testkit.New(t)
 	h.ExecFamily(t, `UPDATE families SET next_sequence=9007199254740991 WHERE id=$1`, h.FamilyID)
-	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err == nil {
-		t.Fatal("exhausted cursor accepted")
+	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); !errors.Is(err, care.ErrSequenceExhausted) {
+		t.Fatalf("exhausted cursor: %v", err)
 	}
-	if h.Count(t, "babies", h.FamilyID) != 0 || h.Count(t, "mutation_journal", h.FamilyID) != 0 || h.Count(t, "mutation_receipts", h.FamilyID) != 0 || h.FamilySequence(t) != protocol.MaxSafeInteger {
+	if h.CareCount(t, "baby", h.FamilyID) != 0 || h.Count(t, "care_receipts", h.FamilyID) != 0 || h.FamilySequence(t) != protocol.MaxSafeInteger {
 		t.Fatal("cursor exhaustion left partial state")
 	}
 }
@@ -635,11 +652,11 @@ func TestConfiguredCanonicalRecordAndBabyCapsRollbackWithoutReceipt(t *testing.T
 		if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 			t.Fatal(err)
 		}
-		h.ExecFamily(t, `UPDATE family_record_usage SET canonical_record_count=$2 WHERE family_id=$1`, h.FamilyID, h.Limits.MaxCanonicalRecordsPerFamily)
-		if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "sleep.json")); !errors.Is(err, records.ErrQuotaExceeded) {
+		h.ExecFamily(t, `UPDATE families SET care_record_count=$2 WHERE id=$1`, h.FamilyID, h.Limits.MaxCanonicalRecordsPerFamily)
+		if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "sleep.json")); !errors.Is(err, care.ErrQuotaExceeded) {
 			t.Fatalf("err=%v", err)
 		}
-		if h.Count(t, "sleep_entries", h.FamilyID) != 0 || h.Count(t, "mutation_receipts", h.FamilyID) != 1 {
+		if h.CareCount(t, "sleep", h.FamilyID) != 0 || h.Count(t, "care_receipts", h.FamilyID) != 1 {
 			t.Fatal("record cap left state")
 		}
 	})
@@ -649,7 +666,7 @@ func TestConfiguredCanonicalRecordAndBabyCapsRollbackWithoutReceipt(t *testing.T
 		limits.MaxLiveBabies = 1
 		info := h.Info
 		info.Limits = &limits
-		service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), info, limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
+		service := newService(h, h.Authority, limits, func() time.Time { return h.Now }, nil)
 		if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 			t.Fatal(err)
 		}
@@ -659,10 +676,10 @@ func TestConfiguredCanonicalRecordAndBabyCapsRollbackWithoutReceipt(t *testing.T
 		payload := second.Payload.(protocol.BabyPayload)
 		payload.Name = "Over cap"
 		second.Payload = payload
-		if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, second); !errors.Is(err, records.ErrQuotaExceeded) {
+		if _, err := service.Apply(t.Context(), h.Owner, h.FamilyID, second); !errors.Is(err, care.ErrQuotaExceeded) {
 			t.Fatalf("err=%v", err)
 		}
-		if h.Count(t, "babies", h.FamilyID) != 1 || h.Count(t, "mutation_receipts", h.FamilyID) != 1 {
+		if h.CareCount(t, "baby", h.FamilyID) != 1 || h.Count(t, "care_receipts", h.FamilyID) != 1 {
 			t.Fatal("baby cap left state")
 		}
 	})
@@ -707,7 +724,7 @@ func TestReceiptReplayPrecedesChangedQuotaAdmission(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.ExecFamily(t, `UPDATE family_record_usage SET charged_storage_bytes=$2 WHERE family_id=$1`, h.FamilyID, h.Limits.MaxChargedStorageBytesPerFamily)
+	h.ExecFamily(t, `UPDATE families SET care_charged_bytes=$2 WHERE id=$1`, h.FamilyID, h.Limits.MaxChargedStorageBytesPerFamily)
 	again, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, m)
 	if err != nil || again.Status != "already_applied" || again.Cursor == nil || first.Cursor == nil || *again.Cursor != *first.Cursor {
 		t.Fatalf("again=%+v err=%v", again, err)
@@ -735,10 +752,10 @@ func TestReceiptCollisionInOldFamilyRollsBackTentativeNewFamilyWrite(t *testing.
 	if _, err = h.Service.Apply(t.Context(), fresh, created.ID, m); !errors.Is(err, familysync.ErrMutationIDReused) {
 		t.Fatalf("err=%v", err)
 	}
-	if h.Count(t, "babies", created.ID) != 0 || h.Count(t, "mutation_journal", created.ID) != 0 || h.Count(t, "mutation_receipts", created.ID) != 0 {
+	if h.CareCount(t, "baby", created.ID) != 0 || h.SequenceOf(t, fresh.AccountID, created.ID) != 0 || h.CountAs(t, "care_receipts", created.ID, fresh.AccountID) != 0 {
 		t.Fatal("collision left tentative state in new family")
 	}
-	if h.Count(t, "babies", h.FamilyID) != 1 || h.Count(t, "mutation_receipts", h.FamilyID) != 1 {
+	if h.CareCount(t, "baby", h.FamilyID) != 1 || h.Count(t, "care_receipts", h.FamilyID) != 1 {
 		t.Fatal("collision changed original family")
 	}
 }
@@ -751,7 +768,7 @@ func TestCrossAccountDeviceContinuityCannotReadReceipt(t *testing.T) {
 	if err := h.CrossAccountContinuity("outsider", "owner"); auth.Code(err) != "device_continuity_invalid" {
 		t.Fatalf("code=%q err=%v", auth.Code(err), err)
 	}
-	if h.Count(t, "mutation_receipts", h.FamilyID) != 1 {
+	if h.Count(t, "care_receipts", h.FamilyID) != 1 {
 		t.Fatal("cross-account continuity changed receipt")
 	}
 }
@@ -774,32 +791,32 @@ func TestSameMutationIDOnTwoAuthenticatedDevicesIsIndependent(t *testing.T) {
 	if err != nil || secondOutcome.Status != "rejected" || secondOutcome.Code == nil || *secondOutcome.Code != "entity_exists" {
 		t.Fatalf("second=%+v err=%v", secondOutcome, err)
 	}
-	if h.Count(t, "mutation_receipts", h.FamilyID) != 2 || h.Count(t, "mutation_journal", h.FamilyID) != 1 {
+	if h.Count(t, "care_receipts", h.FamilyID) != 2 || int(h.FamilySequence(t)) != 1 {
 		t.Fatal("device-scoped receipts were not independent")
 	}
 }
 
 type pausingGuard struct {
-	inner   records.Guard
+	authority.RequestGuard
 	once    sync.Once
 	entered chan struct{}
 	release chan struct{}
 }
 
 type preSQLGuard struct {
-	inner   records.Guard
+	authority.RequestGuard
 	entered chan struct{}
 	release chan struct{}
 	once    sync.Once
 }
 
-func (g *preSQLGuard) WithAuthorizedTransaction(ctx context.Context, p access.Principal, familyID, action string, run func(pgx.Tx, access.Grant) error) error {
+func (g *preSQLGuard) WithFamilyTx(ctx context.Context, p access.Principal, action string, run func(pgx.Tx, access.Grant) error) error {
 	g.once.Do(func() { close(g.entered); <-g.release })
-	return g.inner.WithAuthorizedTransaction(ctx, p, familyID, action, run)
+	return g.RequestGuard.WithFamilyTx(ctx, p, action, run)
 }
 
-func (g *pausingGuard) WithAuthorizedTransaction(ctx context.Context, p access.Principal, familyID, action string, run func(pgx.Tx, access.Grant) error) error {
-	return g.inner.WithAuthorizedTransaction(ctx, p, familyID, action, func(tx pgx.Tx, grant access.Grant) error {
+func (g *pausingGuard) WithFamilyTx(ctx context.Context, p access.Principal, action string, run func(pgx.Tx, access.Grant) error) error {
+	return g.RequestGuard.WithFamilyTx(ctx, p, action, func(tx pgx.Tx, grant access.Grant) error {
 		err := run(tx, grant)
 		g.once.Do(func() { close(g.entered); <-g.release })
 		return err
@@ -808,11 +825,11 @@ func (g *pausingGuard) WithAuthorizedTransaction(ctx context.Context, p access.P
 
 func TestCommitOrderFollowsFamilyLock(t *testing.T) {
 	h := testkit.New(t)
-	guard := &pausingGuard{inner: h.Security, entered: make(chan struct{}), release: make(chan struct{})}
+	guard := &pausingGuard{RequestGuard: h.Authority, entered: make(chan struct{}), release: make(chan struct{})}
 	var ticks atomic.Int64
 	clock := func() time.Time { return h.Now.Add(time.Duration(ticks.Add(1)) * time.Second) }
-	firstService := familysync.NewServiceWithResolver(guard, records.NewRepository(), h.Info, h.Limits, clock, harnessResolver{h}, nil)
-	secondService := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, clock, harnessResolver{h}, nil)
+	firstService := newService(h, guard, h.Limits, clock, nil)
+	secondService := newService(h, h.Authority, h.Limits, clock, nil)
 	firstMutation := testkit.MustMutation(t, "baby.json")
 	secondMutation := testkit.MustMutation(t, "baby.json")
 	secondMutation.MutationID = fixtureUUID(70)
@@ -859,7 +876,7 @@ func TestCommitOrderFollowsFamilyLock(t *testing.T) {
 func TestServerAcceptanceTimeUsesCanonicalTiesToEvenMicroseconds(t *testing.T) {
 	h := testkit.New(t)
 	accepted := time.Date(2026, 9, 21, 13, 0, 0, 123456500, time.UTC)
-	service := familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, func() time.Time { return accepted }, harnessResolver{h}, nil)
+	service := newService(h, h.Authority, h.Limits, func() time.Time { return accepted }, nil)
 	outcome, err := service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -871,8 +888,8 @@ func TestServerAcceptanceTimeUsesCanonicalTiesToEvenMicroseconds(t *testing.T) {
 
 func TestRevocationFencePreventsLaterWrite(t *testing.T) {
 	h := testkit.New(t)
-	guard := &pausingGuard{inner: h.Security, entered: make(chan struct{}), release: make(chan struct{})}
-	service := familysync.NewServiceWithResolver(guard, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
+	guard := &pausingGuard{RequestGuard: h.Authority, entered: make(chan struct{}), release: make(chan struct{})}
+	service := newService(h, guard, h.Limits, func() time.Time { return h.Now }, nil)
 	writeDone := make(chan error, 1)
 	go func() {
 		_, err := service.Apply(context.Background(), h.Caregiver, h.FamilyID, testkit.MustMutation(t, "baby.json"))
@@ -908,15 +925,15 @@ func TestRevocationFencePreventsLaterWrite(t *testing.T) {
 	if _, err := h.Service.Apply(t.Context(), h.Caregiver, h.FamilyID, later); err == nil {
 		t.Fatal("revoked principal wrote after removal")
 	}
-	if h.Count(t, "babies", h.FamilyID) != 1 {
+	if h.CareCount(t, "baby", h.FamilyID) != 1 {
 		t.Fatal("revoked write changed rows")
 	}
 }
 
 func TestRevocationCommittedBeforeSQLAuthorizationDeniesStaleRequest(t *testing.T) {
 	h := testkit.New(t)
-	guard := &preSQLGuard{inner: h.Security, entered: make(chan struct{}), release: make(chan struct{})}
-	service := familysync.NewServiceWithResolver(guard, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, harnessResolver{h}, nil)
+	guard := &preSQLGuard{RequestGuard: h.Authority, entered: make(chan struct{}), release: make(chan struct{})}
+	service := newService(h, guard, h.Limits, func() time.Time { return h.Now }, nil)
 	done := make(chan error, 1)
 	go func() {
 		_, err := service.Apply(context.Background(), h.Caregiver, h.FamilyID, testkit.MustMutation(t, "baby.json"))
@@ -930,7 +947,7 @@ func TestRevocationCommittedBeforeSQLAuthorizationDeniesStaleRequest(t *testing.
 	if err := <-done; err == nil {
 		t.Fatal("stale request crossed committed revocation")
 	}
-	if h.Count(t, "babies", h.FamilyID) != 0 || h.Count(t, "mutation_receipts", h.FamilyID) != 0 {
+	if h.CareCount(t, "baby", h.FamilyID) != 0 || h.Count(t, "care_receipts", h.FamilyID) != 0 {
 		t.Fatal("stale request left durable state")
 	}
 }
@@ -953,12 +970,12 @@ func TestBabyDeleteAndTimerCreateReceipts(t *testing.T) {
 	if err != nil || started.Status != "rejected" || started.Code == nil || *started.Code != "baby_deleted" {
 		t.Fatalf("timer=%+v err=%v", started, err)
 	}
-	if h.Count(t, "mutation_receipts", h.FamilyID) != 3 || h.Count(t, "mutation_journal", h.FamilyID) != 2 {
+	if h.Count(t, "care_receipts", h.FamilyID) != 3 || int(h.FamilySequence(t)) != 2 {
 		t.Fatal("feature outcomes were not persisted exactly once")
 	}
 }
 
-func TestFeedTombstoneRemovesCanonicalChildRows(t *testing.T) {
+func TestFeedTombstoneKeepsNoParts(t *testing.T) {
 	h := testkit.New(t)
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 		t.Fatal(err)
@@ -976,12 +993,33 @@ func TestFeedTombstoneRemovesCanonicalChildRows(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if h.Count(t, "feed_components", h.FamilyID) != 0 {
-		t.Fatal("feed tombstones retained their parts")
+	// Parts live in the stored entity: a tombstone's wire carries no
+	// payload and its derived columns are zero.
+	err := h.Authority.WithFamilyTx(t.Context(), h.Owner, "read", func(tx pgx.Tx, _ access.Grant) error {
+		for index := range 2 {
+			row, err := care.Get(t.Context(), tx, h.FamilyID, fmt.Sprintf("20000000-0000-4000-8000-%012d", 300+index))
+			if err != nil {
+				return err
+			}
+			entity, err := row.Entity()
+			if err != nil {
+				return err
+			}
+			if row.Live() || entity.Payload != nil || row.Derived != (care.Derived{}) {
+				t.Fatalf("feed tombstone %s retained its parts: %+v", row.ID, row)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
 	}
 }
 
-func TestDurableUsageAccountingMatchesCanonicalJournalReceiptAndDeleteReserve(t *testing.T) {
+// Usage is the rows' charge: each live row's wire plus row overhead plus
+// its deletion reserve (care.Row.ChargedBytes), plus each receipt's outcome
+// and 256 bytes (docs/protocol/v1.md); a replay writes and charges nothing.
+func TestDurableUsageAccountingMatchesRowsAndDeleteReserve(t *testing.T) {
 	h := testkit.New(t)
 	babyMutation := testkit.MustMutation(t, "baby.json")
 	baby, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, babyMutation)
@@ -1027,9 +1065,8 @@ func TestTypedPostgresRoundTripPreservesExactCanonicalPayloadAndMetadata(t *test
 		t.Fatal(err)
 	}
 	want := m.Payload.(protocol.FeedPayload)
-	repo := records.NewRepository()
-	err = h.Security.WithAuthorizedTransaction(t.Context(), h.Owner, h.FamilyID, "read", func(tx pgx.Tx, _ access.Grant) error {
-		got, meta, err := repo.GetFeed(t.Context(), tx, h.FamilyID, m.EntityID)
+	err = h.Authority.WithFamilyTx(t.Context(), h.Owner, "read", func(tx pgx.Tx, _ access.Grant) error {
+		got, meta, err := readCare[protocol.FeedPayload](t, tx, h.FamilyID, m.EntityID)
 		if err != nil {
 			return err
 		}
@@ -1053,8 +1090,7 @@ func TestTypedPostgresRoundTripPreservesExactCanonicalPayloadAndMetadata(t *test
 }
 
 func TestSharedCorpusPostgresRoundTripsEveryCanonicalKindExactly(t *testing.T) {
-	h := testkit.New(t)
-	repo := records.NewRepository()
+	h := testkit.NewAtFixtureClock(t) // the shared corpus was accepted at it
 	fixtures := []string{
 		"baby.json",
 		"feed-bottle.json",
@@ -1079,19 +1115,16 @@ func TestSharedCorpusPostgresRoundTripsEveryCanonicalKindExactly(t *testing.T) {
 			}
 			var gotPayload protocol.Payload
 			var gotMeta protocol.EntityMeta
-			err = h.Security.WithAuthorizedTransaction(t.Context(), h.Owner, h.FamilyID, "read", func(tx pgx.Tx, _ access.Grant) error {
-				switch mutation.EntityKind {
-				case "baby":
-					gotPayload, gotMeta, err = repo.GetBaby(t.Context(), tx, h.FamilyID, mutation.EntityID)
-				case "feed":
-					gotPayload, gotMeta, err = repo.GetFeed(t.Context(), tx, h.FamilyID, mutation.EntityID)
-				case "sleep":
-					gotPayload, gotMeta, err = repo.GetSleep(t.Context(), tx, h.FamilyID, mutation.EntityID)
-				case "diaper":
-					gotPayload, gotMeta, err = repo.GetDiaper(t.Context(), tx, h.FamilyID, mutation.EntityID)
-				default:
-					return fmt.Errorf("unsupported fixture entity kind %q", mutation.EntityKind)
+			err = h.Authority.WithFamilyTx(t.Context(), h.Owner, "read", func(tx pgx.Tx, _ access.Grant) error {
+				row, err := care.Get(t.Context(), tx, h.FamilyID, mutation.EntityID)
+				if err != nil {
+					return err
 				}
+				if row.Kind != mutation.EntityKind {
+					return fmt.Errorf("stored kind %q for %q", row.Kind, mutation.EntityKind)
+				}
+				entity, err := row.Entity()
+				gotPayload, gotMeta = entity.Payload, entity.Meta
 				return err
 			})
 			if err != nil {
@@ -1126,52 +1159,67 @@ func TestSharedCorpusPostgresRoundTripsEveryCanonicalKindExactly(t *testing.T) {
 	}
 }
 
-func TestReadJournalReturnsFullyScopedCursor(t *testing.T) {
+func TestPulledChangeCarriesAFullyScopedCursor(t *testing.T) {
 	h := testkit.New(t)
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 		t.Fatal(err)
 	}
-	err := h.Security.WithAuthorizedTransaction(t.Context(), h.Owner, h.FamilyID, "read", func(tx pgx.Tx, _ access.Grant) error {
-		changes, err := familysync.ReadJournal(t.Context(), tx, h.FamilyID, h.Info.InstanceID, h.Info.RecoveryEpoch, 0, protocol.MaxSafeInteger, 10)
-		if err != nil {
-			return err
-		}
+	err := func() error {
+		changes := h.Pull(t, h.Caregiver, nil, nil).Changes
 		if len(changes) != 1 || changes[0].Cursor.ServerInstanceID != h.Info.InstanceID || changes[0].Cursor.RecoveryEpoch != h.Info.RecoveryEpoch || changes[0].Cursor.FamilyID != h.FamilyID || changes[0].Cursor.Sequence != 1 || changes[0].Cursor.Validate() != nil {
 			t.Fatalf("changes=%+v", changes)
 		}
 		return nil
-	})
+	}()
 	if err != nil {
 		t.Fatal(err)
 	}
 }
 
+// durableMutationBytes is the charge of the row outcome wrote: its wire
+// (the canonical entity as stored), row overhead and deletion reserve.
 func durableMutationBytes(t *testing.T, m protocol.Mutation, outcome protocol.Outcome, p access.Principal) int64 {
 	t.Helper()
 	if outcome.CanonicalEntity == nil || outcome.Cursor == nil {
 		t.Fatalf("noncanonical outcome %+v", outcome)
 	}
-	entityBytes, err := records.EntityStorageBytes(*outcome.CanonicalEntity)
+	wire, err := json.Marshal(*outcome.CanonicalEntity)
 	if err != nil {
 		t.Fatal(err)
 	}
-	change := protocol.JournalChange{Cursor: *outcome.Cursor, EntityKind: m.EntityKind, EntityID: m.EntityID, EntityVersion: outcome.CanonicalEntity.Meta.EntityVersion, ActorAccountID: p.AccountID, DeviceID: p.DeviceID, Operation: m.Operation, AcceptedAt: outcome.CanonicalEntity.Meta.AcceptedAt, Optional: false, SnapshotOrTombstone: *outcome.CanonicalEntity}
-	journalBytes, err := records.JournalStorageBytes(change)
+	receipt, err := json.Marshal(outcome)
 	if err != nil {
 		t.Fatal(err)
 	}
-	receiptBytes, err := records.ReceiptStorageBytes(outcome)
+	// The row (its wire, the row overhead and the live reserve) and the
+	// mutation's receipt (its outcome and 256 bytes).
+	return int64(len(wire)) + care.RowOverheadBytes + care.LiveReserveBytes + int64(len(receipt)) + 256
+}
+
+// readCare reads a stored entity of payload type P through care.
+func readCare[P protocol.Payload](t *testing.T, tx pgx.Tx, familyID, id string) (P, protocol.EntityMeta, error) {
+	t.Helper()
+	var zero P
+	row, err := care.Get(t.Context(), tx, familyID, id)
 	if err != nil {
-		t.Fatal(err)
+		return zero, protocol.EntityMeta{}, err
 	}
-	return entityBytes + journalBytes + receiptBytes + records.DeletionReserveStorageBytes()
+	entity, err := row.Entity()
+	if err != nil {
+		return zero, protocol.EntityMeta{}, err
+	}
+	payload, ok := entity.Payload.(P)
+	if !ok {
+		return zero, entity.Meta, fmt.Errorf("%s holds %T", id, entity.Payload)
+	}
+	return payload, entity.Meta, nil
 }
 
 // A solids part whose foods list is empty — build 2961ca1 sends one after an
 // edit clears the foods, or for an amount-only legacy feed — is stored with
-// `"foods":[]`, so the journal row the family pages through and the receipt a
-// resend replays both read back.
-func TestSolidsPartWithNoFoodsReadsBackFromJournalAndReceipt(t *testing.T) {
+// `"foods":[]`, so the care row the family pulls and the receipt a resend
+// replays both read back.
+func TestSolidsPartWithNoFoodsReadsBackFromPullAndReceipt(t *testing.T) {
 	h := testkit.New(t)
 	baby := testkit.MustMutation(t, "baby.json")
 	if out, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, baby); err != nil || out.Status != "applied" {
@@ -1204,10 +1252,7 @@ func TestSolidsPartWithNoFoodsReadsBackFromJournalAndReceipt(t *testing.T) {
 		t.Fatalf("receipt replay %+v %v", replay, err)
 	}
 	requireNoFoods("receipt replay", replay.CanonicalEntity)
-	page, err := h.Service.ApplyAndPull(t.Context(), h.Caregiver, h.SyncRequest(nil, nil))
-	if err != nil {
-		t.Fatalf("pull: %v", err)
-	}
+	page := h.Pull(t, h.Caregiver, nil, nil)
 	pulled := false
 	for _, change := range page.Changes {
 		if change.EntityID == feedID {

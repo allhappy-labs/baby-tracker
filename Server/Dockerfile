@@ -9,14 +9,12 @@ RUN go mod download
 COPY . .
 RUN build_tags=""; if [ -n "$BT_BUILD_TAGS" ]; then build_tags="-tags=$BT_BUILD_TAGS"; fi \
  && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build $build_tags -trimpath -ldflags="-s -w -X main.sourceVersion=$BT_SOURCE_SHA" -o /out/baby-tracker-server ./cmd/baby-tracker-server \
- && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build $build_tags -trimpath -ldflags='-s -w' -o /out/baby-tracker-admin ./cmd/baby-tracker-admin \
- && mkdir -p /state/security-ledger /state/ledger-head
+ && CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build $build_tags -trimpath -ldflags='-s -w' -o /out/baby-tracker-admin ./cmd/baby-tracker-admin
 
 FROM gcr.io/distroless/static-debian13:nonroot@sha256:e2e927ec666bae08560abb3c55d0659eceabb657f56b6782ab500a9fc7f555e3
 ARG BT_SOURCE_SHA="unknown"
 LABEL org.opencontainers.image.revision=$BT_SOURCE_SHA
 COPY --from=build /out/baby-tracker-server /out/baby-tracker-admin /usr/local/bin/
-COPY --from=build --chown=65532:65532 /state/ /var/lib/babytracker/
 USER 65532:65532
 EXPOSE 8080
 HEALTHCHECK --interval=2s --timeout=3s --start-period=5s --retries=15 \

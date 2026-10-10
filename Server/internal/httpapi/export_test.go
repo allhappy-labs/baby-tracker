@@ -163,30 +163,15 @@ func TestExportOwnerDenialMapsToForbidden(t *testing.T) {
 	}
 }
 
-type exportFamilyResolver struct{ service *family.Service }
-
-func (resolver exportFamilyResolver) Current(ctx context.Context, principal access.Principal) (string, error) {
-	view, err := resolver.service.Current(ctx, principal)
-	return view.ID, err
-}
-
 func TestExportRoutesCreateAndDownloadRealArchive(t *testing.T) {
 	h := testkit.New(t)
-	head, err := h.Security.Head(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Migrator.Exec(t.Context(), `SELECT app.update_server_state($1,$2,$3,$4,$5)`,
-		h.Info.InstanceID, h.Info.RecoveryEpoch, head.Generation, head.Revision, head.EventHash[:]); err != nil {
-		t.Fatal(err)
-	}
 	var key [32]byte
 	for index := range key {
 		key[index] = 0x5a
 	}
-	service, worker, err := familyexport.New(familyexport.Options{Security: h.Security, Resolver: exportFamilyResolver{h.Family},
+	service, worker, err := familyexport.New(familyexport.Options{Authority: h.Authority,
 		Identity: h.Info, Runtime: h.Runtime, WorkerPool: h.Maintenance,
-		Keys: map[string][32]byte{"test.v1": key}, ActiveKeyID: "test.v1", Now: time.Now})
+		Keys: map[string][32]byte{"test.v1": key}, ActiveKeyID: "test.v1", Now: h.DatabaseNow})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -247,5 +232,28 @@ func TestExportRoutesCreateAndDownloadRealArchive(t *testing.T) {
 	}
 	if archive.FamilyID != h.FamilyID {
 		t.Fatalf("exported family=%s want=%s", archive.FamilyID, h.FamilyID)
+	}
+}
+
+// Family policy granting a family other than the session's is refused
+// owner_required, after the charge and before the export service, where the
+// legacy service's family read refused it.
+func TestExportRefusesAGrantForAnotherFamily(t *testing.T) {
+	p := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", DeviceID: "21000000-0000-4000-8000-000000000001",
+		Scope: "family", SessionScope: "family", SessionFamilyID: "30000000-0000-4000-8000-000000000001"}
+	service := &exportServiceStub{}
+	charged := 0
+	options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { charged++ })
+	options.RequestAuthorizer = requestAuthorizerStub{principal: p, grant: &access.Grant{AccountID: p.AccountID,
+		FamilyID: "30000000-0000-4000-8000-000000000002", Role: "owner"}}
+	options.ExportService = service
+	r := httptest.NewRequest(http.MethodPost, "/v1/export", strings.NewReader(`{"protocol_version":"v1","capabilities":["export-v1"],"request_id":"10000000-0000-4000-8000-000000000001"}`))
+	r.Header.Set("Authorization", "Bearer access")
+	r.Header.Set("X-Baby-Tracker-Protocol", "v1")
+	r.Header.Set("X-Baby-Tracker-Capabilities", "export-v1")
+	w := httptest.NewRecorder()
+	New(options).ServeHTTP(w, r)
+	if w.Code != http.StatusForbidden || !strings.Contains(w.Body.String(), `"code":"owner_required"`) || service.created != 0 || charged != 1 {
+		t.Fatalf("status=%d created=%d charged=%d body=%s", w.Code, service.created, charged, w.Body.String())
 	}
 }

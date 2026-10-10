@@ -17,9 +17,9 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/family"
 	"babytracker/server/internal/limits"
-	"babytracker/server/internal/security"
 )
 
 type familyServiceStub struct {
@@ -32,22 +32,22 @@ type familyServiceStub struct {
 	pending    func(context.Context, access.Principal) ([]family.InvitationView, error)
 	preview    func(context.Context, access.Principal, string) (family.InvitationPreview, error)
 	redeem     func(context.Context, access.Principal, string, string, bool) (family.FamilyView, error)
-	revoke     func(context.Context, access.Principal, string, string) (security.CommandResult, error)
-	transfer   func(context.Context, access.Principal, string, string) (security.CommandResult, error)
-	changeRole func(context.Context, access.Principal, string, string, string) (security.CommandResult, error)
-	remove     func(context.Context, access.Principal, string, string) (security.CommandResult, error)
-	leave      func(context.Context, access.Principal, string) (security.CommandResult, error)
+	revoke     func(context.Context, access.Principal, string, string) (authority.Result, error)
+	transfer   func(context.Context, access.Principal, string, string) (authority.Result, error)
+	changeRole func(context.Context, access.Principal, string, string, string) (authority.Result, error)
+	remove     func(context.Context, access.Principal, string, string) (authority.Result, error)
+	leave      func(context.Context, access.Principal, string) (authority.Result, error)
 	repair     func(context.Context, access.Principal, string, string, bool) (family.FamilyView, error)
 	actors     func(context.Context, access.Principal, string, string, int) (family.ActorLabelPage, error)
 	schedule   func(context.Context, access.Principal, string, bool) (family.RecoveryStatus, error)
 	recovery   func(context.Context, access.Principal) (family.RecoveryStatus, error)
-	recover    func(context.Context, access.Principal, string, bool) (security.CommandResult, error)
-	forfeit    func(context.Context, access.Principal, string, bool) (security.CommandResult, error)
+	recover    func(context.Context, access.Principal, string, bool) (authority.Result, error)
+	forfeit    func(context.Context, access.Principal, string, bool) (authority.Result, error)
 }
 
-func (s familyServiceStub) ChangeRole(ctx context.Context, p access.Principal, commandID, accountID, role string) (security.CommandResult, error) {
+func (s familyServiceStub) ChangeRole(ctx context.Context, p access.Principal, commandID, accountID, role string) (authority.Result, error) {
 	if s.changeRole == nil {
-		return security.CommandResult{}, nil
+		return authority.Result{}, nil
 	}
 	return s.changeRole(ctx, p, commandID, accountID, role)
 }
@@ -79,16 +79,16 @@ func (s familyServiceStub) Preview(ctx context.Context, p access.Principal, toke
 func (s familyServiceStub) Redeem(ctx context.Context, p access.Principal, commandID, token string, confirmed bool) (family.FamilyView, error) {
 	return s.redeem(ctx, p, commandID, token, confirmed)
 }
-func (s familyServiceStub) RevokeInvitation(ctx context.Context, p access.Principal, commandID, id string) (security.CommandResult, error) {
+func (s familyServiceStub) RevokeInvitation(ctx context.Context, p access.Principal, commandID, id string) (authority.Result, error) {
 	return s.revoke(ctx, p, commandID, id)
 }
-func (s familyServiceStub) Transfer(ctx context.Context, p access.Principal, commandID, accountID string) (security.CommandResult, error) {
+func (s familyServiceStub) Transfer(ctx context.Context, p access.Principal, commandID, accountID string) (authority.Result, error) {
 	return s.transfer(ctx, p, commandID, accountID)
 }
-func (s familyServiceStub) Remove(ctx context.Context, p access.Principal, commandID, accountID string) (security.CommandResult, error) {
+func (s familyServiceStub) Remove(ctx context.Context, p access.Principal, commandID, accountID string) (authority.Result, error) {
 	return s.remove(ctx, p, commandID, accountID)
 }
-func (s familyServiceStub) Leave(ctx context.Context, p access.Principal, commandID string) (security.CommandResult, error) {
+func (s familyServiceStub) Leave(ctx context.Context, p access.Principal, commandID string) (authority.Result, error) {
 	return s.leave(ctx, p, commandID)
 }
 func (s familyServiceStub) RepairProfile(ctx context.Context, p access.Principal, commandID, displayName string, confirmed bool) (family.FamilyView, error) {
@@ -103,10 +103,10 @@ func (s familyServiceStub) ScheduleDeletion(ctx context.Context, p access.Princi
 func (s familyServiceStub) RecoveryStatus(ctx context.Context, p access.Principal) (family.RecoveryStatus, error) {
 	return s.recovery(ctx, p)
 }
-func (s familyServiceStub) Recover(ctx context.Context, p access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
+func (s familyServiceStub) Recover(ctx context.Context, p access.Principal, commandID string, confirmed bool) (authority.Result, error) {
 	return s.recover(ctx, p, commandID, confirmed)
 }
-func (s familyServiceStub) Forfeit(ctx context.Context, p access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
+func (s familyServiceStub) Forfeit(ctx context.Context, p access.Principal, commandID string, confirmed bool) (authority.Result, error) {
 	return s.forfeit(ctx, p, commandID, confirmed)
 }
 
@@ -346,7 +346,7 @@ func TestAccountAndFamilyRoutesAuthenticateStrictlyAndMapDTOs(t *testing.T) {
 	invitationID := "40000000-0000-4000-8000-000000000001"
 	expires := time.Date(2026, 9, 27, 12, 0, 0, 0, time.UTC)
 	view := family.FamilyView{ID: familyID, DisplayName: "Our family", Status: "active", Members: []family.MemberView{{AccountID: principal.AccountID, DisplayName: "Parent", Role: "owner", Status: "active"}}}
-	command := security.CommandResult{CommandID: "10000000-0000-4000-8000-000000000009", Outcome: "applied", Code: "ok", Revision: 9}
+	command := authority.Result{CommandID: "10000000-0000-4000-8000-000000000009", Outcome: "applied", Code: "ok", Revision: 9}
 	var calls []string
 	service := familyServiceStub{
 		account: func(_ context.Context, got access.Principal) (family.AccountView, error) {
@@ -394,15 +394,15 @@ func TestAccountAndFamilyRoutesAuthenticateStrictlyAndMapDTOs(t *testing.T) {
 			}
 			return view, nil
 		},
-		revoke: func(_ context.Context, _ access.Principal, commandID, id string) (security.CommandResult, error) {
+		revoke: func(_ context.Context, _ access.Principal, commandID, id string) (authority.Result, error) {
 			calls = append(calls, "revoke:"+commandID+":"+id)
 			return command, nil
 		},
-		transfer: func(_ context.Context, _ access.Principal, commandID, id string) (security.CommandResult, error) {
+		transfer: func(_ context.Context, _ access.Principal, commandID, id string) (authority.Result, error) {
 			calls = append(calls, "transfer:"+commandID+":"+id)
 			return command, nil
 		},
-		remove: func(_ context.Context, _ access.Principal, commandID, id string) (security.CommandResult, error) {
+		remove: func(_ context.Context, _ access.Principal, commandID, id string) (authority.Result, error) {
 			calls = append(calls, "remove:"+commandID+":"+id)
 			return command, nil
 		},
@@ -411,11 +411,11 @@ func TestAccountAndFamilyRoutesAuthenticateStrictlyAndMapDTOs(t *testing.T) {
 		// capability switch, so every body — owner's, well formed, correct
 		// capabilities — came back as invalid_request. Nothing exercised the
 		// route with a real body, so nothing noticed.
-		changeRole: func(_ context.Context, _ access.Principal, commandID, id, role string) (security.CommandResult, error) {
+		changeRole: func(_ context.Context, _ access.Principal, commandID, id, role string) (authority.Result, error) {
 			calls = append(calls, "role:"+commandID+":"+id+":"+role)
 			return command, nil
 		},
-		leave: func(_ context.Context, _ access.Principal, commandID string) (security.CommandResult, error) {
+		leave: func(_ context.Context, _ access.Principal, commandID string) (authority.Result, error) {
 			calls = append(calls, "leave:"+commandID)
 			return command, nil
 		},
@@ -647,7 +647,7 @@ func familyHandlerOptions(t *testing.T, principal access.Principal, service Fami
 	return Options{
 		Gate:           accountGateFunc(func(context.Context) error { return nil }),
 		SessionService: sessionServiceStub{authenticate: func(context.Context, string) (access.Principal, error) { return principal, nil }},
-		FamilyService:  service, ClientIPResolver: resolver,
+		FamilyService:  service, ClientIPResolver: resolver, RequestAuthorizer: requestAuthorizerStub{principal: principal},
 		Limiter: limiterStub{take: func(context.Context, string, string, limits.Policy) (limits.Decision, error) {
 			return limits.Decision{Allowed: true}, nil
 		}, takeMany: func(_ context.Context, charges []limits.Charge) (limits.Decision, error) {

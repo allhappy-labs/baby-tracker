@@ -20,16 +20,13 @@ import (
 )
 
 type Fixture struct {
-	LiveActivity *pgxpool.Pool
-	Admin        *pgxpool.Pool
-	Owner        *pgxpool.Pool
-	Runtime      *pgxpool.Pool
-	Projector    *pgxpool.Pool
-	Revoker      *pgxpool.Pool
-	Maintenance  *pgxpool.Pool
+	Admin       *pgxpool.Pool
+	Owner       *pgxpool.Pool
+	Runtime     *pgxpool.Pool
+	Maintenance *pgxpool.Pool
 }
 
-func RequireDatabase(t *testing.T) string {
+func RequireDatabase(t testing.TB) string {
 	t.Helper()
 	dsn := os.Getenv("BABY_TRACKER_TEST_DATABASE_URL")
 	if dsn == "" && os.Getenv("BABY_TRACKER_REQUIRE_DATABASE") == "1" {
@@ -47,9 +44,26 @@ func New(t *testing.T) *Fixture {
 	return newFixture(t, migrations.Files)
 }
 
+// NewWithICUCollation returns a disposable database migrated to the newest
+// schema whose default collation is the ICU locale (for example the numeric
+// "und-u-kn-true"), so a test can prove a statement orders by the uuid and
+// not by its text under a collation the server does not control: a
+// self-hoster's database may sort text this way.
+func NewWithICUCollation(t *testing.T, locale string) *Fixture {
+	t.Helper()
+	return newFixtureCreating(t, migrations.Files, " TEMPLATE template0 LOCALE_PROVIDER icu ICU_LOCALE "+quoteLiteral(locale))
+}
+
+func quoteLiteral(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "''") + "'"
+}
+
 // NewThrough returns a disposable database migrated only up to version, so a
 // test can seed an older schema and then apply the next migration itself with
 // MigrateThrough, as the same owner role production's migrate command uses.
+// Version 0 is an empty database: nothing is applied and schema_migrations
+// does not exist. Versions 1–31 were squashed into 000032_baseline.sql
+// (Phase 4 Task 26): asking for one fails the test.
 func NewThrough(t *testing.T, version int64) *Fixture {
 	t.Helper()
 	return newFixture(t, Through(migrations.Files, version))
@@ -79,6 +93,10 @@ func (filtered throughFS) Open(name string) (fs.File, error) {
 	return filtered.source.Open(name)
 }
 
+// ReadDir lists the files at or below the version. A version between 0 and a
+// squashed baseline in the source (NNNNNN_baseline.sql) names a schema no
+// file builds any more: the listing fails, so NewThrough fails the test and
+// MigrateThrough returns the error.
 func (filtered throughFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	entries, err := fs.ReadDir(filtered.source, name)
 	if err != nil {
@@ -86,11 +104,38 @@ func (filtered throughFS) ReadDir(name string) ([]fs.DirEntry, error) {
 	}
 	kept := make([]fs.DirEntry, 0, len(entries))
 	for _, entry := range entries {
+		if version, ok := baselineVersion(entry.Name()); ok && filtered.version > 0 && filtered.version < version {
+			return nil, fmt.Errorf("testpg: schema %d is gone: pre-baseline versions were squashed into %s", filtered.version, entry.Name())
+		}
 		if filtered.includes(path.Join(name, entry.Name())) {
 			kept = append(kept, entry)
 		}
 	}
 	return kept, nil
+}
+
+// hasMigrations reports whether source lists any .sql file. Unlike fs.Glob,
+// it returns the listing's error.
+func hasMigrations(source fs.FS) (bool, error) {
+	entries, err := fs.ReadDir(source, ".")
+	if err != nil {
+		return false, err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".sql") {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+// baselineVersion is the version of a squashed baseline file name.
+func baselineVersion(base string) (int64, bool) {
+	if len(base) != len("000000_baseline.sql") || base[6:] != "_baseline.sql" {
+		return 0, false
+	}
+	version, err := strconv.ParseInt(base[:6], 10, 64)
+	return version, err == nil
 }
 
 func (filtered throughFS) includes(name string) bool {
@@ -107,7 +152,21 @@ func (filtered throughFS) includes(name string) bool {
 
 func newFixture(t *testing.T, source fs.FS) *Fixture {
 	t.Helper()
+	return newFixtureCreating(t, source, "")
+}
+
+// newFixtureCreating is newFixture with createOptions appended to the
+// CREATE DATABASE statement.
+func newFixtureCreating(t *testing.T, source fs.FS, createOptions string) *Fixture {
+	t.Helper()
 	dsn := RequireDatabase(t)
+	// A source without migrations (NewThrough(t, 0)) leaves the database
+	// empty; the runner itself refuses an empty source. A source that cannot
+	// be listed (a squashed version, Through) fails the test here.
+	pending, err := hasMigrations(source)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx := context.Background()
 	admin, err := pgxpool.New(ctx, dsn)
 	if err != nil {
@@ -126,9 +185,8 @@ func newFixture(t *testing.T, source fs.FS) *Fixture {
 
 	suffix := fmt.Sprintf("%d", time.Now().UnixNano())
 	database := "security_test_" + suffix
-	ownerRole, runtimeRole, projectorRole, revokerRole, maintenanceRole := "security_owner_"+suffix, "security_runtime_"+suffix, "security_projector_"+suffix, "security_revoker_"+suffix, "security_maintenance_"+suffix
-	liveActivityRole := "security_live_activity_" + suffix
-	for _, role := range []string{ownerRole, runtimeRole, projectorRole, revokerRole, maintenanceRole, liveActivityRole} {
+	ownerRole, runtimeRole, maintenanceRole := "security_owner_"+suffix, "security_runtime_"+suffix, "security_maintenance_"+suffix
+	for _, role := range []string{ownerRole, runtimeRole, maintenanceRole} {
 		if _, err := admin.Exec(ctx, "CREATE ROLE "+pgx.Identifier{role}.Sanitize()+" LOGIN PASSWORD 'disposable-test-only' NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS"); err != nil {
 			t.Fatal(err)
 		}
@@ -145,16 +203,10 @@ func newFixture(t *testing.T, source fs.FS) *Fixture {
 	if _, err := admin.Exec(ctx, "GRANT "+pgx.Identifier{runtimeRole}.Sanitize()+" TO "+pgx.Identifier{ownerRole}.Sanitize()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "GRANT baby_tracker_projector TO "+pgx.Identifier{projectorRole}.Sanitize()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := admin.Exec(ctx, "GRANT baby_tracker_apple_revoker TO "+pgx.Identifier{revokerRole}.Sanitize()); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := admin.Exec(ctx, "GRANT baby_tracker_maintenance TO "+pgx.Identifier{maintenanceRole}.Sanitize()); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{database}.Sanitize()+" OWNER "+pgx.Identifier{ownerRole}.Sanitize()); err != nil {
+	if _, err := admin.Exec(ctx, "CREATE DATABASE "+pgx.Identifier{database}.Sanitize()+" OWNER "+pgx.Identifier{ownerRole}.Sanitize()+createOptions); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
@@ -182,20 +234,16 @@ func newFixture(t *testing.T, source fs.FS) *Fixture {
 		t.Cleanup(pool.Close)
 		return pool
 	}
-	if _, err := admin.Exec(ctx, "GRANT baby_tracker_live_activity TO "+pgx.Identifier{liveActivityRole}.Sanitize()); err != nil {
-		t.Fatal(err)
-	}
 	fixture.Owner = open(ownerRole, 2)
-	if err := migrate.New(source).Apply(ctx, fixture.Owner); err != nil {
-		t.Fatal(err)
+	if pending {
+		if err := migrate.New(source).Apply(ctx, fixture.Owner); err != nil {
+			t.Fatal(err)
+		}
 	}
 	// Identity persistence tests deliberately race 100 callers. A bounded pool
 	// still exercises real concurrency without exhausting PostgreSQL's default
-	// connection budget when owner/projector/admin pools are also open.
+	// connection budget when owner/admin pools are also open.
 	fixture.Runtime = open(runtimeRole, 32)
-	fixture.Projector = open(projectorRole, 1)
-	fixture.Revoker = open(revokerRole, 2)
 	fixture.Maintenance = open(maintenanceRole, 4)
-	fixture.LiveActivity = open(liveActivityRole, 2)
 	return fixture
 }

@@ -14,8 +14,9 @@ import SettingsFeature
 import AskFeature
 
 struct RootView: View {
-    /// Owned by `BabyTrackerApp`, which builds it at process launch.
-    let environment: AppEnvironment
+    /// The app delegate's, built at process launch: a background push may
+    /// need the store and the family graph before any scene exists.
+    @State private var environment: AppEnvironment
     @State private var babies: [Baby] = []
     @State private var babiesRealm: RealmID?
     @State private var sheet: LogSheet?
@@ -50,13 +51,29 @@ struct RootView: View {
     /// current state and wrote nothing: say so, once.
     @State private var isShowingActivityHandoff = false
 
-    /// Keep the presentation alive when a menu choice becomes an editor.
-    /// Changing `.sheet(item:)` to a different item dismisses and replaces the
-    /// whole modal, which visibly flashes between Feed and Bottle/Solids.
-    private var isLogSheetPresented: Binding<Bool> {
+    init(environment: AppEnvironment) {
+        _environment = State(initialValue: environment)
+    }
+
+    /// A session's list of parts, in a full-height system sheet.
+    private func isSessionListPresented(store: BabyStore, babyID: UUID) -> Binding<Bool> {
         Binding(
-            get: { sheet != nil },
+            get: { sheet?.opensSessionList(store: store, babyID: babyID) == true },
             set: { if !$0 { sheet = nil } }
+        )
+    }
+
+    /// Every other log or edit panel, in a sheet sized to its content.
+    private func fittedLogPresentation(store: BabyStore, babyID: UUID) -> Binding<LogPresentation?> {
+        Binding(
+            get: {
+                guard let sheet, !sheet.opensSessionList(store: store, babyID: babyID) else { return nil }
+                // Each panel its own presentation: More's choice closes More
+                // and opens the panel. Swapped inside one sheet, the system
+                // date pickers kept a stale layout and drew over each other.
+                return LogPresentation(id: sheet.id)
+            },
+            set: { if $0 == nil { sheet = nil } }
         )
     }
 
@@ -149,6 +166,11 @@ struct RootView: View {
         .environment(\.invitationLinkHandOff, linkHandOff)
         .preferredColorScheme(.dark)
         .task {
+            // The store may have been opened by an earlier background launch
+            // and failed for a reason that has since cleared. Once a scene is
+            // up, one more try, exactly as the failure screen's button. A
+            // no-op when the store is open.
+            environment.retry()
             reload()
             refreshAskAvailability()
             // A Lock Screen tap may have parked something before this view
@@ -320,7 +342,25 @@ struct RootView: View {
             // A sync may have applied the other phone's stop under the editor.
             timerEditor?.refreshAvailability()
         }
-        .sheet(isPresented: isLogSheetPresented, onDismiss: presentQueuedInvitation) {
+        .fittedSheet(item: fittedLogPresentation(store: store, babyID: baby.id),
+                     onDismiss: presentQueuedInvitation) { _ in
+            if let current = sheet {
+                LogSheetView(
+                    sheet: current,
+                    store: store,
+                    babyID: baby.id,
+                    unit: environment.volumeUnit,
+                    onDone: { sheet = nil },
+                    onSwitchTo: { next in sheet = next }
+                )
+                // Each panel's seed and state, without replacing the sheet.
+                .id(current.id)
+                // A fitted sheet does not inherit custom environment values.
+                .environment(\.errorReporter, errorReporter)
+            }
+        }
+        .sheet(isPresented: isSessionListPresented(store: store, babyID: baby.id),
+               onDismiss: presentQueuedInvitation) {
             if let current = sheet {
                 LogSheetView(
                     sheet: current,
@@ -330,13 +370,12 @@ struct RootView: View {
                     onDone: { sheet = nil },
                     onSwitchTo: { sheet = $0 }
                 )
-                // Preserve each editor's seed and form state without replacing
-                // the modal presentation that contains it.
                 .id(current.id)
             }
         }
-        .sheet(item: $timerEditor, onDismiss: presentQueuedInvitation) { editor in
+        .fittedSheet(item: $timerEditor, onDismiss: presentQueuedInvitation) { editor in
             RunningTimerEditSheet(model: editor) { timerEditor = nil }
+                .environment(\.errorReporter, errorReporter)
         }
         .sheet(isPresented: $isSwitchingBaby, onDismiss: presentQueuedInvitation) {
             BabySwitcherSheet(
@@ -575,4 +614,9 @@ private enum AppTab: Hashable {
 private struct JoinSheetRequest: Identifiable {
     let id = UUID()
     let invitation: InvitationIntent?
+}
+
+/// One panel in the fitted log sheet.
+private struct LogPresentation: Identifiable {
+    let id: String
 }

@@ -25,7 +25,7 @@ func TestGrowthAndMeasurementStorage(t *testing.T) {
 	if err != nil || duplicate.Status != "rejected" {
 		t.Fatalf("two clients duplicate %+v %v", duplicate, err)
 	}
-	if h.Count(t, "growth_profiles", h.FamilyID) != 1 || h.Count(t, "measurement_entries", h.FamilyID) != 1 {
+	if h.CareCount(t, "growth_profile", h.FamilyID) != 1 || h.CareCount(t, "measurement", h.FamilyID) != 1 {
 		t.Fatal("unexpected raw growth row count")
 	}
 	profile.Operation = "update"
@@ -93,8 +93,8 @@ func TestGrowthAndMeasurementStorage(t *testing.T) {
 	if err != nil || out.Code == nil || *out.Code != "baby_not_found" || h.FamilySequence(t) != before {
 		t.Fatalf("wrong family parent %+v %v", out, err)
 	}
-	h.RebuildSyncService(t)
-	snapshot, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	h.RebuildSyncService(t, h.Limits)
+	snapshot, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}

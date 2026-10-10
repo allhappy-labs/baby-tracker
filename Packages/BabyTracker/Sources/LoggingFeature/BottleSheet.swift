@@ -202,8 +202,12 @@ public struct BottleSheet: View {
         }
     }
 
+    /// Presented with `fittedSheet`: as tall as this, so the title and
+    /// Cancel are drawn here, and opening the exact-amount field grows the
+    /// sheet with it.
     private var logBody: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            SheetHeader(BottleSheetCopy.title, cancelTitle: BottleSheetCopy.cancel, onCancel: onDone)
             ScrollView {
                 Group {
                     if isStartMode {
@@ -212,30 +216,14 @@ public struct BottleSheet: View {
                         amountBody
                     }
                 }
-                .padding(20)
+                .padding(.horizontal, 20)
+                .padding(.top, 16)
+                .padding(.bottom, 12)
             }
-            // Scrolls rather than clips when the text outgrows the sheet's
-            // stated height; at the ordinary sizes everything fits and it
-            // does not bounce.
+            // Past the screen (the largest text sizes) it scrolls rather than
+            // clips.
             .scrollBounceBehavior(.basedOnSize)
-            .sheetHeight(height)
-            .navigationTitle(BottleSheetCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(BottleSheetCopy.cancel, action: onDone)
-                }
-            }
         }
-    }
-
-    /// The stopped bottle's amount needs 380: at 330, Done sat under the
-    /// bottom of the sheet once the content stopped being squeezed to fit.
-    private var height: CGFloat {
-        if isStartMode { isEnteringExact ? 360 : 340 }
-        else { 380 }
     }
 
     // MARK: - .start
@@ -373,7 +361,7 @@ public struct BottleSheet: View {
                         // pre-empt the chip's own tap, or the same touch
                         // would both log the chip and open the exact field.
                         .highPriorityGesture(
-                            LongPressGesture().onEnded { _ in isEnteringExact = true }
+                            LongPressGesture().onEnded { _ in withAnimation(.snappy) { isEnteringExact = true } }
                         )
                 }
             }

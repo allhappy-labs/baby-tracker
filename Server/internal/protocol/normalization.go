@@ -140,6 +140,38 @@ func (decimal *Decimal) UnmarshalJSON(raw []byte) error {
 	return nil
 }
 
+// SumDecimals adds values exactly: the coefficients are summed at the
+// largest scale and the result normalized as ParseDecimal normalizes (no
+// trailing fractional zeros; zero has scale 0). The sum of none is 0. Every
+// value carries at most six fractional digits, so the sum does too.
+func SumDecimals(values []Decimal) Decimal {
+	scale := int32(0)
+	for index := range values {
+		scale = max(scale, values[index].scale)
+	}
+	sum := new(big.Int)
+	for index := range values {
+		term := new(big.Int).Set(&values[index].coefficient)
+		if shift := scale - values[index].scale; shift > 0 {
+			term.Mul(term, pow10(int64(shift)))
+		}
+		sum.Add(sum, term)
+	}
+	ten, quotient, remainder := big.NewInt(10), new(big.Int), new(big.Int)
+	for scale > 0 {
+		quotient.QuoRem(sum, ten, remainder)
+		if remainder.Sign() != 0 {
+			break
+		}
+		sum.Set(quotient)
+		scale--
+	}
+	if sum.Sign() == 0 {
+		scale = 0
+	}
+	return Decimal{coefficient: *sum, scale: scale}
+}
+
 func (decimal Decimal) CmpInteger(value int64) int {
 	right := new(big.Int).Mul(big.NewInt(value), pow10(int64(decimal.scale)))
 	return decimal.coefficient.Cmp(right)

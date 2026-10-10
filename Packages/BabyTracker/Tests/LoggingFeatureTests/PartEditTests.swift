@@ -43,7 +43,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         let logged = try store.changeLog().count
 
         model.side = .right
-        model.durationSeconds = 900
+        model.end = model.start.addingTimeInterval(900)
 
         #expect(try model.save())
         #expect(feed.components == [.breast(id: componentID, side: .right, seconds: 900,
@@ -56,7 +56,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         #expect(log.last?.entityID == feed.id)
     }
 
-    @Test func movingTheStartKeepsTheDuration() throws {
+    @Test func movingTheStartKeepsTheEnd() throws {
         let (store, baby, clock) = try fixture()
         let start = clock.now.addingTimeInterval(-3600)
         let feed = try store.logBreast(side: .left, from: start, to: start.addingTimeInterval(720), for: baby)
@@ -67,12 +67,48 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
 
         model.start = moved
 
-        #expect(model.durationSeconds == 720)
-        #expect(model.end == moved.addingTimeInterval(720))
+        #expect(model.end == start.addingTimeInterval(720))
+        #expect(model.durationSeconds == 1320)
         #expect(try model.save())
         #expect(feed.startedAt == moved)
-        #expect(feed.endedAt == moved.addingTimeInterval(720))
-        #expect(feed.components.first?.startedAt == moved)
+        #expect(feed.endedAt == start.addingTimeInterval(720))
+        #expect(feed.components.first?.durationSeconds == 1320)
+    }
+
+    /// Both rows moved into the future together, the length unchanged: the
+    /// future is judged whenever a time moves, not only once the length does.
+    @Test func startAndEndMovedTogetherIntoTheFutureAreRefused() throws {
+        let (store, baby, clock) = try fixture()
+        let start = clock.now.addingTimeInterval(-3600)
+        let feed = try store.logBreast(side: .left, from: start, to: start.addingTimeInterval(720), for: baby)
+        let componentID = try #require(feed.components.first?.id)
+        let model = PartEditModel(store: store, babyID: baby, target: .breast(feedID: feed.id, componentID: componentID),
+                                  unit: .millilitres)
+
+        model.start = clock.now.addingTimeInterval(600)
+        model.end = clock.now.addingTimeInterval(600 + 720)
+
+        #expect(model.durationSeconds == 720)
+        #expect(model.validationMessage == TimeSpanCopy.inTheFuture)
+        #expect(try model.save() == false)
+        #expect(feed.startedAt == start)
+        #expect(feed.components.first?.durationSeconds == 720)
+    }
+
+    @Test func aPartCrossingMidnightSavesItsLength() throws {
+        let (store, baby, clock) = try fixture()
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = .gmt
+        let midnight = calendar.startOfDay(for: clock.now)
+        let start = midnight.addingTimeInterval(-20 * 60)
+        let sleep = try store.logSleep(from: start, to: start.addingTimeInterval(600), for: baby)
+        let model = PartEditModel(store: store, babyID: baby, target: .sleep(sleepID: sleep.id))
+
+        model.end = midnight.addingTimeInterval(20 * 60)
+
+        #expect(model.validationMessage == nil)
+        #expect(try model.save())
+        #expect(sleep.durationSeconds == 40 * 60)
     }
 
     /// Review Focus 4: the clear message shows, and nothing is saved.
@@ -193,7 +229,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         let model = PartEditModel(store: store, babyID: baby, target: .breast(feedID: feed.id, componentID: breastID),
                                   unit: .millilitres)
 
-        model.durationSeconds = 900
+        model.end = model.start.addingTimeInterval(900)
 
         #expect(try model.save())
         #expect(feed.components == [.breast(id: breastID, side: .left, seconds: 900),
@@ -217,7 +253,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
                                   unit: .millilitres)
         #expect(model.start == start)
 
-        model.durationSeconds = 1200
+        model.end = model.start.addingTimeInterval(1200)
 
         #expect(try model.save())
         #expect(feed.components == [.breast(id: breastID, side: .left, seconds: 1200, startedAt: start,
@@ -225,6 +261,30 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         #expect(feed.startedAt == start)
         #expect(feed.endedAt == start.addingTimeInterval(1200))
         #expect(feed.totalBreastSeconds == 1200)
+    }
+
+    /// Final review finding 4: a legacy breast part stored with 0 seconds
+    /// (so its clamped `durationSeconds` reads 0 whichever way Start moves)
+    /// must still refuse a Start dragged past its End, not just a Start that
+    /// grows or shrinks the length.
+    @Test func aZeroSecondLegacyPartRefusesAStartMovedPastItsEnd() throws {
+        let (store, baby, clock) = try fixture()
+        let start = clock.now.addingTimeInterval(-3600)
+        let feed = try store.logBreast(side: .left, from: start, to: start.addingTimeInterval(720), for: baby)
+        let breastID = try #require(feed.components.first?.id)
+        feed.components = [.breast(id: breastID, side: .left, seconds: 0)]
+        feed.endedAt = start
+        try store.update(feed)
+        let model = PartEditModel(store: store, babyID: baby, target: .breast(feedID: feed.id, componentID: breastID),
+                                  unit: .millilitres)
+        #expect(model.start == start)
+        #expect(model.end == start)
+        #expect(model.durationSeconds == 0)
+
+        model.start = start.addingTimeInterval(60)
+
+        #expect(model.validationMessage == TimeSpanCopy.endBeforeStart)
+        #expect(try model.save() == false)
     }
 
     /// Parked from Task 3: a side or note edit of a lone part that never
@@ -270,8 +330,8 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         #expect(try model.save())
         #expect(feed.components == [.breast(id: breastID, side: .right, seconds: 20, startedAt: start,
                                             endedAt: start.addingTimeInterval(20))])
-        model.durationSeconds = 25
-        #expect(model.validationMessage == PastEntrySheetCopy.breastTooShort)
+        model.end = model.start.addingTimeInterval(25)
+        #expect(model.validationMessage == TimeSpanCopy.breastTooShort)
     }
 
     @Test func aBreastPartUnderThirtySecondsIsRefused() throws {
@@ -282,9 +342,9 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         let model = PartEditModel(store: store, babyID: baby, target: .breast(feedID: feed.id, componentID: componentID),
                                   unit: .millilitres)
 
-        model.durationSeconds = 20
+        model.end = model.start.addingTimeInterval(20)
 
-        #expect(model.validationMessage == PastEntrySheetCopy.breastTooShort)
+        #expect(model.validationMessage == TimeSpanCopy.breastTooShort)
         #expect(try model.save() == false)
         #expect(feed.components.first?.durationSeconds == 720)
     }
@@ -369,7 +429,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
 
         model.end = start.addingTimeInterval(-60)
 
-        #expect(model.validationMessage == PastEntrySheetCopy.endBeforeStart)
+        #expect(model.validationMessage == TimeSpanCopy.endBeforeStart)
         #expect(try model.save() == false)
         #expect(sleep.endedAt == start.addingTimeInterval(3600))
     }
@@ -382,7 +442,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
 
         model.end = clock.now.addingTimeInterval(600)
 
-        #expect(model.validationMessage == PastEntrySheetCopy.inTheFuture)
+        #expect(model.validationMessage == TimeSpanCopy.inTheFuture)
         #expect(try model.save() == false)
     }
 
@@ -430,7 +490,10 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
                                   unit: .millilitres)
         let logged = try store.changeLog().count
 
+        // Both rows moved, so the span itself is sound and the H-R15 check
+        // is what refuses it.
         model.start = base.addingTimeInterval(1000)
+        model.end = base.addingTimeInterval(1720)
 
         let expected = "The start can't be after the next part began, at \(clockText(base.addingTimeInterval(900), zone: left.timeZoneID))."
         #expect(model.validationMessage == expected)
@@ -441,6 +504,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         #expect(try store.changeLog().count == logged)
 
         model.start = base.addingTimeInterval(-300)
+        model.end = base.addingTimeInterval(720)
         #expect(model.validationMessage == nil)
         #expect(try model.save())
         #expect(left.startedAt == base.addingTimeInterval(-300))
@@ -460,14 +524,14 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
                                   target: .breast(feedID: left.id, componentID: try #require(left.components.first?.id)),
                                   unit: .millilitres)
 
-        model.durationSeconds = 1000
+        model.end = model.start.addingTimeInterval(1000)
 
         #expect(model.validationMessage
             == "The end can't be after the next part began, at \(clockText(base.addingTimeInterval(900), zone: left.timeZoneID)).")
         #expect(try model.save() == false)
         #expect(left.components == before)
 
-        model.durationSeconds = 900
+        model.end = model.start.addingTimeInterval(900)
         #expect(model.validationMessage == nil)
         #expect(try model.save())
     }

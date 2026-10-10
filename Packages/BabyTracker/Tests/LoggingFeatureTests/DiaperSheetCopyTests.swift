@@ -5,16 +5,16 @@ import BabyCore
 @Test func theDetailDisclosureIsCalledDetails() {
     // The sheet calls its accordion "Details", matching the approved mockup
     // (sheets-v2.html), in edit mode as when logging.
-    #expect(DiaperSheetCopy.detailHeader == "Details")
+    #expect(EditChromeCopy.details == "Details")
     #expect(DiaperSheetCopy.consistencyLabel == "Consistency")
     #expect(DiaperSheetCopy.colorLabel == "Colour")
-    #expect(DiaperSheetCopy.noteLabel == "Note")
+    #expect(EditChromeCopy.note == "Note")
 }
 
 @Test func thePromptsGiveExamplesRatherThanRepeatTheLabel() {
     #expect(DiaperSheetCopy.consistencyPrompt == "Seedy, runny, firm")
     #expect(DiaperSheetCopy.colorPrompt == "Mustard, green, dark")
-    #expect(DiaperSheetCopy.notePrompt == "Optional")
+    #expect(EditChromeCopy.optional == "Optional")
 }
 
 @Test func theFastPathListsWetDirtyMixedAndTheMixedLabelReadsMixed() {

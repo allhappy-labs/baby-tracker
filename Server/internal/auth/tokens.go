@@ -16,19 +16,15 @@ import (
 	"strconv"
 	"strings"
 	"time"
-	"unicode"
-	"unicode/utf8"
 
 	"babytracker/server/internal/identity"
 )
 
-const appleCredentialPurpose = "apple-refresh-revocation-v1"
 const maxStageBytes = 32768
 const maxSafeJSONInteger = uint64(1<<53 - 1)
 
 var canonicalUUIDPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 var digestKeyIDPattern = regexp.MustCompile(`^[a-z][a-z0-9._-]{0,63}$`)
-var credentialReferencePattern = regexp.MustCompile(`^[A-Za-z0-9._-]{1,128}$`)
 var lowercaseDigestPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func newToken() (string, error) {
@@ -56,14 +52,6 @@ func ActorID(key [32]byte, instanceID string, verified identity.VerifiedIdentity
 	}
 	digest := framedHMAC(key[:], "baby-tracker-actor-id-v1",
 		[]byte(instanceID), []byte(verified.Provider), []byte(verified.Audience), []byte(verified.Subject), uint64Bytes(generation))
-	return uuidV8(digest), nil
-}
-
-func CredentialObjectID(instanceID, accountID, purpose string) (string, error) {
-	if !validUUID(instanceID) || !validUUID(accountID) || purpose != appleCredentialPurpose {
-		return "", errors.New("invalid credential object input")
-	}
-	digest := sha256.Sum256([]byte("baby-tracker-apple-refresh-object-v1\x00" + instanceID + "\x00" + accountID + "\x00" + purpose))
 	return uuidV8(digest), nil
 }
 
@@ -132,45 +120,6 @@ func validateRefreshParent(input RefreshDerivationInput) error {
 		return errors.New("invalid refresh parent")
 	}
 	return nil
-}
-
-func EncodeExchangeStage(stage ExchangeStage) ([]byte, [32]byte, error) {
-	if err := validateStageCommon(stage.StageCommon, "exchange"); err != nil {
-		return nil, [32]byte{}, err
-	}
-	if stage.IdentityProvider != "apple" || !digestKeyIDPattern.MatchString(stage.IdentityKeyID) ||
-		!lowercaseDigestPattern.MatchString(stage.IdentityDigest) || !validBoundedText(stage.IdentityAudience, 255) ||
-		!validBoundedText(stage.IdentitySubject, 255) {
-		return nil, [32]byte{}, errors.New("invalid exchange identity material")
-	}
-	if (stage.DisplayName != nil) != stage.ProfileConfirmed || (stage.DisplayName != nil && !validDisplayName(*stage.DisplayName)) {
-		return nil, [32]byte{}, errors.New("invalid exchange profile material")
-	}
-	if !matchingPair(stage.InstallationKeyID, stage.InstallationDigest) ||
-		!matchingPair(stage.ContinuityKeyID, stage.ContinuityDigest) ||
-		(stage.RegisterDevice != (stage.ContinuityKeyID != nil)) {
-		return nil, [32]byte{}, errors.New("invalid exchange device material")
-	}
-	for _, pair := range [][2]*string{{stage.InstallationKeyID, stage.InstallationDigest}, {stage.ContinuityKeyID, stage.ContinuityDigest}} {
-		if pair[0] != nil && (!digestKeyIDPattern.MatchString(*pair[0]) || !lowercaseDigestPattern.MatchString(*pair[1])) {
-			return nil, [32]byte{}, errors.New("invalid exchange device digest")
-		}
-	}
-	credential := []*string{stage.AppleCredentialID, stage.AppleCredentialKeyID, stage.AppleCredentialPurpose, stage.AppleCredentialObjectID}
-	present := 0
-	for _, value := range credential {
-		if value != nil {
-			present++
-		}
-	}
-	if present != 0 && present != len(credential) {
-		return nil, [32]byte{}, errors.New("invalid exchange credential material")
-	}
-	if present != 0 && (!credentialReferencePattern.MatchString(*stage.AppleCredentialID) || !credentialReferencePattern.MatchString(*stage.AppleCredentialKeyID) ||
-		*stage.AppleCredentialPurpose != appleCredentialPurpose || !validUUID(*stage.AppleCredentialObjectID)) {
-		return nil, [32]byte{}, errors.New("invalid exchange credential reference")
-	}
-	return marshalStage(stage)
 }
 
 func EncodeRefreshStage(stage RefreshStage) ([]byte, [32]byte, error) {
@@ -268,24 +217,6 @@ func validCanonicalOrigin(raw string) bool {
 		canonicalHost += ":" + port
 	}
 	return origin.Host == canonicalHost && raw == "https://"+canonicalHost
-}
-
-func matchingPair(first, second *string) bool { return (first == nil) == (second == nil) }
-
-func validBoundedText(value string, maxBytes int) bool {
-	return value != "" && len(value) <= maxBytes && utf8.ValidString(value) && !strings.ContainsRune(value, 0)
-}
-
-func validDisplayName(value string) bool {
-	if !validBoundedText(value, 320) || value != strings.TrimSpace(value) || utf8.RuneCountInString(value) > 80 {
-		return false
-	}
-	for _, character := range value {
-		if unicode.IsControl(character) {
-			return false
-		}
-	}
-	return true
 }
 
 func isASCII(value string) bool {

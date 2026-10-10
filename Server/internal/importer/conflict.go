@@ -9,8 +9,8 @@ import (
 	"sort"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/care"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -29,7 +29,7 @@ type candidate struct {
 }
 
 func (s *Service) conflicts(ctx context.Context, tx pgx.Tx, family, id string) ([]conflict, error) {
-	rows, e := tx.Query(ctx, `SELECT conflict_id::text,kind,local_baby_id::text,record_id::text,candidate_baby_ids::text[],candidate_versions,candidate_fingerprint,decision_choice,decision_canonical_baby_id::text FROM import_conflicts WHERE family_id=$1 AND import_id=$2 AND record_id IS NULL ORDER BY conflict_id`, family, id)
+	rows, e := tx.Query(ctx, `SELECT conflict_id::text,kind,local_baby_id::text,record_id::text,candidate_baby_ids::text[],candidate_versions,candidate_fingerprint,decision_choice,decision_canonical_baby_id::text FROM import_conflicts WHERE family_id=$1 AND import_id=$2 AND record_id IS NULL ORDER BY import_conflicts.conflict_id`, family, id)
 	if e != nil {
 		return nil, e
 	}
@@ -60,37 +60,38 @@ func (s *Service) saveConflict(ctx context.Context, tx pgx.Tx, family string, v 
 	if e != nil {
 		return e
 	}
-	return s.repo.ChargeImport(ctx, tx, family, size-old, s.limits)
+	return care.ChargeImport(ctx, tx, family, size-old, s.limits)
 }
 
 // resolveGraph reads every candidate before publishing any baby. The fingerprint
 // includes all exact-match edges and occupied local UUIDs, so newly appearing
-// candidates invalidate earlier decisions just as renames/deletions do.
-func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v *session) (bool, error) {
+// candidates invalidate earlier decisions just as renames/deletions do. It
+// returns the family high water a baby publication advanced to (0: none).
+func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v *session) (bool, uint64, error) {
 	if v.mapped {
-		return false, nil
+		return false, 0, nil
 	}
-	rows, e := tx.Query(ctx, `SELECT local_baby_id::text,name,birth_date::text,sort_order FROM import_baby_candidates WHERE family_id=$1 AND import_id=$2 ORDER BY local_baby_id`, g.FamilyID, v.id)
+	rows, e := tx.Query(ctx, `SELECT local_baby_id::text,name,birth_date::text,sort_order FROM import_baby_candidates WHERE family_id=$1 AND import_id=$2 ORDER BY import_baby_candidates.local_baby_id`, g.FamilyID, v.id)
 	if e != nil {
-		return false, e
+		return false, 0, e
 	}
 	babies := []candidate{}
 	for rows.Next() {
 		var b candidate
 		if e = rows.Scan(&b.LocalBabyID, &b.Name, &b.BirthDate, &b.SortOrder); e != nil {
 			rows.Close()
-			return false, e
+			return false, 0, e
 		}
 		babies = append(babies, b)
 	}
 	e = rows.Err()
 	rows.Close()
 	if e != nil {
-		return false, e
+		return false, 0, e
 	}
 	old, e := s.conflicts(ctx, tx, g.FamilyID, v.id)
 	if e != nil {
-		return false, e
+		return false, 0, e
 	}
 	oldByLocal := map[string]*conflict{}
 	for i := range old {
@@ -105,40 +106,34 @@ func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v
 		b.matches = []string{}
 		b.versions = []uint64{}
 		b.existing = oldByLocal[b.LocalBabyID]
-		n, _ := protocol.NormalizeBabyName(b.Name)
 		if v.mode == "match_shared" {
-			rs, e := tx.Query(ctx, `SELECT id::text,entity_version FROM babies WHERE family_id=$1 AND normalized_name=$2 AND birth_date=$3 AND normalization_version=$4 AND tombstoned_at IS NULL ORDER BY id`, g.FamilyID, n, b.BirthDate, v.normalization)
+			// The session's normalization version is the only one
+			// (validate), which BabyNameHash implements.
+			hash, e := care.BabyNameHash(b.Name, b.BirthDate)
 			if e != nil {
-				return false, e
+				return false, 0, e
 			}
-			for rs.Next() {
-				var id string
-				var version uint64
-				if e = rs.Scan(&id, &version); e != nil {
-					rs.Close()
-					return false, e
-				}
-				b.matches = append(b.matches, id)
-				b.versions = append(b.versions, version)
-			}
-			e = rs.Err()
-			rs.Close()
+			matched, e := care.MatchBabies(ctx, tx, g.FamilyID, hash)
 			if e != nil {
-				return false, e
+				return false, 0, e
+			}
+			for _, row := range matched {
+				b.matches = append(b.matches, row.ID)
+				b.versions = append(b.versions, row.EntityVersion)
 			}
 		}
-		kind, e := records.FindEntityKind(ctx, tx, g.FamilyID, b.LocalBabyID)
-		if e != nil && !errors.Is(e, records.ErrNotFound) {
-			return false, e
+		row, e := care.Get(ctx, tx, g.FamilyID, b.LocalBabyID)
+		if e != nil && !errors.Is(e, care.ErrNotFound) {
+			return false, 0, e
 		}
 		var local any
 		if e == nil {
-			entity, _, e := s.repo.GetCanonical(ctx, tx, kind, g.FamilyID, b.LocalBabyID)
+			entity, e := row.Entity()
 			if e != nil {
-				return false, e
+				return false, 0, e
 			}
 			local = entity
-			b.collision = kind != "baby" || entity.Meta.TombstonedAt != nil
+			b.collision = row.Kind != "baby" || entity.Meta.TombstonedAt != nil
 			if !b.collision {
 				payload := entity.Payload.(protocol.BabyPayload)
 				b.collision = payload.Name != b.Name || payload.BirthDate != b.BirthDate || payload.SortOrder != b.SortOrder
@@ -161,14 +156,14 @@ func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v
 		v.revision++
 		_, e = tx.Exec(ctx, `UPDATE import_conflicts SET decision_choice=NULL,decision_canonical_baby_id=NULL,decision_account_id=NULL,decision_revision=NULL,decided_at=NULL,updated_revision=$3 WHERE family_id=$1 AND import_id=$2 AND record_id IS NULL`, g.FamilyID, v.id, v.revision)
 		if e != nil {
-			return false, e
+			return false, 0, e
 		}
 		for _, c := range oldByLocal {
 			c.choice = nil
 			c.target = nil
 		}
 		if e = s.revision(ctx, tx, g.FamilyID, *v); e != nil {
-			return false, e
+			return false, 0, e
 		}
 	}
 	unresolved := false
@@ -194,7 +189,7 @@ func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v
 		if kind != "" {
 			c := conflict{ImportConflict: protocol.ImportConflict{ConflictID: deterministicID(v.id, b.LocalBabyID, "baby"), Kind: kind, LocalBabyID: b.LocalBabyID, CandidateBabyIDs: b.matches, CandidateVersions: b.versions}, fingerprint: fp[:]}
 			if e = s.saveConflict(ctx, tx, g.FamilyID, *v, c); e != nil {
-				return false, e
+				return false, 0, e
 			}
 			if b.existing == nil || b.existing.choice == nil || kind == "baby_uuid_collision" {
 				unresolved = true
@@ -215,48 +210,72 @@ func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v
 			}
 		}
 		if targets[b.target] {
-			return false, code("import_target_already_assigned")
+			return false, 0, code("import_target_already_assigned")
 		}
 		targets[b.target] = true
 	}
 	if unresolved || stale {
-		return stale, nil
+		return stale, 0, nil
 	}
 	// Publication is the sole mapping write point and runs only for a complete,
-	// revalidated injective assignment. Ordinary record insertion journals babies.
-	creator := g
-	creator.AccountID = v.account
+	// revalidated injective assignment. Every baby not yet stored is created
+	// in one care batch, server-built (no Policy), as the initiating account
+	// and device; each mapping records its baby's version and changed_seq.
+	stored, e := care.GetMany(ctx, tx, g.FamilyID, func() []string {
+		ids := make([]string, 0, len(babies))
+		for _, b := range babies {
+			ids = append(ids, b.target)
+		}
+		return ids
+	}())
+	if e != nil {
+		return false, 0, e
+	}
+	type published struct{ version, cursor uint64 }
+	mapped := map[string]published{}
+	creates := []protocol.Mutation{}
 	for _, b := range babies {
-		kind, e := records.FindEntityKind(ctx, tx, g.FamilyID, b.target)
-		if e != nil && !errors.Is(e, records.ErrNotFound) {
-			return false, e
+		if row, ok := stored[b.target]; ok {
+			mapped[b.target] = published{row.EntityVersion, row.ChangedSeq}
+			continue
 		}
-		if errors.Is(e, records.ErrNotFound) {
-			m := protocol.Mutation{MutationID: deterministicID(v.id, b.LocalBabyID, "publication"), EntityID: b.target, EntityKind: "baby", Operation: "create", PayloadVersion: 1, ClientMutationTime: v.created.UTC().Format("2006-01-02T15:04:05.000000Z"), Payload: protocol.BabyPayload{Name: b.Name, BirthDate: b.BirthDate, SortOrder: b.SortOrder}}
-			out, e := s.repo.Apply(ctx, tx, records.ApplyCommand{Grant: creator, DeviceID: v.device, Mutation: m, AcceptedAt: s.now(), ServerInstanceID: s.info.InstanceID, RecoveryEpoch: s.info.RecoveryEpoch, Limits: s.limits})
-			if e != nil {
-				return false, e
-			}
-			if out.Status != "applied" {
-				return false, code("baby_uuid_collision")
-			}
-			kind = "baby"
-		}
-		entity, cursor, e := s.repo.GetCanonical(ctx, tx, kind, g.FamilyID, b.target)
+		creates = append(creates, protocol.Mutation{MutationID: deterministicID(v.id, b.LocalBabyID, "publication"), EntityID: b.target, EntityKind: "baby", Operation: "create", PayloadVersion: 1, ClientMutationTime: v.created.UTC().Format("2006-01-02T15:04:05.000000Z"), Payload: protocol.BabyPayload{Name: b.Name, BirthDate: b.BirthDate, SortOrder: b.SortOrder}})
+	}
+	var highWater uint64
+	if len(creates) > 0 {
+		creator := g
+		creator.AccountID = v.account
+		result, e := care.ApplyBatch(ctx, tx, care.BatchCommand{Grant: creator, DeviceID: v.device, Mutations: creates, AcceptedAt: s.now(),
+			Server: s.info, Limits: s.limits, NoReceipts: true}, nil)
 		if e != nil {
-			return false, e
+			return false, 0, e
 		}
-		_, e = tx.Exec(ctx, `INSERT INTO import_baby_mappings(family_id,import_id,local_baby_id,shared_baby_id,published_revision,shared_baby_entity_version,shared_baby_cursor,storage_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,192)`, g.FamilyID, v.id, b.LocalBabyID, b.target, v.revision, entity.Meta.EntityVersion, cursor.Sequence)
+		if result.Fatal != nil {
+			return false, 0, result.Fatal
+		}
+		for _, out := range result.Outcomes {
+			if out.Status != "applied" || out.CanonicalEntity == nil || out.Cursor == nil {
+				return false, 0, code("baby_uuid_collision")
+			}
+			mapped[out.CanonicalEntity.Meta.ID] = published{out.CanonicalEntity.Meta.EntityVersion, out.Cursor.Sequence}
+		}
+		if result.HighWater > result.Base {
+			highWater = result.HighWater
+		}
+	}
+	for _, b := range babies {
+		baby := mapped[b.target]
+		_, e = tx.Exec(ctx, `INSERT INTO import_baby_mappings(family_id,import_id,local_baby_id,shared_baby_id,published_revision,shared_baby_entity_version,shared_baby_cursor,storage_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,192)`, g.FamilyID, v.id, b.LocalBabyID, b.target, v.revision, baby.version, baby.cursor)
 		if e != nil {
-			return false, e
+			return false, 0, e
 		}
-		if e = s.repo.ChargeImport(ctx, tx, g.FamilyID, 192, s.limits); e != nil {
-			return false, e
+		if e = care.ChargeImport(ctx, tx, g.FamilyID, 192, s.limits); e != nil {
+			return false, 0, e
 		}
 	}
 	v.mapped = true
 	_, e = tx.Exec(ctx, `UPDATE import_sessions SET mapping_complete=true,mapping_completed_at=$3 WHERE family_id=$1 AND import_id=$2`, g.FamilyID, v.id, s.now())
-	return false, e
+	return false, highWater, e
 }
 func contains(ids []string, id string) bool {
 	for _, x := range ids {
@@ -276,23 +295,19 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 	if !protocol.ValidUUID(id) || !protocol.ValidUUID(r.CommandID) || !protocol.ValidUUID(r.ConflictID) || r.ResolverRevision < 1 || r.ResolverRevision > protocol.MaxSafeInteger || r.ProtocolVersion != "v1" || protocol.ValidateRouteCapabilities(protocol.SurfaceImport, r.Capabilities, r.Capabilities, protocol.KnownCapabilities()) != nil || (r.Choice != "keep_local" && r.Choice != "use_existing") || r.Choice == "keep_local" && r.CanonicalBabyID != nil || r.Choice == "use_existing" && (r.CanonicalBabyID == nil || !protocol.ValidUUID(*r.CanonicalBabyID)) {
 		return out, code("invalid_request")
 	}
-	family, e := s.family(ctx, p)
+	family, e := sessionFamily(p)
 	if e != nil {
 		return out, e
 	}
 	raw, _ := json.Marshal(r)
 	hash := sha256.Sum256(raw)
 	var resultErr error
-	var publish *protocol.Cursor
-	e = s.guard.WithAuthorizedTransaction(ctx, p, family, "add_baby", func(tx pgx.Tx, g access.Grant) error {
+	var publish uint64
+	e = s.withFamily(ctx, p, family, "add_baby", func(tx pgx.Tx, g access.Grant) error {
 		if g.Role != "owner" {
 			return code("owner_required")
 		}
-		if e := records.LockFamilyForUpdate(ctx, tx, family); e != nil {
-			return e
-		}
-		var journalBefore uint64
-		if e := tx.QueryRow(ctx, `SELECT next_sequence FROM families WHERE id=$1`, family).Scan(&journalBefore); e != nil {
+		if _, e := care.LockFamily(ctx, tx, family); e != nil {
 			return e
 		}
 		v, e := loadSession(ctx, tx, family, id)
@@ -328,13 +343,22 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 		if !v.complete || v.mapped {
 			return code("import_resolution_stale")
 		}
-		stale, e := s.resolveGraph(ctx, tx, g, &v)
+		// This first pass only revalidates, so its high water is discarded.
+		// resolveGraph publishes only when no baby conflict is undecided;
+		// the conflict being chosen must be undecided, so a pass that
+		// published (v.mapped) means the choice is stale, and the error
+		// rolls the publication back with its high water. (Without this
+		// check the stale refusal came from selected.choice != nil below.)
+		stale, _, e := s.resolveGraph(ctx, tx, g, &v)
 		if e != nil {
 			return e
 		}
 		if stale {
 			resultErr = code("import_resolution_stale")
 			return nil
+		}
+		if v.mapped {
+			return code("import_resolution_stale")
 		}
 		conflicts, e := s.conflicts(ctx, tx, family, id)
 		if e != nil {
@@ -371,9 +395,9 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 			}
 		}
 		if r.Choice == "keep_local" {
-			kind, e := records.FindEntityKind(ctx, tx, family, target)
+			row, e := care.Get(ctx, tx, family, target)
 			if e == nil {
-				if kind != "baby" {
+				if row.Kind != "baby" {
 					return code("baby_uuid_collision")
 				}
 				var b protocol.ImportBaby
@@ -381,14 +405,15 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 				if e != nil {
 					return e
 				}
-				payload, meta, e := s.repo.GetBaby(ctx, tx, family, target)
+				entity, e := row.Entity()
 				if e != nil {
 					return e
 				}
-				if meta.TombstonedAt != nil || payload.Name != b.Name || payload.BirthDate != b.BirthDate || payload.SortOrder != b.SortOrder {
+				payload, ok := entity.Payload.(protocol.BabyPayload)
+				if !ok || entity.Meta.TombstonedAt != nil || payload.Name != b.Name || payload.BirthDate != b.BirthDate || payload.SortOrder != b.SortOrder {
 					return code("baby_uuid_collision")
 				}
-			} else if !errors.Is(e, records.ErrNotFound) {
+			} else if !errors.Is(e, care.ErrNotFound) {
 				return e
 			}
 		}
@@ -400,7 +425,7 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 		if e != nil {
 			return e
 		}
-		if _, e = s.resolveGraph(ctx, tx, g, &v); e != nil {
+		if _, publish, e = s.resolveGraph(ctx, tx, g, &v); e != nil {
 			return e
 		}
 		pending, e := s.recordConflicts(ctx, tx, family, v, nil)
@@ -425,17 +450,12 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 		if e != nil {
 			return e
 		}
-		if e = s.repo.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
-			return e
-		}
-		return s.observeJournalAdvance(ctx, tx, g, p.DeviceID, journalBefore, &publish)
+		return care.ChargeImport(ctx, tx, family, size, s.limits)
 	})
 	if e != nil {
 		return out, e
 	}
-	if publish != nil && s.observer != nil {
-		_ = s.observer.Publish(ctx, family, *publish)
-	}
+	s.publish(ctx, family, publish)
 	return out, resultErr
 }
 

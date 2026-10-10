@@ -1,185 +1,119 @@
 package config
 
 import (
-	"crypto/ecdsa"
-	"crypto/elliptic"
-	"crypto/rand"
-	"crypto/x509"
-	"encoding/pem"
-	"os"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
-	"time"
 )
 
-func TestLiveActivityConfig(t *testing.T) {
-	if cfg, err := LoadLiveActivity(mapGetter(nil)); err != nil || cfg.Enabled {
-		t.Fatalf("absent optional config: %+v %v", cfg, err)
-	}
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	der, _ := x509.MarshalECPrivateKey(key)
-	dir := t.TempDir()
-	keyPath := filepath.Join(dir, "apns-key")
-	dbPath := filepath.Join(dir, "worker-db")
-	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(dbPath, []byte("postgres://worker:secret@localhost/baby\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	values := map[string]string{"BT_LIVE_ACTIVITY_PUSH_ENABLED": "true", "BT_APNS_TEAM_ID": "TEAM123456", "BT_APNS_KEY_ID": "KEY1234567", "BT_APNS_KEY_FILE": keyPath, "BT_APNS_BUNDLE_ID": "com.example.baby", "BT_LIVE_ACTIVITY_DATABASE_URL_FILE": dbPath}
-	cfg, err := LoadLiveActivity(mapGetter(values))
-	if err != nil || !cfg.Enabled || cfg.WorkerDatabaseURL != "postgres://worker:secret@localhost/baby" {
-		t.Fatalf("enabled config: %+v %v", cfg, err)
-	}
-	for name, value := range map[string]string{"BT_APNS_TEAM_ID": "bad", "BT_APNS_KEY_ID": "bad", "BT_APNS_BUNDLE_ID": "bad bundle", "BT_APNS_KEY_FILE": "/missing", "BT_LIVE_ACTIVITY_DATABASE_URL_FILE": "/missing"} {
-		copy := map[string]string{}
-		for k, v := range values {
-			copy[k] = v
-		}
-		copy[name] = value
-		_, err := LoadLiveActivity(mapGetter(copy))
-		if err == nil || strings.Contains(err.Error(), "secret") || strings.Contains(err.Error(), dir) {
-			t.Fatalf("%s error: %v", name, err)
+func TestLiveActivitySwitch(t *testing.T) {
+	keyFile := writeAPNSKey(t, throwawayP256(t), 0o600)
+	complete := func() map[string]string {
+		return map[string]string{
+			"BT_LIVE_ACTIVITY_PUSH_ENABLED": "true",
+			"BT_APNS_TEAM_ID":               "TEAM123456",
+			"BT_APNS_KEY_ID":                "KEY1234567",
+			"BT_APNS_KEY_FILE":              keyFile,
+			"BT_APNS_BUNDLE_ID":             "com.example.babytracker",
 		}
 	}
-	values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = "invalid"
-	if _, err := LoadLiveActivity(mapGetter(values)); err == nil {
-		t.Fatal("malformed enable flag")
+
+	// Off: unset or "false". No BT_APNS_* variable is read, so no key file is
+	// opened (the configured one here does not exist).
+	for _, enabled := range []string{"", "false"} {
+		values := complete()
+		values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = enabled
+		values["BT_APNS_KEY_FILE"] = filepath.Join(t.TempDir(), "missing.p8")
+		var read []string
+		got, err := LoadLiveActivity(recordingGetter(values, &read))
+		if err != nil || got.Enabled || got.Credentials != (APNSCredentials{}) {
+			t.Fatalf("BT_LIVE_ACTIVITY_PUSH_ENABLED=%q: %+v %v", enabled, got, err)
+		}
+		for _, name := range read {
+			if strings.HasPrefix(name, "BT_APNS_") {
+				t.Fatalf("BT_LIVE_ACTIVITY_PUSH_ENABLED=%q read %s", enabled, name)
+			}
+		}
 	}
-	values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = "false"
-	if cfg, err := LoadLiveActivity(mapGetter(values)); err != nil || cfg.Enabled {
-		t.Fatalf("disabled must remain optional: %+v %v", cfg, err)
+
+	// On: the same credentials as LoadAPNSCredentials (and so as wakes).
+	got, err := LoadLiveActivity(mapGetter(complete()))
+	want, wantErr := LoadAPNSCredentials(mapGetter(complete()))
+	if err != nil || wantErr != nil || !got.Enabled || got.Credentials != want {
+		t.Fatalf("complete configuration: %+v %v (want %+v %v)", got, err, want, wantErr)
+	}
+
+	values := complete()
+	delete(values, "BT_APNS_KEY_FILE")
+	if _, err := LoadLiveActivity(mapGetter(values)); err == nil || !strings.Contains(err.Error(), "BT_APNS_KEY_FILE") {
+		t.Fatalf("no key file: %v", err)
+	}
+
+	for _, enabled := range []string{"maybe", "TRUE", "1", " true"} {
+		values := complete()
+		values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = enabled
+		if _, err := LoadLiveActivity(mapGetter(values)); err == nil || !strings.Contains(err.Error(), "BT_LIVE_ACTIVITY_PUSH_ENABLED") {
+			t.Fatalf("BT_LIVE_ACTIVITY_PUSH_ENABLED=%q: %v", enabled, err)
+		}
+	}
+
+	// main's worker credential is not ported: either form is refused, on or
+	// off, with the explanation and never the value (a distinctive sentinel,
+	// in both the URL and the file form).
+	const sentinel = "postgres://live_activity_worker:SENTINEL-7b3e91c4d2a8f605@db.invalid:5432/baby_tracker?sslmode=verify-full"
+	for _, variable := range []string{"BT_LIVE_ACTIVITY_DATABASE_URL_FILE", "BT_LIVE_ACTIVITY_DATABASE_URL"} {
+		for _, enabled := range []string{"true", "false", ""} {
+			values := complete()
+			values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = enabled
+			values[variable] = sentinel
+			_, err := LoadLiveActivity(mapGetter(values))
+			if err == nil || !strings.Contains(err.Error(), "the Live Activity worker runs on the maintenance credential (BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE); remove the setting") ||
+				!strings.Contains(err.Error(), variable) || strings.Contains(err.Error(), "SENTINEL") || strings.Contains(err.Error(), "db.invalid") {
+				t.Fatalf("%s with the switch %q: %v", variable, enabled, err)
+			}
+		}
 	}
 }
 
-func TestLiveActivityConfigDistinctWorker(t *testing.T) {
+func TestLoadCarriesTheLiveActivityConfiguration(t *testing.T) {
 	values := validHostedEnvironment(t)
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	der, _ := x509.MarshalECPrivateKey(key)
-	keyPath := filepath.Join(t.TempDir(), "key")
-	dbPath := filepath.Join(t.TempDir(), "db")
-	os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600)
-	os.WriteFile(dbPath, []byte(values["BT_DATABASE_URL"]), 0600)
+	cfg, err := Load(mapGetter(values))
+	if err != nil || cfg.LiveActivity.Enabled {
+		t.Fatalf("Live Activity default: %+v %v", cfg.LiveActivity, err)
+	}
+	keyFile := writeAPNSKey(t, throwawayP256(t), 0o600)
 	values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = "true"
 	values["BT_APNS_TEAM_ID"] = "TEAM123456"
 	values["BT_APNS_KEY_ID"] = "KEY1234567"
-	values["BT_APNS_BUNDLE_ID"] = "com.example.baby"
-	values["BT_APNS_KEY_FILE"] = keyPath
-	values["BT_LIVE_ACTIVITY_DATABASE_URL_FILE"] = dbPath
-	if _, err := Load(mapGetter(values)); err == nil {
-		t.Fatal("worker shared runtime credentials")
+	values["BT_APNS_KEY_FILE"] = keyFile
+	values["BT_APNS_BUNDLE_ID"] = "com.example.babytracker"
+	cfg, err = Load(mapGetter(values))
+	if err != nil || !cfg.LiveActivity.Enabled || cfg.LiveActivity.Credentials.KeyFile != keyFile || cfg.APNSWakes.Enabled {
+		t.Fatalf("Live Activity enabled: %+v %+v %v", cfg.LiveActivity, cfg.APNSWakes, err)
+	}
+	values["BT_LIVE_ACTIVITY_DATABASE_URL_FILE"] = "/run/secrets/SENTINEL-7b3e91c4d2a8f605"
+	if _, err := Load(mapGetter(values)); err == nil || !strings.Contains(err.Error(), "BT_LIVE_ACTIVITY_DATABASE_URL_FILE") || strings.Contains(err.Error(), "SENTINEL") {
+		t.Fatalf("a Live Activity worker credential started: %v", err)
 	}
 }
 
-func TestLiveActivityConfigRejectsUnsafeWorkerFile(t *testing.T) {
-	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	if err != nil {
-		t.Fatal(err)
+// With both switches on, one credential error is reported once, not once a
+// switch.
+func TestLoadReportsASharedAPNSCredentialErrorOnce(t *testing.T) {
+	values := validHostedEnvironment(t)
+	values["BT_APNS_WAKES_ENABLED"] = "true"
+	values["BT_LIVE_ACTIVITY_PUSH_ENABLED"] = "true"
+	values["BT_APNS_TEAM_ID"] = "TEAM123456"
+	values["BT_APNS_KEY_ID"] = "KEY1234567"
+	values["BT_APNS_BUNDLE_ID"] = "com.example.babytracker"
+	_, err := Load(mapGetter(values))
+	if err == nil || strings.Count(err.Error(), "BT_APNS_KEY_FILE") != 1 {
+		t.Fatalf("both switches without a key: %v, want BT_APNS_KEY_FILE named once", err)
 	}
-	der, err := x509.MarshalECPrivateKey(key)
-	if err != nil {
-		t.Fatal(err)
-	}
-	dir := t.TempDir()
-	keyPath := filepath.Join(dir, "key")
-	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: der}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	secret := "postgres://worker:private-password@localhost/baby"
-	regular := filepath.Join(dir, "regular")
-	if err := os.WriteFile(regular, []byte(secret+"\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	values := map[string]string{"BT_LIVE_ACTIVITY_PUSH_ENABLED": "true", "BT_APNS_TEAM_ID": "TEAM123456", "BT_APNS_KEY_ID": "KEY1234567", "BT_APNS_KEY_FILE": keyPath, "BT_APNS_BUNDLE_ID": "com.example.baby"}
-	check := func(t *testing.T, path string) {
-		t.Helper()
-		values["BT_LIVE_ACTIVITY_DATABASE_URL_FILE"] = path
-		result := make(chan error, 1)
-		go func() { _, err := LoadLiveActivity(mapGetter(values)); result <- err }()
-		select {
-		case err := <-result:
-			if err == nil || strings.Contains(err.Error(), secret) || strings.Contains(err.Error(), path) {
-				t.Fatalf("unsafe worker file error: %v", err)
-			}
-		case <-time.After(300 * time.Millisecond):
-			t.Fatal("unsafe worker file blocked config startup")
-		}
-	}
-	t.Run("permissive mode", func(t *testing.T) {
-		if err := os.Chmod(regular, 0644); err != nil {
-			t.Fatal(err)
-		}
-		check(t, regular)
-		if err := os.Chmod(regular, 0600); err != nil {
-			t.Fatal(err)
-		}
-	})
-	t.Run("symlink", func(t *testing.T) {
-		link := filepath.Join(dir, "link")
-		if err := os.Symlink(regular, link); err != nil {
-			t.Fatal(err)
-		}
-		check(t, link)
-	})
-	t.Run("FIFO", func(t *testing.T) {
-		fifo := filepath.Join(dir, "fifo")
-		if err := syscall.Mkfifo(fifo, 0600); err != nil {
-			t.Fatal(err)
-		}
-		check(t, fifo)
-	})
-}
-
-// The preflight command validates the Apple identifiers and the mounted key
-// exactly as an enabled startup does, before any worker URL exists, and reads
-// the worker URL file through the same checks when one is configured.
-func TestLiveActivityAPNSCredentialsLoadWithoutWorkerURL(t *testing.T) {
-	key, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
-	der, _ := x509.MarshalPKCS8PrivateKey(key)
-	dir := t.TempDir()
-	keyPath := filepath.Join(dir, "apns-key")
-	if err := os.WriteFile(keyPath, pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: der}), 0600); err != nil {
-		t.Fatal(err)
-	}
-	values := map[string]string{"BT_APNS_TEAM_ID": "TEAM123456", "BT_APNS_KEY_ID": "KEY1234567", "BT_APNS_KEY_FILE": keyPath, "BT_APNS_BUNDLE_ID": "com.example.baby"}
-	cfg, err := LoadAPNSCredentials(mapGetter(values))
-	if err != nil || cfg.TeamID != "TEAM123456" || cfg.KeyID != "KEY1234567" || cfg.KeyFile != keyPath || cfg.BundleID != "com.example.baby" || cfg.WorkerDatabaseURL != "" {
-		t.Fatalf("credentials: %+v %v", cfg, err)
-	}
-	for name, value := range map[string]string{"BT_APNS_TEAM_ID": "", "BT_APNS_KEY_ID": "short", "BT_APNS_BUNDLE_ID": "bad bundle", "BT_APNS_KEY_FILE": filepath.Join(dir, "missing")} {
-		copy := map[string]string{}
-		for k, v := range values {
-			copy[k] = v
-		}
-		copy[name] = value
-		_, err := LoadAPNSCredentials(mapGetter(copy))
-		if err == nil || !strings.Contains(err.Error(), name) || strings.Contains(err.Error(), dir) {
-			t.Fatalf("%s error: %v", name, err)
-		}
-	}
-	if err := os.Chmod(keyPath, 0640); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := LoadAPNSCredentials(mapGetter(values)); err == nil {
-		t.Fatal("a group-readable key must be rejected like at startup")
-	}
-	dbPath := filepath.Join(dir, "worker-db")
-	if err := os.WriteFile(dbPath, []byte("postgres://worker:secret@localhost/baby\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
-	if url, err := ReadLiveActivityDatabaseURL(dbPath); err != nil || url != "postgres://worker:secret@localhost/baby" {
-		t.Fatalf("worker url: %q %v", url, err)
-	}
-	if _, err := ReadLiveActivityDatabaseURL(""); err == nil || !strings.Contains(err.Error(), "BT_LIVE_ACTIVITY_DATABASE_URL_FILE") {
-		t.Fatalf("empty path: %v", err)
-	}
-	if err := os.Chmod(dbPath, 0644); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ReadLiveActivityDatabaseURL(dbPath); err == nil || strings.Contains(err.Error(), "secret") {
-		t.Fatalf("world-readable worker url: %v", err)
+	// Errors of their own are each still reported.
+	values["BT_APNS_WAKES_ENABLED"] = "maybe"
+	_, err = Load(mapGetter(values))
+	if err == nil || !strings.Contains(err.Error(), "BT_APNS_WAKES_ENABLED") || strings.Count(err.Error(), "BT_APNS_KEY_FILE") != 1 {
+		t.Fatalf("an invalid wake switch and no key: %v", err)
 	}
 }

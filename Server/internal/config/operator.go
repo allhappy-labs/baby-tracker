@@ -19,17 +19,20 @@ type OperatorConfig struct {
 	OperatorID          string
 	OwnershipPolicyID   string
 	EntitlementPolicyID string
+	IntegrationPolicyID string
 	ConfirmationKey     [32]byte
 }
 
 // LoadOperator loads the separately mounted operator policy and confirmation
 // material. It deliberately does not accept direct-value secret fallbacks.
-// An empty environment disables both dangerous command families.
+// An empty environment disables every dangerous command family; each policy
+// file enables only its own family (ownership recovery, entitlement, or
+// private MCP integration credentials).
 func LoadOperator(getenv func(string) string) (OperatorConfig, error) {
 	if getenv == nil {
 		return OperatorConfig{}, errors.New("configuration getter is required")
 	}
-	for _, name := range []string{"BT_OPERATOR_OWNERSHIP_POLICY_ID", "BT_OPERATOR_ENTITLEMENT_POLICY_ID", "BT_OPERATOR_CONFIRMATION_KEY"} {
+	for _, name := range []string{"BT_OPERATOR_OWNERSHIP_POLICY_ID", "BT_OPERATOR_ENTITLEMENT_POLICY_ID", "BT_OPERATOR_INTEGRATION_POLICY_ID", "BT_OPERATOR_CONFIRMATION_KEY"} {
 		if getenv(name) != "" {
 			return OperatorConfig{}, fmt.Errorf("%s is forbidden; use the corresponding file setting", name)
 		}
@@ -37,11 +40,12 @@ func LoadOperator(getenv func(string) string) (OperatorConfig, error) {
 	operatorID := getenv("BT_OPERATOR_ID")
 	ownershipPath := getenv("BT_OPERATOR_OWNERSHIP_POLICY_ID_FILE")
 	entitlementPath := getenv("BT_OPERATOR_ENTITLEMENT_POLICY_ID_FILE")
+	integrationPath := getenv("BT_OPERATOR_INTEGRATION_POLICY_ID_FILE")
 	keyPath := getenv("BT_OPERATOR_CONFIRMATION_KEY_FILE")
-	if operatorID == "" && ownershipPath == "" && entitlementPath == "" && keyPath == "" {
+	if operatorID == "" && ownershipPath == "" && entitlementPath == "" && integrationPath == "" && keyPath == "" {
 		return OperatorConfig{}, nil
 	}
-	if ownershipPath == "" && entitlementPath == "" {
+	if ownershipPath == "" && entitlementPath == "" && integrationPath == "" {
 		return OperatorConfig{}, errors.New("an operator policy file is required when operator configuration is present")
 	}
 	if !uuidPattern.MatchString(operatorID) || operatorID == "00000000-0000-0000-0000-000000000000" {
@@ -60,6 +64,12 @@ func LoadOperator(getenv func(string) string) (OperatorConfig, error) {
 	}
 	if entitlementPath != "" {
 		configuration.EntitlementPolicyID, err = readOperatorPolicyFile("BT_OPERATOR_ENTITLEMENT_POLICY_ID_FILE", entitlementPath)
+		if err != nil {
+			return OperatorConfig{}, err
+		}
+	}
+	if integrationPath != "" {
+		configuration.IntegrationPolicyID, err = readOperatorPolicyFile("BT_OPERATOR_INTEGRATION_POLICY_ID_FILE", integrationPath)
 		if err != nil {
 			return OperatorConfig{}, err
 		}

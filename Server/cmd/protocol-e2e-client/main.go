@@ -48,7 +48,7 @@ type client struct {
 func main() {
 	base := flag.String("base", "", "identity-test server base URL")
 	statePath := flag.String("state", "", "private state file")
-	phase := flag.String("phase", "", "bootstrap, overlap, verify, recovery-bootstrap, or recovery-verify")
+	phase := flag.String("phase", "", "bootstrap, overlap, verify, recovery-bootstrap, recovery-verify, or recovery-reuse")
 	recoveryFault := flag.String("recovery-fault", "lost_response", "identitytest server recovery boundary")
 	flag.Parse()
 	if *base == "" || *statePath == "" {
@@ -69,8 +69,10 @@ func main() {
 		err = c.recoveryBootstrap(ctx, *statePath, *recoveryFault)
 	case "recovery-verify":
 		err = c.recoveryVerify(ctx, *statePath)
+	case "recovery-reuse":
+		err = c.recoveryReuse(ctx, *statePath)
 	default:
-		err = errors.New("phase must be bootstrap, overlap, verify, recovery-bootstrap, or recovery-verify")
+		err = errors.New("phase must be bootstrap, overlap, verify, recovery-bootstrap, recovery-verify, or recovery-reuse")
 	}
 	if err != nil {
 		fatal(err)

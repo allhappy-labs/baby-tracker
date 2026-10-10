@@ -3,7 +3,6 @@ package database
 import (
 	"context"
 	"errors"
-	"fmt"
 	"regexp"
 	"strings"
 
@@ -24,47 +23,93 @@ var runtimeInventory = roleInventory{
 	group: "baby_tracker_runtime",
 }
 
-var projectorInventory = roleInventory{
-	group: "baby_tracker_projector",
+// VerifyRuntimeRole checks that the runtime pool's login role holds exactly
+// the privileges the schema privilege manifest records for
+// baby_tracker_runtime at compatibleVersion, and nothing else.
+func VerifyRuntimeRole(ctx context.Context, runtime *pgxpool.Pool, compatibleVersion int64) error {
+	if runtime == nil || compatibleVersion < 4 {
+		return errors.New("runtime pool is required")
+	}
+	tx, err := runtime.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	if err != nil {
+		return Unavailable(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := verifyRoleSnapshot(ctx, tx, runtimeInventory.group, compatibleVersion); err != nil {
+		return err
+	}
+	if err := verifyNoPresetAuthority(ctx, tx); err != nil {
+		return err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return Unavailable(err)
+	}
+	return nil
 }
 
-func VerifyRoleSeparation(ctx context.Context, runtime, projector *pgxpool.Pool, compatibleVersion int64) error {
-	if runtime == nil || projector == nil || runtime == projector || compatibleVersion < 4 {
-		return errors.New("distinct runtime and projector pools are required")
+var maintenanceInventory = roleInventory{
+	group: "baby_tracker_maintenance",
+}
+
+// VerifyMaintenanceRole checks that the maintenance pool's login holds
+// exactly the privileges manifest version compatibleVersion records for
+// baby_tracker_maintenance. The maintenance login cannot read the manifest,
+// so the manifest is read through manifest (a runtime pool) and the
+// privileges are compared on the maintenance connection.
+func VerifyMaintenanceRole(ctx context.Context, manifest, maintenance *pgxpool.Pool, compatibleVersion int64) error {
+	if manifest == nil || maintenance == nil || compatibleVersion < 19 {
+		return errors.New("manifest and maintenance pools are required")
 	}
-	runtimeTx, err := runtime.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
+	tx, err := manifest.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
-		return ErrUnavailable
+		return Unavailable(err)
 	}
-	defer runtimeTx.Rollback(ctx)
-	var snapshot string
-	if err := runtimeTx.QueryRow(ctx, "SELECT pg_export_snapshot()").Scan(&snapshot); err != nil || !snapshotID.MatchString(snapshot) {
+	defer tx.Rollback(ctx)
+	var observedVersion int64
+	if err := tx.QueryRow(ctx, "SELECT current_version FROM schema_compatibility WHERE singleton").Scan(&observedVersion); err != nil || observedVersion != compatibleVersion {
 		return errors.New("database_role_separation_invalid")
 	}
-	projectorTx, err := projector.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return ErrUnavailable
-	}
-	defer projectorTx.Rollback(ctx)
-	if _, err := projectorTx.Exec(ctx, fmt.Sprintf("SET TRANSACTION SNAPSHOT '%s'", snapshot)); err != nil {
-		return errors.New("database_role_separation_invalid")
-	}
-	runtimeUser, err := verifyRoleSnapshot(ctx, runtimeTx, runtimeInventory.group, compatibleVersion)
+	allowed, err := loadRoleInventory(ctx, tx, maintenanceInventory.group, compatibleVersion)
 	if err != nil {
 		return err
 	}
-	projectorUser, err := verifyRoleSnapshot(ctx, projectorTx, projectorInventory.group, compatibleVersion)
+	if err := tx.Commit(ctx); err != nil {
+		return Unavailable(err)
+	}
+	check, err := maintenance.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
 	if err != nil {
+		return Unavailable(err)
+	}
+	defer check.Rollback(ctx)
+	if _, err := verifyRoleInventory(ctx, check, allowed); err != nil {
 		return err
 	}
-	if runtimeUser == projectorUser {
+	if err := verifyNoPresetAuthority(ctx, check); err != nil {
+		return err
+	}
+	if err := check.Commit(ctx); err != nil {
+		return Unavailable(err)
+	}
+	return nil
+}
+
+// verifyNoPresetAuthority rejects a runtime whose sessions start with
+// app.authority already set: through connection options (visible as the
+// current value at the start of a transaction) or through a database, role or
+// role-in-database default in pg_db_role_setting. Either would turn every
+// runtime transaction into an authority transaction.
+func verifyNoPresetAuthority(ctx context.Context, tx pgx.Tx) error {
+	var preset bool
+	if err := tx.QueryRow(ctx, `SELECT coalesce(current_setting('app.authority', true), '') <> ''
+		OR EXISTS (
+		  SELECT 1 FROM pg_db_role_setting s CROSS JOIN LATERAL unnest(s.setconfig) AS setting(value)
+		  WHERE (s.setdatabase=0 OR s.setdatabase=(SELECT oid FROM pg_database WHERE datname=current_database()))
+		    AND (s.setrole=0 OR pg_has_role(current_user, s.setrole, 'MEMBER'))
+		    AND lower(split_part(setting.value, '=', 1))='app.authority')`).Scan(&preset); err != nil {
+		return Unavailable(err)
+	}
+	if preset {
 		return errors.New("database_role_separation_invalid")
-	}
-	if err := projectorTx.Commit(ctx); err != nil {
-		return ErrUnavailable
-	}
-	if err := runtimeTx.Commit(ctx); err != nil {
-		return ErrUnavailable
 	}
 	return nil
 }
@@ -99,13 +144,13 @@ func loadRoleInventory(ctx context.Context, query roleQuerier, group string, com
 		WHERE principal=$1 AND schema_version=$2
 		ORDER BY object_kind,object_identity`, group, compatibleVersion)
 	if err != nil {
-		return roleInventory{}, ErrUnavailable
+		return roleInventory{}, Unavailable(err)
 	}
 	defer rows.Close()
 	for rows.Next() {
 		var kind, identity, privileges string
 		if err := rows.Scan(&kind, &identity, &privileges); err != nil {
-			return roleInventory{}, ErrUnavailable
+			return roleInventory{}, Unavailable(err)
 		}
 		switch kind {
 		case "table":
@@ -138,7 +183,7 @@ func loadRoleInventory(ctx context.Context, query roleQuerier, group string, com
 		}
 	}
 	if err := rows.Err(); err != nil {
-		return roleInventory{}, ErrUnavailable
+		return roleInventory{}, Unavailable(err)
 	}
 	return allowed, nil
 }
@@ -184,7 +229,7 @@ func verifyRoleInventory(ctx context.Context, pool roleQuerier, allowed roleInve
 		  UNION ALL SELECT 1 FROM pg_type t JOIN pg_namespace n ON n.oid=t.typnamespace WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND pg_has_role(current_user,t.typowner,'USAGE')
 		  UNION ALL SELECT 1 FROM pg_namespace n WHERE n.nspname !~ '^pg_' AND n.nspname <> 'information_schema' AND pg_has_role(current_user,n.nspowner,'USAGE'))
 	  FROM pg_roles r JOIN pg_roles g ON g.rolname=$1 WHERE r.rolname=current_user`, allowed.group).Scan(&user, &connect, &create, &temporary, &safeRole, &exactMembership, &safeGroup, &ownsObjects); err != nil {
-		return "", ErrUnavailable
+		return "", Unavailable(err)
 	}
 	if !connect || create || temporary || !safeRole || !exactMembership || !safeGroup || ownsObjects {
 		return "", errors.New("database_role_separation_invalid")
@@ -239,7 +284,7 @@ func verifyRoleInventory(ctx context.Context, pool roleQuerier, allowed roleInve
 func verifyExactInventory[T comparable](ctx context.Context, query roleQuerier, expected map[string]T, statement string) error {
 	rows, err := query.Query(ctx, statement)
 	if err != nil {
-		return ErrUnavailable
+		return Unavailable(err)
 	}
 	defer rows.Close()
 	remaining := cloneInventory(expected)
@@ -247,7 +292,7 @@ func verifyExactInventory[T comparable](ctx context.Context, query roleQuerier, 
 		var name string
 		var observed T
 		if err := rows.Scan(&name, &observed); err != nil {
-			return ErrUnavailable
+			return Unavailable(err)
 		}
 		if observed != expected[name] {
 			return errors.New("database_role_separation_invalid")
@@ -255,7 +300,7 @@ func verifyExactInventory[T comparable](ctx context.Context, query roleQuerier, 
 		delete(remaining, name)
 	}
 	if err := rows.Err(); err != nil {
-		return ErrUnavailable
+		return Unavailable(err)
 	}
 	if len(remaining) != 0 {
 		return errors.New("database_role_separation_invalid")
@@ -269,56 +314,4 @@ func cloneInventory[T any](source map[string]T) map[string]T {
 		clone[key] = value
 	}
 	return clone
-}
-
-// VerifyLiveActivityRole verifies the dedicated worker's exact EXECUTE and metadata-only inventory.
-func VerifyLiveActivityRole(ctx context.Context, pool *pgxpool.Pool, version int64) error {
-	if pool == nil || version < 28 {
-		return errors.New("database_role_separation_invalid")
-	}
-	tx, err := pool.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return ErrUnavailable
-	}
-	defer tx.Rollback(ctx)
-	if _, err = verifyRoleSnapshot(ctx, tx, "baby_tracker_live_activity", version); err != nil {
-		return err
-	}
-	return tx.Commit(ctx)
-}
-
-// VerifyLiveActivityRoleSeparation proves the worker shares runtime database
-// state, then verifies its exact narrow privileges in that same snapshot.
-// Importing a snapshot fails across either a database or a PostgreSQL cluster.
-func VerifyLiveActivityRoleSeparation(ctx context.Context, runtime, worker *pgxpool.Pool, version int64) error {
-	if runtime == nil || worker == nil || runtime == worker || version < 28 {
-		return errors.New("database_role_separation_invalid")
-	}
-	runtimeTx, err := runtime.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return ErrUnavailable
-	}
-	defer runtimeTx.Rollback(ctx)
-	var snapshot string
-	if err := runtimeTx.QueryRow(ctx, "SELECT pg_export_snapshot()").Scan(&snapshot); err != nil || !snapshotID.MatchString(snapshot) {
-		return errors.New("database_role_separation_invalid")
-	}
-	workerTx, err := worker.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead, AccessMode: pgx.ReadOnly})
-	if err != nil {
-		return ErrUnavailable
-	}
-	defer workerTx.Rollback(ctx)
-	if _, err := workerTx.Exec(ctx, fmt.Sprintf("SET TRANSACTION SNAPSHOT '%s'", snapshot)); err != nil {
-		return errors.New("database_role_separation_invalid")
-	}
-	if _, err := verifyRoleSnapshot(ctx, workerTx, "baby_tracker_live_activity", version); err != nil {
-		return err
-	}
-	if err := workerTx.Commit(ctx); err != nil {
-		return ErrUnavailable
-	}
-	if err := runtimeTx.Commit(ctx); err != nil {
-		return ErrUnavailable
-	}
-	return nil
 }

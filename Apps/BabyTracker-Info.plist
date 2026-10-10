@@ -8,6 +8,10 @@
 	<string>$(BT_HOSTED_SERVER_INSTANCE_ID)</string>
 	<key>CFBundleDisplayName</key>
 	<string>Baby Tracker</string>
+	<key>UIBackgroundModes</key>
+	<array>
+		<string>remote-notification</string>
+	</array>
 	<key>UIPrefersShowingLanguageSettings</key>
 	<true/>
 	<key>CFBundleURLTypes</key>

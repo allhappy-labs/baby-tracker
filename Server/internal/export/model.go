@@ -1,13 +1,11 @@
 package export
 
 import (
-	"context"
 	"errors"
 	"time"
 
-	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -25,13 +23,11 @@ var (
 	ErrInvalidRequest       = errors.New("invalid_request")
 )
 
-type FamilyResolver interface {
-	Current(context.Context, access.Principal) (string, error)
-}
-
 type Options struct {
-	Security    *security.Service
-	Resolver    FamilyResolver
+	// Authority guards the request path (WithFamilyTx, WithFamilyReadTx),
+	// rechecks a claimed job's subject (CheckExportSubject) and reads the
+	// family audit chain (FamilyAuditPage).
+	Authority   *authority.Service
 	Identity    protocol.ServerInfo
 	Runtime     *pgxpool.Pool
 	WorkerPool  *pgxpool.Pool
@@ -41,10 +37,7 @@ type Options struct {
 }
 
 type Service struct{ options Options }
-type Worker struct {
-	options Options
-	guard   *security.ExportSnapshotGuard
-}
+type Worker struct{ options Options }
 
 type Job struct {
 	ID, FamilyID, RequesterAccountID, RequestID, State string
@@ -56,16 +49,12 @@ type Job struct {
 }
 
 func New(options Options) (*Service, *Worker, error) {
-	if options.Security == nil || options.Resolver == nil || options.Runtime == nil || options.WorkerPool == nil ||
+	if options.Authority == nil || options.Runtime == nil || options.WorkerPool == nil ||
 		options.Now == nil || options.Identity.Validate() != nil || options.ActiveKeyID == "" || len(options.Keys) == 0 {
 		return nil, nil, ErrUnavailable
 	}
 	if _, ok := options.Keys[options.ActiveKeyID]; !ok {
 		return nil, nil, ErrUnavailable
-	}
-	guard, err := security.NewExportSnapshotGuard(options.Security, options.Runtime)
-	if err != nil {
-		return nil, nil, err
 	}
 	copyKeys := make(map[string][32]byte, len(options.Keys))
 	for k, v := range options.Keys {
@@ -75,5 +64,5 @@ func New(options Options) (*Service, *Worker, error) {
 		copyKeys[k] = v
 	}
 	options.Keys = copyKeys
-	return &Service{options: options}, &Worker{options: options, guard: guard}, nil
+	return &Service{options: options}, &Worker{options: options}, nil
 }

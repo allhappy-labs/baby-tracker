@@ -9,14 +9,16 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/account"
+	"babytracker/server/internal/admission"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/diagnostics"
 	"babytracker/server/internal/family"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
 	"babytracker/server/internal/realtime"
-	"babytracker/server/internal/security"
 )
 
 const maxRequestBodyBytes int64 = 1 << 20
@@ -42,7 +44,10 @@ type SessionService interface {
 	Authenticate(context.Context, string) (access.Principal, error)
 	ResolveRefreshSubject(context.Context, string) (auth.RefreshSubject, error)
 	Refresh(context.Context, string) (auth.SessionBundle, error)
-	Logout(context.Context, access.Principal, string) (security.CommandResult, error)
+	Logout(context.Context, access.Principal, string) (authority.Result, error)
+	// AccessDigests is a bearer access token's lookup digests, with no
+	// database work (the one-transaction sync and snapshot routes).
+	AccessDigests(string) ([]authority.KeyedDigest, error)
 }
 
 type RecoverySessionService interface {
@@ -56,26 +61,23 @@ type AppleNotificationService interface {
 }
 
 type AccountLifecycleService interface {
-	Delete(context.Context, access.Principal, string, bool) (security.CommandResult, error)
+	Delete(context.Context, access.Principal, string, bool) (account.DeletionResult, error)
 }
 
+// SyncService serves each sync and snapshot request in one authenticated
+// transaction (the request's credential and checks are in the
+// authority.Request).
 type SyncService interface {
-	ApplyAndPull(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error)
-	FullSnapshot(context.Context, access.Principal, protocol.SnapshotRequest) (protocol.SnapshotResponse, error)
+	ServeSync(context.Context, authority.Request, protocol.SyncRequest) (protocol.SyncResponse, error)
+	ServeSnapshot(context.Context, authority.Request, protocol.SnapshotRequest) (protocol.SnapshotResponse, error)
 }
 
-// LiveActivityService registers devices and cards. It is composed only while
-// push is enabled, and its routes need the supervised worker to be running.
-type LiveActivityService interface {
-	RegisterDevice(context.Context, access.Principal, protocol.LiveActivityDeviceRegistration) (protocol.LiveActivityRegistrationReceipt, error)
-	RegisterActivity(context.Context, access.Principal, protocol.LiveActivityTokenRegistration) (protocol.LiveActivityRegistrationReceipt, error)
-}
-
-// LiveActivityUnregistration revokes an installation's registration. It is the
-// repository-only path — no worker, APNs key or push configuration — so a phone
-// can withdraw while push is disabled or the worker is stopped.
-type LiveActivityUnregistration interface {
-	UnregisterDevice(context.Context, access.Principal, string, uint64) error
+// PushTokenService stores the authenticated session's own device's APNs
+// token (pushtoken.Service), each call in one guarded request transaction
+// with the request's checks in the authority.Request.
+type PushTokenService interface {
+	Register(context.Context, authority.Request, string, []byte) error
+	Unregister(context.Context, authority.Request) error
 }
 
 type ExportService interface {
@@ -90,8 +92,13 @@ type ImportService interface {
 	ResolveConflict(context.Context, access.Principal, string, protocol.ImportConflictRequest) (protocol.ImportResolveResponse, error)
 }
 
-type LiveFamilyAuthorizer interface {
-	Authorize(context.Context, access.Principal, string, string) (access.Grant, error)
+// RequestAuthorizer authorizes one request in one pooled statement with no
+// transaction (authority.Service.AuthorizeRequest): the credential, the
+// route's own refusals (Admit), family policy and the in-memory charge
+// (Charge), in that order. The live handshake is only that; the import and
+// export routes then run their service's one guarded transaction.
+type RequestAuthorizer interface {
+	AuthorizeRequest(context.Context, authority.Request, string) (access.Principal, access.Grant, error)
 }
 
 type FamilyService interface {
@@ -104,48 +111,57 @@ type FamilyService interface {
 	PendingInvitations(context.Context, access.Principal) ([]family.InvitationView, error)
 	Preview(context.Context, access.Principal, string) (family.InvitationPreview, error)
 	Redeem(context.Context, access.Principal, string, string, bool) (family.FamilyView, error)
-	ChangeRole(context.Context, access.Principal, string, string, string) (security.CommandResult, error)
-	RevokeInvitation(context.Context, access.Principal, string, string) (security.CommandResult, error)
-	Transfer(context.Context, access.Principal, string, string) (security.CommandResult, error)
-	Remove(context.Context, access.Principal, string, string) (security.CommandResult, error)
-	Leave(context.Context, access.Principal, string) (security.CommandResult, error)
+	ChangeRole(context.Context, access.Principal, string, string, string) (authority.Result, error)
+	RevokeInvitation(context.Context, access.Principal, string, string) (authority.Result, error)
+	Transfer(context.Context, access.Principal, string, string) (authority.Result, error)
+	Remove(context.Context, access.Principal, string, string) (authority.Result, error)
+	Leave(context.Context, access.Principal, string) (authority.Result, error)
 	RepairProfile(context.Context, access.Principal, string, string, bool) (family.FamilyView, error)
 	ListActors(context.Context, access.Principal, string, string, int) (family.ActorLabelPage, error)
 	ScheduleDeletion(context.Context, access.Principal, string, bool) (family.RecoveryStatus, error)
 	RecoveryStatus(context.Context, access.Principal) (family.RecoveryStatus, error)
-	Recover(context.Context, access.Principal, string, bool) (security.CommandResult, error)
-	Forfeit(context.Context, access.Principal, string, bool) (security.CommandResult, error)
+	Recover(context.Context, access.Principal, string, bool) (authority.Result, error)
+	Forfeit(context.Context, access.Principal, string, bool) (authority.Result, error)
 }
 
 type Options struct {
-	Logger                        *slog.Logger
-	SyncDiagnosticRecorder        diagnostics.Recorder
-	Readiness                     Readiness
-	InstanceID                    string
-	RecoveryEpoch                 uint64
-	CanonicalOrigin               string
-	SyncLimits                    *protocol.Limits
-	Gate                          AccountGate
-	ServerState                   ServerState
-	AppleAuthorizationMode        string
-	SourceVersion                 string
-	SourceURL                     string
-	Capabilities                  []string
-	ChallengeService              ChallengeService
-	SessionService                SessionService
-	RecoveryService               RecoverySessionService
-	RecoveryEnabled               bool
-	RecoveryReadiness             Readiness
-	AppleNotifications            AppleNotificationService
-	AccountService                AccountLifecycleService
-	FamilyService                 FamilyService
-	SyncService                   SyncService
-	ExportService                 ExportService
-	LiveActivityService           LiveActivityService
-	LiveActivityReadiness         Readiness // worker-local state only: cheap, no database work; callers add Readiness
-	LiveActivityUnregistration    LiveActivityUnregistration
-	ImportService                 ImportService
-	LiveFamilyAuthorizer          LiveFamilyAuthorizer
+	Admission *admission.Controller
+	// BodyReads bounds the request bodies read before a credential is
+	// checked, per client address and in all (nil: the defaults); see
+	// admitAfterBody.
+	BodyReads *admission.PerKey
+	// BodyReadTimeout bounds one such body read (0: 5 s).
+	BodyReadTimeout        time.Duration
+	AdmissionMetrics       *diagnostics.CapacityCollector
+	Logger                 *slog.Logger
+	SyncDiagnosticRecorder diagnostics.Recorder
+	Readiness              Readiness
+	InstanceID             string
+	RecoveryEpoch          uint64
+	CanonicalOrigin        string
+	SyncLimits             *protocol.Limits
+	Gate                   AccountGate
+	ServerState            ServerState
+	AppleAuthorizationMode string
+	SourceVersion          string
+	SourceURL              string
+	Capabilities           []string
+	ChallengeService       ChallengeService
+	SessionService         SessionService
+	RecoveryService        RecoverySessionService
+	RecoveryEnabled        bool
+	RecoveryReadiness      Readiness
+	AppleNotifications     AppleNotificationService
+	AccountService         AccountLifecycleService
+	FamilyService          FamilyService
+	SyncService            SyncService
+	ExportService          ExportService
+	ImportService          ImportService
+	// PushTokens, when non-nil, serves PUT and DELETE
+	// /v1/devices/push-token and advertises push-token-v1 (a server with
+	// APNs wakes configured). Nil: the routes are not registered (404).
+	PushTokens                    PushTokenService
+	RequestAuthorizer             RequestAuthorizer
 	LiveHub                       *realtime.Hub
 	Limiter                       limits.Limiter
 	ClientIPResolver              *limits.ClientIPResolver
@@ -172,6 +188,31 @@ type Options struct {
 	ExportIPPolicy                limits.Policy
 	ExportAccountPolicy           limits.Policy
 	ExportDevicePolicy            limits.Policy
+	PushTokenDevicePolicy         limits.Policy
+	PushTokenAccountPolicy        limits.Policy
+	// LiveActivityService, when non-nil, serves PUT /v1/live-activities/device
+	// and /v1/live-activities/activity (a server with Live Activity push
+	// enabled). Nil: those routes are not registered (404).
+	LiveActivityService LiveActivityService
+	// LiveActivityUnregistration, when non-nil, serves DELETE
+	// /v1/live-activities/device/{installation_id}, whether or not push is
+	// enabled. Nil: the route is not registered (404).
+	LiveActivityUnregistration LiveActivityUnregistration
+	// LiveActivityReady is the Live Activity worker's readiness (nil: not
+	// ready). Registration and the advertised live-activity-push-v1 need it
+	// to answer nil.
+	LiveActivityReady func(context.Context) error
+	// LiveActivityAccountPolicy and LiveActivityDevicePolicy are the Live
+	// Activity routes' budgets (zero: the default policies).
+	LiveActivityAccountPolicy limits.Policy
+	LiveActivityDevicePolicy  limits.Policy
+	// BearerFailureIPPolicy is a client address's budget of failed bearer
+	// checks on the routes that read a body before the credential (zero:
+	// the default policy).
+	BearerFailureIPPolicy limits.Policy
+	// MCPHandler, when non-nil, serves exact /mcp for every method. It owns
+	// its single MCP admission acquisition; the router adds no Sync slot.
+	MCPHandler http.Handler
 }
 
 func advertisedCapabilities(options Options) []string {
@@ -181,12 +222,25 @@ func advertisedCapabilities(options Options) []string {
 	}
 	result := make([]string, 0, len(capabilities)+1)
 	for _, capability := range capabilities {
-		if capability == protocol.CapabilityRefreshRecoveryV1 || (capability == protocol.CapabilityLiveActivityPushV1 && (options.LiveActivityService == nil || options.LiveActivityReadiness == nil)) {
+		if capability == protocol.CapabilityRefreshRecoveryV1 {
 			continue
 		}
-		if capability != protocol.CapabilityExportV1 || options.ExportService != nil {
-			result = append(result, capability)
+		switch capability {
+		case protocol.CapabilityExportV1:
+			if options.ExportService == nil {
+				continue
+			}
+		case protocol.CapabilityPushTokenV1:
+			if options.PushTokens == nil {
+				continue
+			}
+		case protocol.CapabilityLiveActivityPushV1:
+			continue // appended below when push is composed
 		}
+		result = append(result, capability)
+	}
+	if liveActivityConfigured(options) {
+		result = append(result, protocol.CapabilityLiveActivityPushV1)
 	}
 	if options.RecoveryEnabled && options.RecoveryService != nil && options.RecoveryReadiness != nil {
 		result = append(result, protocol.CapabilityRefreshRecoveryV1)
@@ -200,9 +254,6 @@ type Route struct {
 }
 
 var routes = []Route{
-	{Method: http.MethodPut, Pattern: "/v1/live-activities/device"},
-	{Method: http.MethodPut, Pattern: "/v1/live-activities/activity"},
-	{Method: http.MethodDelete, Pattern: "/v1/live-activities/device/{installation_id}"},
 	{Method: http.MethodPost, Pattern: "/v1/family/import/resolve"},
 	{Method: http.MethodGet, Pattern: "/v1/family/import/{import_id}"},
 	{Method: http.MethodPost, Pattern: "/v1/family/import/{import_id}/resolve-conflict"},
@@ -244,6 +295,23 @@ var routes = []Route{
 	{Method: http.MethodGet, Pattern: "/v1/export/{id}"},
 	{Method: http.MethodGet, Pattern: "/v1/export/{id}/download"},
 	{Method: http.MethodGet, Pattern: "/v1/live"},
+	{Method: http.MethodPut, Pattern: pushTokenRoute},
+	{Method: http.MethodDelete, Pattern: pushTokenRoute},
+	{Method: http.MethodPut, Pattern: liveActivityDeviceRoute},
+	{Method: http.MethodPut, Pattern: liveActivityActivityRoute},
+	{Method: http.MethodDelete, Pattern: liveActivityUnregistrationRoute},
+}
+
+// bodyFirstRoutes read their whole body before their credential is checked;
+// each takes its own admission slot after the body (admitAfterBody).
+var bodyFirstRoutes = map[Route]bool{
+	{Method: http.MethodPost, Pattern: "/v1/sync"}:                                       true,
+	{Method: http.MethodPost, Pattern: "/v1/family/import/resolve"}:                      true,
+	{Method: http.MethodPost, Pattern: "/v1/family/import/{import_id}/resolve-conflict"}: true,
+	{Method: http.MethodPut, Pattern: pushTokenRoute}:                                    true,
+	{Method: http.MethodDelete, Pattern: pushTokenRoute}:                                 true,
+	{Method: http.MethodPut, Pattern: liveActivityDeviceRoute}:                           true,
+	{Method: http.MethodPut, Pattern: liveActivityActivityRoute}:                         true,
 }
 
 func Routes() []Route {
@@ -262,6 +330,24 @@ func RoutesForAuthorizationMode(mode string) []Route {
 }
 
 func New(options Options) http.Handler {
+	if options.Admission == nil {
+		options.Admission, _ = admission.New(admission.DefaultTotal, 0)
+	}
+	if options.BodyReads == nil {
+		options.BodyReads, _ = admission.NewPerKey(defaultBodyReadTotal, defaultBodyReadsPerClient)
+	}
+	if options.BodyReadTimeout <= 0 {
+		options.BodyReadTimeout = defaultBodyReadTimeout
+	}
+	if options.LiveActivityAccountPolicy == (limits.Policy{}) {
+		options.LiveActivityAccountPolicy = limits.DefaultPolicies()[limits.ScopeLiveActivityAccount]
+	}
+	if options.LiveActivityDevicePolicy == (limits.Policy{}) {
+		options.LiveActivityDevicePolicy = limits.DefaultPolicies()[limits.ScopeLiveActivityDevice]
+	}
+	if options.BearerFailureIPPolicy == (limits.Policy{}) {
+		options.BearerFailureIPPolicy = limits.DefaultPolicies()[limits.ScopeBearerFailureIP]
+	}
 	logger := options.Logger
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(discardWriter{}, nil))
@@ -305,19 +391,46 @@ func New(options Options) http.Handler {
 		{Method: http.MethodGet, Pattern: "/invite"}:                                         invitationHandoffHandler,
 		{Method: http.MethodPost, Pattern: "/v1/sync"}:                                       syncHandler(options),
 		{Method: http.MethodGet, Pattern: "/v1/sync/snapshot"}:                               snapshotHandler(options),
-		{Method: http.MethodPut, Pattern: "/v1/live-activities/device"}:                      liveActivityDeviceHandler(options),
-		{Method: http.MethodPut, Pattern: "/v1/live-activities/activity"}:                    liveActivityTokenHandler(options),
-		{Method: http.MethodDelete, Pattern: "/v1/live-activities/device/{installation_id}"}: liveActivityDeleteHandler(options),
 		{Method: http.MethodPost, Pattern: "/v1/export"}:                                     exportCreateHandler(options),
 		{Method: http.MethodGet, Pattern: "/v1/export/{id}"}:                                 exportStatusHandler(options),
 		{Method: http.MethodGet, Pattern: "/v1/export/{id}/download"}:                        exportDownloadHandler(options),
 		{Method: http.MethodGet, Pattern: "/v1/live"}:                                        liveHandler(options),
+		{Method: http.MethodPut, Pattern: pushTokenRoute}:                                    pushTokenHandler(options, true),
+		{Method: http.MethodDelete, Pattern: pushTokenRoute}:                                 pushTokenHandler(options, false),
+		{Method: http.MethodPut, Pattern: liveActivityDeviceRoute}:                           liveActivityRegistrationHandler(options, true),
+		{Method: http.MethodPut, Pattern: liveActivityActivityRoute}:                         liveActivityRegistrationHandler(options, false),
+		{Method: http.MethodDelete, Pattern: liveActivityUnregistrationRoute}:                liveActivityUnregistrationHandler(options),
 	}
 	for _, route := range RoutesForAuthorizationMode(options.AppleAuthorizationMode) {
 		if route.Pattern == "/v1/auth/apple/notifications" {
 			handlers[route] = appleNotificationHandler(options)
 		}
-		mux.HandleFunc(route.Method+" "+route.Pattern, handlers[route])
+		if route.Pattern == pushTokenRoute && options.PushTokens == nil {
+			// A server without push does not serve the route (404).
+			continue
+		}
+		if (route.Pattern == liveActivityDeviceRoute || route.Pattern == liveActivityActivityRoute) && options.LiveActivityService == nil {
+			// A server with Live Activity push disabled does not serve
+			// registration (404); unregistration needs none of it.
+			continue
+		}
+		if route.Pattern == liveActivityUnregistrationRoute && options.LiveActivityUnregistration == nil {
+			continue
+		}
+		var handler http.Handler = handlers[route]
+		// Only operational probes bypass finite workload admission, and the
+		// routes that read their body before their credential take their
+		// slot themselves, once the body is read (admitAfterBody). Route-level
+		// classification leaves an independent single-acquisition seam for MCP.
+		if route.Pattern != "/healthz" && route.Pattern != "/readyz" && !bodyFirstRoutes[route] {
+			handler = WithAdmission(options.Admission, admission.Sync, options.AdmissionMetrics, handler)
+		}
+		mux.Handle(route.Method+" "+route.Pattern, handler)
+	}
+	if options.MCPHandler != nil {
+		// Exact path, every method: the MCP handler owns authentication,
+		// its single MCP admission slot and the SDK's 405 for GET/DELETE.
+		mux.Handle("/mcp", options.MCPHandler)
 	}
 
 	return withMiddleware(logger, mux)

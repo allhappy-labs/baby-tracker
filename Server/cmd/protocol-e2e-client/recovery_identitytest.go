@@ -9,7 +9,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
+	"strings"
 )
 
 type recoveryExpectation struct {
@@ -116,4 +118,76 @@ func (c client) recoveryVerify(ctx context.Context, path string) error {
 	}
 	fmt.Println("recovery Go verify: restarted application/client recovered identical tokens, attempt, device and original deadline twice")
 	return nil
+}
+
+// recoveryReuse runs after recovery-verify, against the committed child the
+// restarted server handed back. It acknowledges the receipt (twice: a lost
+// acknowledgement reply is retried), proves an acknowledged attempt can no
+// longer mint anything, then replays the consumed parent under a different
+// attempt: the lineage is revoked (refresh_attempt_conflict) and the child it
+// had issued stops authenticating.
+func (c client) recoveryReuse(ctx context.Context, path string) error {
+	state, err := readState(path)
+	if err != nil {
+		return err
+	}
+	if state.Recovery == nil || state.Recovery.Child.AccessToken == "" || state.Recovery.Child.RefreshToken == "" {
+		return errors.New("missing verified recovery child")
+	}
+	e := *state.Recovery
+	if status, body, err := c.raw(ctx, http.MethodGet, "/v1/account", e.Child.AccessToken, nil); err != nil || status != http.StatusOK {
+		return fmt.Errorf("recovered child is not usable: status=%d body=%s err=%v", status, body, err)
+	}
+	ack := protocol.RefreshAckRequest{RequestMeta: protocol.RequestMeta{ProtocolVersion: "v1", Capabilities: protocol.RefreshRecoveryCapabilities()},
+		RefreshAttemptID: e.AttemptID, DeviceContinuity: protocol.DeviceContinuityClaim{DeviceID: e.Parent.DeviceID, Credential: e.Parent.DeviceCredential}}
+	for i := 0; i < 2; i++ {
+		if status, body, err := c.raw(ctx, http.MethodPost, "/v1/auth/refresh-ack", e.Child.AccessToken, ack); err != nil || status != http.StatusNoContent {
+			return fmt.Errorf("acknowledgement %d: status=%d body=%s err=%v", i+1, status, body, err)
+		}
+	}
+	if status, body, err := c.raw(ctx, http.MethodPost, "/v1/auth/refresh-recoverable", "", recoveryInput(e)); err != nil || status != http.StatusUnauthorized || !strings.Contains(string(body), "refresh_receipt_unavailable") {
+		return fmt.Errorf("acknowledged attempt replay: status=%d body=%s err=%v", status, body, err)
+	}
+	conflict := e
+	conflict.AttemptID = "8f000000-0000-4000-8000-" + e.AttemptID[len(e.AttemptID)-12:]
+	if status, body, err := c.raw(ctx, http.MethodPost, "/v1/auth/refresh-recoverable", "", recoveryInput(conflict)); err != nil || status != http.StatusConflict || !strings.Contains(string(body), "refresh_attempt_conflict") {
+		return fmt.Errorf("conflicting attempt: status=%d body=%s err=%v", status, body, err)
+	}
+	if status, body, err := c.raw(ctx, http.MethodGet, "/v1/account", e.Child.AccessToken, nil); err != nil || status != http.StatusUnauthorized || !strings.Contains(string(body), "session_revoked") {
+		return fmt.Errorf("child survived lineage revocation: status=%d body=%s err=%v", status, body, err)
+	}
+	if _, err := c.refresh(ctx, e.Child.RefreshToken); err == nil || !strings.Contains(err.Error(), "status=401") {
+		return fmt.Errorf("revoked child refresh was not refused: %v", err)
+	}
+	fmt.Printf("recovery Go reuse: boundary=%s acknowledged twice; acknowledged attempt refused; conflicting attempt revoked the lineage; child refused\n", e.Fault)
+	return nil
+}
+
+// raw sends one request and returns its status and (bounded) body.
+func (c client) raw(ctx context.Context, method, path, token string, input any) (int, []byte, error) {
+	var payload io.Reader
+	if input != nil {
+		encoded, err := json.Marshal(input)
+		if err != nil {
+			return 0, nil, err
+		}
+		payload = bytes.NewReader(encoded)
+	}
+	request, err := http.NewRequestWithContext(ctx, method, c.base+path, payload)
+	if err != nil {
+		return 0, nil, err
+	}
+	if input != nil {
+		request.Header.Set("Content-Type", "application/json")
+	}
+	if token != "" {
+		request.Header.Set("Authorization", "Bearer "+token)
+	}
+	response, err := c.http.Do(request)
+	if err != nil {
+		return 0, nil, err
+	}
+	defer response.Body.Close()
+	body, err := io.ReadAll(io.LimitReader(response.Body, 2048))
+	return response.StatusCode, body, err
 }

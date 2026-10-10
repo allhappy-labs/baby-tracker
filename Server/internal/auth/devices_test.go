@@ -28,8 +28,8 @@ func TestCrossAccountDeviceClaimDenied(t *testing.T) {
 func TestRevokedDeviceClaimDenied(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
-	if _, err := h.db.Owner.Exec(t.Context(), `UPDATE devices SET binding_revoked_at=$2,updated_at=$2 WHERE id=$1`, original.DeviceID, h.Clock.Now()); err != nil {
-		t.Fatal(err)
+	if n := h.exec(`UPDATE devices SET status='revoked',revoked_at=$2,updated_at=$2 WHERE id=$1`, original.DeviceID, h.Clock.Now()); n != 1 {
+		t.Fatalf("revoked %d devices", n)
 	}
 	before := h.authMutationSnapshot()
 	_, err := h.Reauthenticate(original)
@@ -44,13 +44,17 @@ func TestRevokedDeviceClaimDenied(t *testing.T) {
 
 func TestChangedOriginOrInstanceDeviceClaimDenied(t *testing.T) {
 	for _, test := range []struct{ name, origin, instance string }{
-		{name: "origin", origin: "https://other.example.test", instance: sessionInstance},
+		{name: "origin", origin: "https://other.example.test"},
 		{name: "instance", origin: sessionOrigin, instance: "50000000-0000-4000-8000-000000000092"},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			h := newSessionFixture(t, config.ModeSelfHosted)
 			original := h.Issue()
-			h.restartWith(test.origin, test.instance)
+			instance := test.instance
+			if instance == "" {
+				instance = h.instance
+			}
+			h.restartWith(test.origin, instance)
 			before := h.authMutationSnapshot()
 			_, err := h.exchange("subject-one", nil, &identity.DeviceContinuityClaim{DeviceID: original.DeviceID, Credential: original.DeviceCredential})
 			if Code(err) != "device_continuity_invalid" {
@@ -88,12 +92,12 @@ func TestLostReauthResponseCanRetryContinuity(t *testing.T) {
 func TestDeviceContinuityPreservesReceiptOwner(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
-	if _, err := h.db.Owner.Exec(t.Context(), `CREATE TABLE test_device_receipts(
+	if _, err := h.db.DB.Owner.Exec(t.Context(), `CREATE TABLE test_device_receipts(
 		device_id uuid NOT NULL,mutation_id uuid NOT NULL,result text NOT NULL,PRIMARY KEY(device_id,mutation_id))`); err != nil {
 		t.Fatal(err)
 	}
 	mutationID := h.nextID(9)
-	if _, err := h.db.Owner.Exec(t.Context(), `INSERT INTO test_device_receipts(device_id,mutation_id,result) VALUES($1,$2,'applied')`, original.DeviceID, mutationID); err != nil {
+	if _, err := h.db.DB.Owner.Exec(t.Context(), `INSERT INTO test_device_receipts(device_id,mutation_id,result) VALUES($1,$2,'applied')`, original.DeviceID, mutationID); err != nil {
 		t.Fatal(err)
 	}
 	h.Clock.Advance(24 * time.Hour)
@@ -103,7 +107,7 @@ func TestDeviceContinuityPreservesReceiptOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	var result string
-	if err := h.db.Owner.QueryRow(t.Context(), `SELECT result FROM test_device_receipts WHERE device_id=$1 AND mutation_id=$2`, next.DeviceID, mutationID).Scan(&result); err != nil || result != "applied" {
+	if err := h.db.DB.Owner.QueryRow(t.Context(), `SELECT result FROM test_device_receipts WHERE device_id=$1 AND mutation_id=$2`, next.DeviceID, mutationID).Scan(&result); err != nil || result != "applied" {
 		t.Fatalf("receipt result=%q err=%v", result, err)
 	}
 	if _, err := h.exchange("subject-two", &identity.ProfileInput{DisplayName: "Parent Two", Confirmed: true}, nil); err != nil {
@@ -117,24 +121,4 @@ func TestDeviceContinuityPreservesReceiptOwner(t *testing.T) {
 	if after != before {
 		t.Fatal("cross-account claim reached receipt ownership state")
 	}
-}
-
-type authMutationState struct {
-	Head                         [32]byte
-	Revision                     uint64
-	Devices, Sessions, Materials int
-}
-
-func (h *sessionFixture) authMutationSnapshot() authMutationState {
-	h.t.Helper()
-	head, err := h.store.Heads.Load(h.t.Context())
-	if err != nil {
-		h.t.Fatal(err)
-	}
-	state := authMutationState{Head: head.EventHash, Revision: head.Revision}
-	if err := h.db.Owner.QueryRow(h.t.Context(), `SELECT (SELECT count(*) FROM devices),(SELECT count(*) FROM sessions),
-		(SELECT count(*) FROM auth_exchange_material)`).Scan(&state.Devices, &state.Sessions, &state.Materials); err != nil {
-		h.t.Fatal(err)
-	}
-	return state
 }

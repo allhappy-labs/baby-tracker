@@ -13,33 +13,30 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/care"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
 	"github.com/jackc/pgx/v5"
 )
 
 type Service struct {
-	guard    records.Guard
-	repo     *records.Repository
-	resolver access.FamilyResolver
-	info     protocol.ServerInfo
-	limits   protocol.Limits
-	keys     identity.DigestKeyring
-	now      func() time.Time
-	observer CommitObserver
+	guard     authority.FamilyGuard
+	info      protocol.ServerInfo
+	limits    protocol.Limits
+	keys      identity.DigestKeyring
+	now       func() time.Time
+	publisher care.Publisher
 }
 
-type CommitObserver interface {
-	Schedule(context.Context, pgx.Tx, access.Grant, string, protocol.Cursor) error
-	Publish(context.Context, string, protocol.Cursor) error
+func NewService(guard authority.FamilyGuard, info protocol.ServerInfo, limits protocol.Limits, keys identity.DigestKeyring, now func() time.Time) *Service {
+	return &Service{guard: guard, info: info, limits: limits, keys: keys, now: now}
 }
 
-func NewService(guard records.Guard, repo *records.Repository, resolver access.FamilyResolver, info protocol.ServerInfo, limits protocol.Limits, keys identity.DigestKeyring, now func() time.Time) *Service {
-	return &Service{guard: guard, repo: repo, resolver: resolver, info: info, limits: limits, keys: keys, now: now}
-}
-func (s *Service) SetCommitObserver(observer CommitObserver) { s.observer = observer }
-func code(value string) error                                { return errors.New(value) }
+// SetPublisher announces a published baby's new family high water after
+// the commit.
+func (s *Service) SetPublisher(p care.Publisher) { s.publisher = p }
+func code(value string) error                    { return errors.New(value) }
 
 type session struct {
 	id, account, device, mode, normalization string
@@ -50,22 +47,44 @@ type session struct {
 	expired                                  *time.Time
 }
 
-func (s *Service) family(ctx context.Context, p access.Principal) (string, error) {
+// sessionFamily is p's session family, checked with no database read: the
+// guarded transaction re-reads the session and refuses any other family
+// (withFamily). It refuses as the legacy family read did a principal that
+// is not a family member (family_scope_required) or not a refreshed family
+// session (access_expired).
+func sessionFamily(p access.Principal) (string, error) {
 	if p.Scope != "family" {
 		return "", code("family_scope_required")
 	}
 	if p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
 		return "", code("access_expired")
 	}
-	id, e := s.resolver.Current(ctx, p)
-	if e != nil {
-		return "", e
-	}
-	if id != p.SessionFamilyID {
-		return "", code("access_expired")
-	}
-	return id, nil
+	return p.SessionFamilyID, nil
 }
+
+// withFamily runs run in one guarded read-committed transaction for family,
+// the principal's session family; the guard takes the family and role from
+// the session row, so a grant for another family or account is refused as
+// membership_revoked (the legacy guard's family-mismatch code).
+func (s *Service) withFamily(ctx context.Context, p access.Principal, family, action string, run func(pgx.Tx, access.Grant) error) error {
+	return s.guard.WithFamilyTx(ctx, p, action, familyChecked(p, family, run))
+}
+
+// withFamilyRead is withFamily in a repeatable-read read-only transaction:
+// every read of run shares one snapshot, and nothing is locked or written.
+func (s *Service) withFamilyRead(ctx context.Context, p access.Principal, family, action string, run func(pgx.Tx, access.Grant) error) error {
+	return s.guard.WithFamilyReadTx(ctx, p, action, familyChecked(p, family, run))
+}
+
+func familyChecked(p access.Principal, family string, run func(pgx.Tx, access.Grant) error) func(pgx.Tx, access.Grant) error {
+	return func(tx pgx.Tx, g access.Grant) error {
+		if g.AccountID != p.AccountID || g.FamilyID != family {
+			return authority.ErrMembershipRevoked
+		}
+		return run(tx, g)
+	}
+}
+
 func loadSession(ctx context.Context, tx pgx.Tx, family, id string) (session, error) {
 	v := session{id: id}
 	e := tx.QueryRow(ctx, `SELECT initiating_account_id::text,initiating_device_id::text,import_mode,normalization_version,total_record_count,stored_record_count,next_chunk_index,manifest_complete,mapping_complete,resolver_revision,created_at,expires_at,expired_at FROM import_sessions WHERE family_id=$1 AND import_id=$2`, family, id).Scan(&v.account, &v.device, &v.mode, &v.normalization, &v.total, &v.count, &v.next, &v.complete, &v.mapped, &v.revision, &v.created, &v.expires, &v.expired)
@@ -90,20 +109,16 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 	if e := s.validate(&r); e != nil {
 		return out, e
 	}
-	family, e := s.family(ctx, p)
+	family, e := sessionFamily(p)
 	if e != nil {
 		return out, e
 	}
 	raw, _ := json.Marshal(r)
 	hash := sha256.Sum256(raw)
 	var resultErr error
-	var publish *protocol.Cursor
-	e = s.guard.WithAuthorizedTransaction(ctx, p, family, "add_baby", func(tx pgx.Tx, g access.Grant) error {
-		if e := records.LockFamilyForUpdate(ctx, tx, family); e != nil {
-			return e
-		}
-		var journalBefore uint64
-		if e := tx.QueryRow(ctx, `SELECT next_sequence FROM families WHERE id=$1`, family).Scan(&journalBefore); e != nil {
+	var publish uint64
+	e = s.withFamily(ctx, p, family, "add_baby", func(tx pgx.Tx, g access.Grant) error {
+		if _, e := care.LockFamily(ctx, tx, family); e != nil {
 			return e
 		}
 		v, e := loadSession(ctx, tx, family, r.ImportID)
@@ -134,7 +149,7 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 			if e != nil {
 				return e
 			}
-			if e = s.repo.ChargeImport(ctx, tx, family, 512, s.limits); e != nil {
+			if e = care.ChargeImport(ctx, tx, family, 512, s.limits); e != nil {
 				return e
 			}
 		} else if e != nil {
@@ -181,7 +196,7 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 			if e != nil {
 				return e
 			}
-			if e = s.repo.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
+			if e = care.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
 				return e
 			}
 		}
@@ -203,7 +218,7 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 			return e
 		}
 		if v.complete {
-			if _, e = s.resolveGraph(ctx, tx, g, &v); e != nil {
+			if _, publish, e = s.resolveGraph(ctx, tx, g, &v); e != nil {
 				return e
 			}
 		}
@@ -224,7 +239,7 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 		if e != nil {
 			return e
 		}
-		if e = s.repo.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
+		if e = care.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
 			return e
 		}
 		for _, m := range r.Records {
@@ -233,7 +248,7 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 			if e != nil {
 				return e
 			}
-			if e = s.repo.ChargeImport(ctx, tx, family, 192, s.limits); e != nil {
+			if e = care.ChargeImport(ctx, tx, family, 192, s.limits); e != nil {
 				return e
 			}
 		}
@@ -242,59 +257,76 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 				return e
 			}
 		}
-		return s.observeJournalAdvance(ctx, tx, g, p.DeviceID, journalBefore, &publish)
+		return nil
 	})
 	if e != nil {
 		return out, e
 	}
-	if publish != nil && s.observer != nil {
-		_ = s.observer.Publish(ctx, family, *publish)
-	}
+	s.publish(ctx, family, publish)
 	return out, resultErr
 }
 
-func (s *Service) observeJournalAdvance(ctx context.Context, tx pgx.Tx, grant access.Grant, deviceID string, before uint64, publish **protocol.Cursor) error {
-	var after uint64
-	if err := tx.QueryRow(ctx, `SELECT next_sequence FROM families WHERE id=$1`, grant.FamilyID).Scan(&after); err != nil {
-		return err
+// publish announces the high water a baby publication advanced the family
+// to, after the commit, best effort.
+func (s *Service) publish(ctx context.Context, family string, highWater uint64) {
+	if highWater == 0 || s.publisher == nil {
+		return
 	}
-	if after <= before || s.observer == nil {
-		return nil
-	}
-	cursor := protocol.Cursor{ServerInstanceID: s.info.InstanceID, RecoveryEpoch: s.info.RecoveryEpoch, FamilyID: grant.FamilyID, Sequence: after}
-	if err := s.observer.Schedule(ctx, tx, grant, deviceID, cursor); err != nil {
-		return err
-	}
-	*publish = &cursor
-	return nil
+	_ = s.publisher.Publish(ctx, family, protocol.Cursor{ServerInstanceID: s.info.InstanceID, RecoveryEpoch: s.info.RecoveryEpoch,
+		FamilyID: family, Sequence: highWater})
 }
 
 func (s *Service) Status(ctx context.Context, p access.Principal, id string) (protocol.ImportResolveResponse, error) {
 	return s.StatusPage(ctx, p, id, nil)
 }
+
+// StatusPage reads an import's status in one read-only snapshot, taking
+// no lock: the session (import_not_found), the access check
+// (import_access_denied), then a recorded expiry (import_expired) or the
+// response. Only an unfinished import found past its expiry and not yet
+// marked takes the family lock, in a second transaction that re-reads the
+// session and marks it expired (committed although the caller is told
+// import_expired), as Resolve and ResolveConflict mark it.
 func (s *Service) StatusPage(ctx context.Context, p access.Principal, id string, token *string) (protocol.ImportResolveResponse, error) {
 	var out protocol.ImportResolveResponse
 	if !protocol.ValidUUID(id) {
 		return out, code("invalid_request")
 	}
-	family, e := s.family(ctx, p)
+	family, e := sessionFamily(p)
 	if e != nil {
 		return out, e
 	}
 	var resultErr error
-	e = s.guard.WithAuthorizedTransaction(ctx, p, family, "read", func(tx pgx.Tx, g access.Grant) error {
-		if e := records.LockFamilyForUpdate(ctx, tx, family); e != nil {
-			return e
-		}
-		v, e := loadSession(ctx, tx, family, id)
-		if errors.Is(e, pgx.ErrNoRows) {
-			return code("import_not_found")
-		}
+	unmarked := false
+	e = s.withFamilyRead(ctx, p, family, "read", func(tx pgx.Tx, g access.Grant) error {
+		v, e := s.statusSession(ctx, tx, p, g, family, id)
 		if e != nil {
 			return e
 		}
-		if v.account != p.AccountID && g.Role != "owner" {
-			return code("import_access_denied")
+		switch {
+		case v.expired != nil:
+			resultErr = code("import_expired")
+			return nil
+		case !v.mapped && !s.now().Before(v.expires):
+			unmarked = true
+			return nil
+		}
+		out, e = s.response(ctx, tx, p, family, v, token, nil)
+		return e
+	})
+	if e != nil || !unmarked {
+		if e != nil {
+			return out, e
+		}
+		return out, resultErr
+	}
+	e = s.withFamily(ctx, p, family, "read", func(tx pgx.Tx, g access.Grant) error {
+		if _, e := care.LockFamily(ctx, tx, family); e != nil {
+			return e
+		}
+		v, e := s.statusSession(ctx, tx, p, g, family, id)
+		if e != nil {
+			return e
 		}
 		expired, e := s.expired(ctx, tx, family, v)
 		if e != nil {
@@ -311,6 +343,22 @@ func (s *Service) StatusPage(ctx context.Context, p access.Principal, id string,
 		return out, e
 	}
 	return out, resultErr
+}
+
+// statusSession is a status read's session and its access check: the
+// initiating account or the family's owner.
+func (s *Service) statusSession(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, family, id string) (session, error) {
+	v, e := loadSession(ctx, tx, family, id)
+	if errors.Is(e, pgx.ErrNoRows) {
+		return v, code("import_not_found")
+	}
+	if e != nil {
+		return v, e
+	}
+	if v.account != p.AccountID && g.Role != "owner" {
+		return v, code("import_access_denied")
+	}
+	return v, nil
 }
 
 func (s *Service) validate(r *protocol.ImportResolveRequest) error {
@@ -330,7 +378,7 @@ func (s *Service) validate(r *protocol.ImportResolveRequest) error {
 		b.Name = n
 		r.Babies[i] = b
 		m := protocol.Mutation{MutationID: r.ImportID, EntityID: b.LocalBabyID, EntityKind: "baby", Operation: "create", PayloadVersion: 1, ClientMutationTime: "2026-01-01T00:00:00.000000Z", Payload: protocol.BabyPayload{Name: b.Name, BirthDate: b.BirthDate, SortOrder: b.SortOrder}}
-		if records.ValidateMutation(m, s.limits) != nil {
+		if care.ValidateMutation(m, s.limits) != nil {
 			return code("invalid_request")
 		}
 	}

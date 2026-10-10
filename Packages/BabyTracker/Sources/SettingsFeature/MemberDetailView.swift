@@ -83,7 +83,7 @@ struct MemberDetailView<Model: FamilySyncSettingsModel>: View {
         .navigationBarTitleDisplayMode(.inline)
         #endif
         .disabled(isWorking)
-        .sheet(item: $pendingConfirmation, onDismiss: { linkHandOff?.released(handOffID) }) { confirmation in
+        .fittedSheet(item: $pendingConfirmation, onDismiss: { linkHandOff?.released(handOffID) }) { confirmation in
             FamilyLifecycleConfirmationView(confirmation: confirmation) {
                 pendingConfirmation = nil
                 run(confirmation.action)

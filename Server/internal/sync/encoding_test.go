@@ -50,9 +50,19 @@ func TestContinuationFixturesCarryProductionTokens(t *testing.T) {
 	}
 }
 
+// The page is sized from the stored bytes (IncrementalPageEncodedBytesRaw
+// over each change encoded once), exactly as the production encoder writes
+// it without its outcomes; the token counts when a row is left over.
 func TestIncrementalPageProductionEncoderLimitMinusOneExactAndPlusOne(t *testing.T) {
 	server, familyID, _, change, token := encodingFixture()
-	exact := syncResponseBytes(server, familyID, 2, []protocol.JournalChange{change}, true, token)
+	encoded, err := json.Marshal(change)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact := protocol.IncrementalPageEncodedBytes(server, familyID, 2, []protocol.JournalChange{change}, &token)
+	size := func(bytes, count int, next *string) int {
+		return protocol.IncrementalPageEncodedBytesRaw(server, familyID, 2, bytes, count, next)
+	}
 	for _, test := range []struct {
 		name      string
 		limit     int
@@ -61,26 +71,38 @@ func TestIncrementalPageProductionEncoderLimitMinusOneExactAndPlusOne(t *testing
 		{"limit-minus-one", exact - 1, true}, {"limit", exact, false}, {"limit-plus-one", exact + 1, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			page, _, _, err := chooseSyncChanges([]protocol.JournalChange{change}, 0, 2, 1, test.limit, server, familyID, token)
-			if errors.Is(err, ErrPageLimit) != test.wantError || (!test.wantError && len(page) != 1) {
-				t.Fatalf("page=%d err=%v exact=%d limit=%d", len(page), err, exact, test.limit)
+			count, err := pagePrefix([]json.RawMessage{encoded, encoded}, 1, test.limit, ErrPageLimit, size, token)
+			if errors.Is(err, ErrPageLimit) != test.wantError || (!test.wantError && count != 1) {
+				t.Fatalf("page=%d err=%v exact=%d limit=%d", count, err, exact, test.limit)
 			}
 		})
+	}
+	// Without a row left over the token does not count.
+	if count, err := pagePrefix([]json.RawMessage{encoded}, 1, exact-len(token)+2, ErrPageLimit, size, token); err != nil || count != 1 {
+		t.Fatalf("last page counted the token: %d %v", count, err)
 	}
 	response := protocol.SyncResponse{ServerInstanceID: server.InstanceID, RecoveryEpoch: server.RecoveryEpoch,
 		Outcomes: []protocol.Outcome{{MutationID: "01000000-0000-4000-8000-000000000001", Status: "rejected",
 			RelatedEntities: []protocol.CanonicalEntity{encodingFixtureEntityWithName(strings.Repeat("y", 100000))}}},
-		Changes: []protocol.JournalChange{change}, HighWater: protocol.Cursor{ServerInstanceID: server.InstanceID, RecoveryEpoch: 1, FamilyID: familyID, Sequence: 2}, NextPageToken: &token}
+		EncodedChanges: []json.RawMessage{encoded}, HighWater: protocol.Cursor{ServerInstanceID: server.InstanceID, RecoveryEpoch: 1, FamilyID: familyID, Sequence: 2}, NextPageToken: &token}
 	full, err := json.Marshal(response)
-	if err != nil || len(full)+1 <= exact || encodedSyncPageBytes(response) != exact {
-		t.Fatalf("full=%d metric=%d exact=%d err=%v", len(full)+1, encodedSyncPageBytes(response), exact, err)
+	if err != nil || len(full)+1 <= exact || size(len(encoded), 1, &token) != exact {
+		t.Fatalf("full=%d metric=%d exact=%d err=%v", len(full)+1, size(len(encoded), 1, &token), exact, err)
 	}
 }
 
 func TestSnapshotPageProductionEncoderLimitMinusOneExactAndPlusOne(t *testing.T) {
 	server, familyID, entity, _, token := encodingFixture()
-	exact := snapshotResponseBytes(server, "40000000-0000-4000-8000-000000000001",
-		protocol.Cursor{ServerInstanceID: server.InstanceID, RecoveryEpoch: 1, FamilyID: familyID, Sequence: 1}, []protocol.CanonicalEntity{entity}, &token)
+	snapshotID := "40000000-0000-4000-8000-000000000001"
+	highWater := protocol.Cursor{ServerInstanceID: server.InstanceID, RecoveryEpoch: 1, FamilyID: familyID, Sequence: 1}
+	wire, err := json.Marshal(entity)
+	if err != nil {
+		t.Fatal(err)
+	}
+	exact := protocol.SnapshotPageEncodedBytes(server, snapshotID, highWater, []protocol.CanonicalEntity{entity}, &token)
+	size := func(bytes, count int, next *string) int {
+		return protocol.SnapshotPageEncodedBytesRaw(server, snapshotID, highWater, bytes, count, next)
+	}
 	for _, test := range []struct {
 		name      string
 		limit     int
@@ -89,10 +111,9 @@ func TestSnapshotPageProductionEncoderLimitMinusOneExactAndPlusOne(t *testing.T)
 		{"limit-minus-one", exact - 1, true}, {"limit", exact, false}, {"limit-plus-one", exact + 1, false},
 	} {
 		t.Run(test.name, func(t *testing.T) {
-			page, _, _, err := chooseSnapshotEntities([]protocol.CanonicalEntity{entity}, []uint64{0}, 0, 2, 1, test.limit,
-				server, familyID, "40000000-0000-4000-8000-000000000001", 1, token)
-			if errors.Is(err, ErrSnapshotLimit) != test.wantError || (!test.wantError && len(page) != 1) {
-				t.Fatalf("page=%d err=%v exact=%d limit=%d", len(page), err, exact, test.limit)
+			count, err := pagePrefix([]json.RawMessage{wire, wire}, 1, test.limit, ErrSnapshotLimit, size, token)
+			if errors.Is(err, ErrSnapshotLimit) != test.wantError || (!test.wantError && count != 1) {
+				t.Fatalf("page=%d err=%v exact=%d limit=%d", count, err, exact, test.limit)
 			}
 		})
 	}

@@ -38,7 +38,7 @@ func TestConcurrentImportConvergesOnOneBaby(t *testing.T) {
 		}
 		ids = append(ids, out.Mappings[0].SharedBabyID)
 	}
-	if len(ids) != 2 || ids[0] != ids[1] || h.Count(t, "babies", h.FamilyID) != 1 {
+	if len(ids) != 2 || ids[0] != ids[1] || h.CareCount(t, "baby", h.FamilyID) != 1 {
 		t.Fatal("concurrent import did not converge")
 	}
 }
@@ -60,7 +60,7 @@ func distinct(t *testing.T, mode string) {
 			t.Fatal("collapsed siblings")
 		}
 	}
-	if h.Count(t, "babies", h.FamilyID) != 2 {
+	if h.CareCount(t, "baby", h.FamilyID) != 2 {
 		t.Fatal("lost sibling")
 	}
 }
@@ -92,7 +92,7 @@ func TestImportResumeAfterEachCommitBoundary(t *testing.T) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	b, e := h.Importer.Status(t.Context(), h.Owner, r.ImportID)
 	if e != nil || !reflect.DeepEqual(a, b) {
 		t.Fatalf("resume: %+v %v", b, e)
@@ -146,7 +146,7 @@ func TestPreserveIDsModeDoesNotFuzzyMatchExistingBaby(t *testing.T) {
 	r = testkit.ImportRequest(1, "Élie", "2026-01-12")
 	r.ImportMode = "preserve_local_ids"
 	a, e := h.Importer.Resolve(t.Context(), h.Owner, r)
-	if e != nil || a.Mappings[0].SharedBabyID != r.Babies[0].LocalBabyID || h.Count(t, "babies", h.FamilyID) != 2 {
+	if e != nil || a.Mappings[0].SharedBabyID != r.Babies[0].LocalBabyID || h.CareCount(t, "baby", h.FamilyID) != 2 {
 		t.Fatalf("%+v %v", a, e)
 	}
 }
@@ -245,7 +245,7 @@ func TestDifferentRecordUUIDsRemainSeparate(t *testing.T) {
 	m.MutationID = h.CommandID()
 	m.ImportID = &r.ImportID
 	apply(t, h, h.Caregiver, m)
-	if h.Count(t, "feed_entries", h.FamilyID) != 2 {
+	if h.CareCount(t, "feed", h.FamilyID) != 2 {
 		t.Fatal("equal-looking distinct records collapsed")
 	}
 }

@@ -1,4 +1,7 @@
 import Foundation
+import Testing
+import Network
+import Security
 
 /// The live server's address and one of its sessions, handed over by
 /// `protocol-e2e.sh`.
@@ -69,8 +72,10 @@ struct SessionIdentityFields: Sendable {
 /// mismatch, which is stricter than the production client is on a public CA.
 final class PinnedCertificateDelegate: NSObject, URLSessionDelegate, @unchecked Sendable {
     private let expected: Data
+    private let strictHostname: String?
 
-    init(pinning certificate: Data) {
+    init(pinning certificate: Data, strictHostname: String? = nil) {
+        self.strictHostname = strictHostname
         // The file on disk is PEM; the trust object hands back DER.
         let text = String(decoding: certificate, as: UTF8.self)
         let body = text
@@ -100,6 +105,13 @@ final class PinnedCertificateDelegate: NSObject, URLSessionDelegate, @unchecked 
         else {
             return (.cancelAuthenticationChallenge, nil)
         }
+        if let strictHostname {
+            guard challenge.protectionSpace.host == strictHostname,
+                  SecTrustSetPolicies(trust, SecPolicyCreateSSL(true, strictHostname as CFString)) == errSecSuccess,
+                  SecTrustSetAnchorCertificates(trust, [leaf] as CFArray) == errSecSuccess,
+                  SecTrustSetAnchorCertificatesOnly(trust, true) == errSecSuccess,
+                  SecTrustEvaluateWithError(trust, nil) else { return (.cancelAuthenticationChallenge, nil) }
+        }
         return (.useCredential, URLCredential(trust: trust))
     }
 
@@ -124,18 +136,39 @@ final class PhoneTraffic: @unchecked Sendable {
         var description: String { "\(status.map(String.init) ?? "no-response")\(origin.map { " origin=\($0)" } ?? "")" }
     }
 
+    /// One finished `/v1/devices/push-token` request: its method and the
+    /// HTTP status it got (nil when no response came back).
+    struct PushTokenCall: Sendable, Equatable, CustomStringConvertible {
+        let method: String
+        let status: Int?
+        var description: String { "\(method) \(status.map(String.init) ?? "no-response")" }
+    }
+
     private let lock = NSLock()
     private var syncs = 0
     private var cursors: [UInt64?] = []
     private var dials: [LiveDial] = []
+    private var pushTokenTasks: [URLSessionTask] = []
 
     var syncRequests: Int { lock.withLock { syncs } }
     var liveDials: [LiveDial] { lock.withLock { dials } }
+    /// Every push-token request the phone has finished, in the order it made
+    /// them. Read from the tasks themselves: the async API that sends them
+    /// does not report their completion to the session delegate.
+    var pushTokenCalls: [PushTokenCall] {
+        lock.withLock { pushTokenTasks }.filter { $0.state == .completed }.map {
+            PushTokenCall(method: $0.originalRequest?.httpMethod ?? "GET", status: ($0.response as? HTTPURLResponse)?.statusCode)
+        }
+    }
     /// The cursor sequence every `POST /v1/sync` carried, in order: nil for
     /// `"cursor": null`, which asks the server for its journal from 0.
     var syncCursors: [UInt64?] { lock.withLock { cursors } }
 
     fileprivate func created(_ task: URLSessionTask) {
+        if task.originalRequest?.url?.path == "/v1/devices/push-token" {
+            lock.withLock { pushTokenTasks.append(task) }
+            return
+        }
         guard task.originalRequest?.url?.path == "/v1/sync" else { return }
         let body = task.originalRequest?.httpBody.flatMap { try? JSONSerialization.jsonObject(with: $0) as? [String: Any] }
         let sequence = ((body?["cursor"] as? [String: Any])?["sequence"] as? NSNumber)?.uint64Value
@@ -157,8 +190,8 @@ final class RecordingPinnedDelegate: NSObject, URLSessionWebSocketDelegate, @unc
     private let pin: PinnedCertificateDelegate
     let traffic = PhoneTraffic()
 
-    init(pinning certificate: Data) {
-        pin = PinnedCertificateDelegate(pinning: certificate)
+    init(pinning certificate: Data, strictHostname: String? = nil) {
+        pin = PinnedCertificateDelegate(pinning: certificate, strictHostname: strictHostname)
     }
 
     func urlSession(
@@ -185,4 +218,63 @@ final class RecordingPinnedDelegate: NSObject, URLSessionWebSocketDelegate, @unc
               (task.response as? HTTPURLResponse)?.statusCode != 101 else { return }
         traffic.dialled(task, status: (task.response as? HTTPURLResponse)?.statusCode)
     }
+}
+
+
+@Testing.Test func capacityProxyRejectsUnownedRoutes() throws {
+    for invalid in ["remote.example:443", "127.0.0.1:0", "127.0.0.1:65536", "127.0.0.1:12/path", "https://127.0.0.1:12"] {
+        #expect(throws: (any Error).self) { try CapacityTestRoute.configuration(endpoint: invalid) }
+    }
+    let configuration = try CapacityTestRoute.configuration(endpoint: "127.0.0.1:12345")
+    #expect(configuration.proxyConfigurations.count == 1)
+}
+
+
+enum CapacityTestRoute {
+    static var enabled: Bool { ProcessInfo.processInfo.environment["BABY_TRACKER_CAPACITY_CONNECT"] != nil }
+    static func currentConfiguration() throws -> URLSessionConfiguration {
+        guard let endpoint = ProcessInfo.processInfo.environment["BABY_TRACKER_CAPACITY_CONNECT"] else { return .ephemeral }
+        return try configuration(endpoint: endpoint)
+    }
+    static func configuration(endpoint: String) throws -> URLSessionConfiguration {
+        let parts = endpoint.split(separator: ":", omittingEmptySubsequences: false)
+        guard parts.count == 2, parts[0] == "127.0.0.1", let number = UInt16(parts[1]), number > 0,
+              String(number) == parts[1], let port = NWEndpoint.Port(rawValue: number) else { throw E2EFailure("invalid owned CONNECT route") }
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.proxyConfigurations = [ProxyConfiguration(httpCONNECTProxy: .hostPort(host: "127.0.0.1", port: port))]
+        configuration.timeoutIntervalForRequest = 10
+        configuration.timeoutIntervalForResource = 20
+        return configuration
+    }
+}
+
+
+@Test func capacityProofSinkRetainsBeforeProcessExit() throws {
+    let file = FileManager.default.temporaryDirectory.appending(path: "capacity-proof-\(UUID().uuidString).log")
+    FileManager.default.createFile(atPath: file.path, contents: Data(), attributes: [.posixPermissions: 0o600])
+    defer { try? FileManager.default.removeItem(at: file) }
+    try CapacityProofSink.write("foreground-latency proof: retained", to: file.path)
+    #expect(try String(contentsOf: file, encoding: .utf8) == "foreground-latency proof: retained\n")
+    #expect(throws: (any Error).self) { try CapacityProofSink.write("credential arbitrary", to: file.path) }
+}
+
+
+enum CapacityProofSink {
+    static func write(_ line: String, to path: String) throws {
+        guard line.hasPrefix("foreground-latency "), line.utf8.count <= 16384 else { throw E2EFailure("invalid proof row") }
+        let handle = try FileHandle(forWritingTo: URL(fileURLWithPath: path))
+        defer { try? handle.close() }
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((line + "\n").utf8))
+        try handle.synchronize()
+    }
+}
+
+func emitForegroundLine(_ line: String) {
+    if let path = ProcessInfo.processInfo.environment["BABY_TRACKER_CAPACITY_PROOF"] {
+        // This sink is outside measured pair intervals and survives a killed
+        // SwiftPM wrapper. A failed sink cannot manufacture proof in the reader.
+        try? CapacityProofSink.write(line, to: path)
+    }
+    print(line)
 }

@@ -4,9 +4,9 @@ import (
 	"errors"
 	"time"
 
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/config"
 	"babytracker/server/internal/identity"
-	"babytracker/server/internal/security"
 )
 
 type AccountView struct {
@@ -27,43 +27,36 @@ type SessionBundle struct {
 	FamilySlot                          *FamilySlot
 }
 
-type DeviceBinding struct {
-	DeviceID, AccountID, ServerInstanceID, CanonicalOrigin, CredentialKeyID string
-	CredentialDigest                                                        [32]byte
-	Revoked                                                                 bool
-}
-
+// Options configures a Service. Authority is the PostgreSQL authority every
+// session command runs in; its instance ID must be InstanceID and its token
+// keyring must be TokenKeys. Hosted mode requires Apple: the authorization
+// code is exchanged and verified before the sign-in transaction, and the
+// returned Apple refresh token is not kept.
 type Options struct {
-	Identity         *identity.Service
-	Verifier         identity.IdentityVerifier
-	Security         *security.Service
-	Repository       *Repository
-	Apple            identity.AppleCodeExchanger
-	Credentials      identity.CredentialRotator
-	Mode             config.Mode
-	Origin           string
-	InstanceID       string
-	TokenKeys        identity.DigestKeyring
-	DeviceKeys       identity.DigestKeyring
-	NotificationKeys identity.DigestKeyring
-	ActorIDKey       [32]byte
-	Now              func() time.Time
-	AccessTTL        time.Duration
-	RefreshTTL       time.Duration
-	AbsoluteAge      time.Duration
+	Identity    *identity.Service
+	Verifier    identity.IdentityVerifier
+	Authority   *authority.Service
+	Apple       identity.AppleCodeExchanger
+	Mode        config.Mode
+	Origin      string
+	InstanceID  string
+	TokenKeys   identity.DigestKeyring
+	DeviceKeys  identity.DigestKeyring
+	ActorIDKey  [32]byte
+	Now         func() time.Time
+	AccessTTL   time.Duration
+	RefreshTTL  time.Duration
+	AbsoluteAge time.Duration
 }
 
 type Service struct {
 	identity              *identity.Service
 	verifier              identity.IdentityVerifier
-	security              *security.Service
-	repository            *Repository
+	authority             *authority.Service
 	apple                 identity.AppleCodeExchanger
-	credentials           identity.CredentialRotator
 	mode                  config.Mode
 	origin, instanceID    string
 	tokenKeys, deviceKeys identity.DigestKeyring
-	notificationKeys      identity.DigestKeyring
 	actorIDKey            [32]byte
 	now                   func() time.Time
 	accessTTL, refreshTTL time.Duration
@@ -81,6 +74,8 @@ type codedError string
 
 func (err codedError) Error() string { return string(err) }
 
+// Code is err's stable code: an auth code, else an explicit identity code
+// (which wins over any authority cause it wraps), else the authority's code.
 func Code(err error) string {
 	if err == nil {
 		return ""
@@ -89,15 +84,17 @@ func Code(err error) string {
 	if errors.As(err, &coded) {
 		return string(coded)
 	}
-	if code := identity.Code(err); code != "service_unavailable" {
+	if code, ok := identity.ExplicitCode(err); ok {
 		return code
 	}
-	if code := security.Code(err); code != "service_unavailable" {
-		return code
-	}
-	return "service_unavailable"
+	return authority.CodeOf(err)
 }
 
+// RefreshDerivationInput is the frozen v2 refresh derivation domain. The
+// authority feeds HeadGeneration=1, HeadRevision=parent issued_seq,
+// HeadHash=sha256(parent session ID) and TargetRevision=issued_seq+1, and
+// ReauthenticateAt=AbsoluteExpiresAt=the lineage deadline_at, so the frozen
+// v2/v3 known answers are unchanged (see derivationInput).
 type RefreshDerivationInput struct {
 	ServerInstanceID     string
 	AccountID            string
@@ -140,27 +137,6 @@ type StageCommon struct {
 	RefreshExpiresAt     string  `json:"refresh_expires_at"`
 	ReauthenticateAt     string  `json:"reauthenticate_at"`
 	AbsoluteExpiresAt    string  `json:"absolute_expires_at"`
-}
-
-type ExchangeStage struct {
-	StageCommon
-	IdentityProvider        string  `json:"identity_provider"`
-	IdentityKeyID           string  `json:"identity_key_id"`
-	IdentityDigest          string  `json:"identity_digest"`
-	IdentityAudience        string  `json:"identity_audience"`
-	IdentitySubject         string  `json:"identity_subject"`
-	DisplayName             *string `json:"display_name"`
-	ProfileConfirmed        bool    `json:"profile_confirmed"`
-	RegisterAccount         bool    `json:"register_account"`
-	RegisterDevice          bool    `json:"register_device"`
-	InstallationKeyID       *string `json:"installation_key_id"`
-	InstallationDigest      *string `json:"installation_digest"`
-	ContinuityKeyID         *string `json:"continuity_key_id"`
-	ContinuityDigest        *string `json:"continuity_digest"`
-	AppleCredentialID       *string `json:"apple_credential_id"`
-	AppleCredentialKeyID    *string `json:"apple_credential_key_id"`
-	AppleCredentialPurpose  *string `json:"apple_credential_purpose"`
-	AppleCredentialObjectID *string `json:"apple_credential_object_id"`
 }
 
 type RefreshStage struct {

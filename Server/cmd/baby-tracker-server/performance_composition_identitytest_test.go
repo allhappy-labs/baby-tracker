@@ -11,6 +11,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/json"
 	"encoding/pem"
+	"errors"
 	"io"
 	"log/slog"
 	"math/big"
@@ -22,17 +23,28 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	"babytracker/server/internal/apns"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/capacity"
+	"babytracker/server/internal/care/caretest"
 	"babytracker/server/internal/config"
+	"babytracker/server/internal/database"
+	"babytracker/server/internal/delivery"
+	"babytracker/server/internal/family"
 	"babytracker/server/internal/httpapi"
 	"babytracker/server/internal/limits"
+	"babytracker/server/internal/migrate"
 	"babytracker/server/internal/protocol"
 	"babytracker/server/internal/realtime"
-	"babytracker/server/internal/records"
 	familysync "babytracker/server/internal/sync"
+	"babytracker/server/internal/testpg"
+	"babytracker/server/internal/wake"
+	"babytracker/server/migrations"
 	"github.com/coder/websocket"
 )
 
@@ -49,7 +61,7 @@ func runPerformanceComposition(t *testing.T) {
 			name = "observer_disabled"
 		}
 		t.Run(name, func(t *testing.T) {
-			h := newReadinessFixture(t)
+			h := newPerformanceFixture(t)
 			cfg := h.cfg
 			cfg.AppleAudience = "com.example.performance"
 			cfg.TrustedProxyCIDRs = []netip.Prefix{netip.MustParsePrefix("127.0.0.1/32")}
@@ -65,22 +77,21 @@ func runPerformanceComposition(t *testing.T) {
 			if err := h.db.Maintenance.QueryRow(t.Context(), "SELECT current_user").Scan(&role); err != nil {
 				t.Fatal(err)
 			}
-			if err := verifyExportPool(t.Context(), h.db.Maintenance, role); err != nil {
+			if err := verifyMaintenancePool(t.Context(), h.db.Maintenance, role); err != nil {
 				t.Fatal(err)
 			}
-			if err := verifyExportPool(t.Context(), h.db.Runtime, role); err == nil {
+			if err := verifyMaintenancePool(t.Context(), h.db.Runtime, role); err == nil {
 				t.Fatal("runtime accepted as maintenance")
 			}
-			if err := verifyExportPool(t.Context(), h.db.Projector, role); err == nil {
-				t.Fatal("projector accepted as maintenance")
-			}
-			gate, authority, families, err := runtimeServices(cfg, h.db.Runtime, h.db.Projector)
+			authorityService, families, err := runtimeServices(cfg, h.db.Runtime)
 			if err != nil {
 				t.Fatal(err)
 			}
-			if err = gate.Reconcile(t.Context()); err != nil {
+			readiness := readinessOver(t, cfg, h.db.Runtime, h.db.Maintenance)
+			if err := readiness.inventory.Refresh(t.Context()); err != nil {
 				t.Fatal(err)
 			}
+			_ = readiness.Refresh(t.Context())
 			server := httptest.NewUnstartedServer(nil)
 			server.Config.ConnContext = realtime.TransportContext
 			server.Start()
@@ -96,15 +107,13 @@ func runPerformanceComposition(t *testing.T) {
 			defer proxy.Close()
 			origin := strings.Replace(proxy.URL, "127.0.0.1", "localhost", 1)
 			cfg.PublicOrigin, _ = url.Parse(origin)
-			options, err := applicationOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), gate, authority, families, h.db.Runtime)
+			tracker := wake.NewTracker(0)
+			options, err := applicationOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), readiness, authorityService, families, h.db.Runtime, tracker, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
 			if options.Limiter == nil || options.LiveHub == nil || options.SyncMutationDevicePolicy != limits.DefaultPolicies()[limits.ScopeSyncMutationDevice] || options.SyncPullDevicePolicy != limits.DefaultPolicies()[limits.ScopeSyncPullDevice] {
 				t.Fatal("default limiter or live hub absent")
-			}
-			if cfg.RecoveryCleanup.Enabled {
-				options.RecoveryReadiness = recoveryFunctionReadiness{pool: h.db.Maintenance}
 			}
 			if err := options.Readiness.Check(t.Context()); err != nil {
 				t.Fatal(err)
@@ -117,49 +126,22 @@ func runPerformanceComposition(t *testing.T) {
 			}
 			if disabled {
 				info := protocol.ServerInfo{InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch, CanonicalOrigin: origin, APIVersions: []string{"v1"}, Capabilities: options.Capabilities, Limits: options.SyncLimits, AppleAuthorizationMode: options.AppleAuthorizationMode}
-				options.SyncService = familysync.NewServiceWithPaging(authority, records.NewRepository(), info, cfg.Sync.Limits, time.Now, syncFamilyResolver{service: families}, nil, composeDigestKeyring(cfg.Auth.PageTokenKeys))
+				options.SyncService = familysync.New(familysync.Options{Guard: authorityService, Server: info, Limits: cfg.Sync.Limits, Now: time.Now,
+					PageKeys: composeDigestKeyring(cfg.Auth.PageTokenKeys), Allowed: family.Allowed})
 			}
 			server.Config.Handler = wrapIdentityTestHandler(httpapi.New(options), cfg.AppleAudience)
-			ctx, cancel := context.WithCancel(t.Context())
-			defer cancel()
-			listener, err := realtime.StartPostgresListener(ctx, realtime.PostgresOptions{Pool: h.db.Runtime, Hub: options.LiveHub, InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch, Resyncer: syncCursorResyncer{service: options.SyncService}})
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer listener.Close()
 			defer options.LiveHub.Shutdown(context.Background())
-			go reconcileLoop(ctx, gate)
-			// Run the actual worker through the real gate and maintenance pool. The
-			// wrapper observes successful SQL only; it does not replace its behavior.
-			calls := make(chan struct{}, 16)
-			workerDone := make(chan struct{})
-			worker := recoveryCleanup{pool: h.db.Maintenance, now: time.Now}
-			go func() {
-				defer close(workerDone)
-				runRecoveryCleanup(ctx, gate, recoveryCleanupFunc(func(c context.Context) error {
-					err := worker.RunOnce(c)
-					if err == nil {
-						select {
-						case calls <- struct{}{}:
-						default:
-						}
-					}
-					return err
-				}), nil, 20*time.Millisecond)
-			}()
-			defer func() { cancel(); <-workerDone }()
-			select {
-			case <-calls:
-			case <-time.After(3 * time.Second):
-				t.Fatal("cleanup worker not admitted")
-			}
 			// Conditional recovery readiness controls real capability and route gates.
 			assertRecovery := func(enabled bool) {
 				t.Helper()
+				// The monitor's next tick: requests read its cached outcome.
+				_ = readiness.Refresh(t.Context())
 				rr := httptest.NewRecorder()
 				httpapi.New(options).ServeHTTP(rr, httptest.NewRequest("GET", "/v1/server", nil))
-				if rr.Code != 200 || strings.Contains(rr.Body.String(), `"refresh-recovery-v1"`) != enabled {
-					t.Fatal("recovery capability gate mismatch")
+				// Advertised from configuration whether or not the node is
+				// ready; the route itself is gated.
+				if rr.Code != 200 || !strings.Contains(rr.Body.String(), `"refresh-recovery-v1"`) {
+					t.Fatal("recovery capability withdrawn")
 				}
 				rr = httptest.NewRecorder()
 				httpapi.New(options).ServeHTTP(rr, httptest.NewRequest("POST", "/v1/auth/refresh-recoverable", strings.NewReader(`{}`)))
@@ -172,11 +154,19 @@ func runPerformanceComposition(t *testing.T) {
 				}
 			}
 			assertRecovery(true)
-			if _, err := h.db.Owner.Exec(t.Context(), "REVOKE EXECUTE ON FUNCTION app.cleanup_refresh_recovery_receipts(timestamptz) FROM baby_tracker_maintenance"); err != nil {
+			// A node that is not ready (here: an actor-ID key commitment that
+			// is not the configured key's) keeps advertising the capability
+			// but refuses the route with a retryable 503; restoring it
+			// re-admits the route.
+			var commitment []byte
+			if err := h.db.Owner.QueryRow(t.Context(), "SELECT actor_key_commitment FROM server_state WHERE singleton").Scan(&commitment); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.db.Owner.Exec(t.Context(), "UPDATE server_state SET actor_key_commitment=$1 WHERE singleton", make([]byte, 32)); err != nil {
 				t.Fatal(err)
 			}
 			assertRecovery(false)
-			if _, err := h.db.Owner.Exec(t.Context(), "GRANT EXECUTE ON FUNCTION app.cleanup_refresh_recovery_receipts(timestamptz) TO baby_tracker_maintenance"); err != nil {
+			if _, err := h.db.Owner.Exec(t.Context(), "UPDATE server_state SET actor_key_commitment=$1 WHERE singleton", commitment); err != nil {
 				t.Fatal(err)
 			}
 			assertRecovery(true)
@@ -205,53 +195,170 @@ func runPerformanceComposition(t *testing.T) {
 			if json.Unmarshal(raw, &saved) != nil {
 				t.Fatal("invalid private fixture state")
 			}
-			// Prove listener delivery independently of in-process observer publication.
+			// Prove the composed hub delivers a published high water to a new
+			// socket through the post-commit observer, independently of a write.
 			httpClient := proxy.Client()
 			ws, _, err := websocket.Dial(t.Context(), origin+"/v1/live", &websocket.DialOptions{HTTPClient: httpClient, HTTPHeader: http.Header{"Authorization": []string{"Bearer " + saved.Caregiver.AccessToken}, "X-Baby-Tracker-Protocol": []string{"v1"}, "X-Baby-Tracker-Capabilities": []string{"records-v1,live-hints-v1"}}, Subprotocols: []string{realtime.Subprotocol}})
 			if err != nil {
-				t.Fatal("listener proof socket failed")
+				t.Fatal("hub proof socket failed")
 			}
 			defer ws.CloseNow()
 			hint := realtime.Hint{FamilyID: saved.Cursor.FamilyID, Cursor: saved.Cursor}
 			hint.Cursor.Sequence++
-			payload, _ := json.Marshal(hint)
-			if _, err := h.db.Owner.Exec(t.Context(), "SELECT pg_notify('family_cursor_v1',$1)", string(payload)); err != nil {
-				t.Fatal(err)
-			}
+			// The hub publishes only to bound connections, and the socket
+			// binds just after its upgrade answered: publish until it reads.
 			readCtx, readCancel := context.WithTimeout(t.Context(), 3*time.Second)
 			defer readCancel()
+			observer := delivery.NewObserver(options.LiveHub, nil)
+			go func() {
+				for readCtx.Err() == nil {
+					_ = observer.Publish(readCtx, hint.FamilyID, hint.Cursor)
+					time.Sleep(10 * time.Millisecond)
+				}
+			}()
 			for {
 				_, raw, err := ws.Read(readCtx)
 				if err != nil {
-					t.Fatal("listener notification missing")
+					t.Fatal("published hint missing")
 				}
 				var got realtime.Hint
 				if json.Unmarshal(raw, &got) == nil && got.Cursor == hint.Cursor {
 					break
 				}
 			}
-			var pending int
-			if err := h.db.Owner.QueryRow(t.Context(), "SELECT count(*) FROM delivery_pending").Scan(&pending); err != nil || pending != 0 {
-				t.Fatal("selfhosted default delivery policy changed")
-			}
-			// Corrupt the owned trusted head: cleanup must stop at Gate.Check even
-			// though the maintenance function itself remains callable.
-			if err := os.WriteFile(filepath.Join(cfg.LedgerHeadDir, "head.json"), []byte("{}\n"), 0600); err != nil {
-				t.Fatal(err)
-			}
-			time.Sleep(60 * time.Millisecond)
-			for len(calls) > 0 {
-				<-calls
-			}
-			select {
-			case <-calls:
-				t.Fatal("cleanup bypassed recovery gate")
-			case <-time.After(80 * time.Millisecond):
-			}
+			readCancel()
+			proveWakeComposition(t, cfg, h.db, options.LiveHub, tracker, httpClient, origin, saved.Caregiver, saved.Cursor, ws)
+			proveLiveActivityComposition(t, cfg, h.db, readiness, authorityService, families, saved.Caregiver, saved.Cursor.FamilyID)
 		})
 	}
 	t.Log("performance composition proof complete")
 }
+
+// proveWakeComposition proves the wake worker as main composes it: a sync
+// request through the composed HTTP stack records the device's progress
+// (applicationOptions' Progress), newWakeWorker flushes it on the
+// maintenance pool, and a device left behind is re-announced the family's
+// high water through the composed live hub on its open socket, although that
+// socket was already sent it.
+func proveWakeComposition(t *testing.T, cfg config.Config, db *testpg.Fixture, hub *realtime.Hub, tracker *wake.Tracker,
+	client *http.Client, origin string, caregiver protocol.SessionResponse, cursor protocol.Cursor, ws *websocket.Conn) {
+	t.Helper()
+	slots, err := database.NewWorkerSlots(db.Maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := newWakeWorker(cfg, hub, db.Maintenance, slots, tracker, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	body, err := json.Marshal(protocol.SyncRequest{RequestMeta: protocol.RequestMeta{ProtocolVersion: "v1", Capabilities: []string{protocol.CapabilityRecordsV1}},
+		Cursor: &cursor, Mutations: []protocol.Mutation{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1/sync", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header = http.Header{"Authorization": []string{"Bearer " + caregiver.AccessToken}, "X-Baby-Tracker-Protocol": []string{"v1"},
+		"X-Baby-Tracker-Capabilities": []string{"records-v1"}, "Content-Type": []string{"application/json"}}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	if response.StatusCode != http.StatusOK {
+		t.Fatalf("caregiver pull: %d", response.StatusCode)
+	}
+	if _, err := worker.Tick(t.Context()); err != nil {
+		t.Fatalf("wake tick: %v", err)
+	}
+	var high, progressed int64
+	if err := db.Maintenance.QueryRow(t.Context(), `SELECT f.next_sequence, greatest(d.acked_sequence, d.delivered_sequence)
+		FROM device_sync_cursors d JOIN families f ON f.id = d.family_id WHERE d.family_id = $1 AND d.device_id = $2`,
+		cursor.FamilyID, caregiver.DeviceID).Scan(&high, &progressed); err != nil {
+		t.Fatalf("the caregiver's progress was not flushed: %v", err)
+	}
+	if high == 0 || progressed != high {
+		t.Fatalf("flushed progress %d, want the family high water %d", progressed, high)
+	}
+	// The caregiver's device falls behind (as if its pull had failed) and the
+	// family is announced: the worker re-announces through the hub.
+	if _, err := db.Maintenance.Exec(t.Context(), `UPDATE device_sync_cursors SET acked_sequence = 0, delivered_sequence = 0
+		WHERE family_id = $1 AND device_id = $2`, cursor.FamilyID, caregiver.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	tracker.Changed(cursor.FamilyID, uint64(high))
+	stats, err := worker.Tick(t.Context())
+	if err != nil || stats.Woken == 0 {
+		t.Fatalf("wake tick: %+v %v", stats, err)
+	}
+	readCtx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	_, raw, err := ws.Read(readCtx)
+	if err != nil {
+		t.Fatalf("no re-announce reached the caregiver's socket: %v", err)
+	}
+	var got realtime.Hint
+	if json.Unmarshal(raw, &got) != nil || got.FamilyID != cursor.FamilyID || got.Cursor.Sequence < uint64(high) {
+		t.Fatalf("re-announced %s, want the family's high water %d", raw, high)
+	}
+	// The composed observer records each committed change for the worker. A
+	// batch with a stale cursor commits its write and is then refused, so it
+	// reports no progress: only the observer's Changed can make the worker
+	// scan the family and wake the device (its window cleared here).
+	if _, err := db.Maintenance.Exec(t.Context(), `UPDATE device_sync_cursors SET woken_sequence = 0, woken_at = NULL
+		WHERE family_id = $1 AND device_id = $2`, cursor.FamilyID, caregiver.DeviceID); err != nil {
+		t.Fatal(err)
+	}
+	stale := cursor
+	stale.Sequence = uint64(high) + 1000
+	body, err = json.Marshal(protocol.SyncRequest{RequestMeta: protocol.RequestMeta{ProtocolVersion: "v1", Capabilities: []string{protocol.CapabilityRecordsV1}},
+		Cursor: &stale, Mutations: []protocol.Mutation{caretest.Baby("11000000-0000-4000-8000-0000000000c1")}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err = http.NewRequestWithContext(t.Context(), http.MethodPost, origin+"/v1/sync", strings.NewReader(string(body)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request.Header = http.Header{"Authorization": []string{"Bearer " + caregiver.AccessToken}, "X-Baby-Tracker-Protocol": []string{"v1"},
+		"X-Baby-Tracker-Capabilities": []string{"records-v1"}, "Content-Type": []string{"application/json"}}
+	if response, err = client.Do(request); err != nil {
+		t.Fatal(err)
+	}
+	_ = response.Body.Close()
+	var after int64
+	if err := db.Maintenance.QueryRow(t.Context(), `SELECT next_sequence FROM families WHERE id = $1`, cursor.FamilyID).Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if response.StatusCode == http.StatusOK || after != high+1 {
+		t.Fatalf("stale-cursor batch: status %d, family at %d (was %d); want a committed write refused after the commit", response.StatusCode, after, high)
+	}
+	if stats, err = worker.Tick(t.Context()); err != nil || stats.Woken == 0 {
+		t.Fatalf("the observer's change woke nobody: %+v %v", stats, err)
+	}
+}
+
+type performanceFixture struct {
+	db  *testpg.Fixture
+	cfg config.Config
+}
+
+// newPerformanceFixture is a migrated database bound (authority init) to a
+// self-hosted configuration.
+func newPerformanceFixture(t *testing.T) performanceFixture {
+	t.Helper()
+	db := testpg.New(t)
+	origin, _ := url.Parse("https://sync.example.test")
+	cfg := config.Config{Mode: config.ModeSelfHosted, PublicOrigin: origin, ServerInstanceID: "123e4567-e89b-42d3-a456-426614174000", RecoveryEpoch: 1}
+	cfg.Limits.MaxCaregivers = 10
+	cfg.Limits.MaxInvitations = 10
+	cfg.Limits.InvitationTTL = 24 * time.Hour
+	cfg.Auth.ActorIDPepper[0] = 1
+	if _, err := authority.InitServerState(t.Context(), db.Owner, cfg.ServerInstanceID, cfg.Auth.ActorIDPepper); err != nil {
+		t.Fatal(err)
+	}
+	return performanceFixture{db: db, cfg: cfg}
+}
+
 func performanceCertificate(t *testing.T) (tls.Certificate, string) {
 	t.Helper()
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -274,4 +381,254 @@ func performanceCertificate(t *testing.T) (tls.Certificate, string) {
 		t.Fatal(err)
 	}
 	return cert, path
+}
+
+// Sealed capacity fixtures must boot through the actual production composition
+// with RLS, distinct roles, default quotas and normal application readiness.
+func TestCapacityFixtureActualApplicationComposition(t *testing.T) {
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(root, "fixture")
+	manifest, err := capacity.BuildFixture(t.Context(), capacity.FixtureSpec{Families: 2, DevicesPerFamily: 2, AuthorityEvents: 12, CareEntriesPerBaby: 3}, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	restored, err := capacity.RestoreFixture(t.Context(), directory, filepath.Join(root, "runtime"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := restored.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	if restored.Manifest != manifest || len(manifest.SourceSHA) != 40 || len(manifest.InputSHA256) != 64 || len(restored.SourceInputSHA256) != 64 {
+		t.Fatal("source or input identity missing")
+	}
+	cfg := restored.Config
+	authorityService, families, err := runtimeServices(cfg, restored.Runtime)
+	if err != nil {
+		t.Fatal(err)
+	}
+	readiness := readinessOver(t, cfg, restored.Runtime, restored.Maintenance)
+	if err := readiness.inventory.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if err := readiness.Refresh(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	options, err := applicationOptions(cfg, slog.New(slog.NewTextHandler(io.Discard, nil)), readiness, authorityService, families, restored.Runtime, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { options.LiveHub.Shutdown(context.Background()) })
+	if err := options.Readiness.Check(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if options.Limiter == nil || options.SyncMutationDevicePolicy != limits.DefaultPolicies()[limits.ScopeSyncMutationDevice] || options.SyncPullDevicePolicy != limits.DefaultPolicies()[limits.ScopeSyncPullDevice] {
+		t.Fatal("normal measured quotas absent")
+	}
+	compatibility, err := migrate.EmbeddedCompatibility()
+	if err != nil {
+		t.Fatal(err)
+	}
+	version, err := migrate.New(migrations.Files).CompatibleVersion(t.Context(), restored.Runtime, compatibility)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := database.VerifyRuntimeRole(t.Context(), restored.Runtime, version); err != nil {
+		t.Fatal(err)
+	}
+	var leaked int
+	if err := restored.Runtime.QueryRow(t.Context(), "SELECT count(*) FROM care_entities").Scan(&leaked); err != nil || leaked != 0 {
+		t.Fatal("unscoped runtime bypassed RLS")
+	}
+	for _, device := range restored.Devices {
+		principal, err := options.SessionService.Authenticate(t.Context(), device.Session.AccessToken)
+		if err != nil {
+			t.Fatal("application rejected fixture credential")
+		}
+		view, err := families.Current(t.Context(), principal)
+		if err != nil || view.ID != device.FamilyID {
+			t.Fatal("application rejected fixture family")
+		}
+	}
+	// A request is granted its session's family only: device 0 is never
+	// granted device 2's family.
+	digests, err := options.SessionService.AccessDigests(restored.Devices[0].Session.AccessToken)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if restored.Devices[0].FamilyID == restored.Devices[2].FamilyID {
+		t.Fatal("fixture devices 0 and 2 share a family")
+	}
+	if _, grant, err := options.RequestAuthorizer.AuthorizeRequest(t.Context(), authority.Request{Digests: digests}, "read"); err != nil ||
+		grant.FamilyID != restored.Devices[0].FamilyID {
+		t.Fatalf("device 0 granted family %s (err %v), want its own", grant.FamilyID, err)
+	}
+}
+
+// proveLiveActivityComposition proves Live Activity push as main composes
+// it, with BT_LIVE_ACTIVITY_PUSH_ENABLED on over the same database and
+// node readiness: applicationOptions with the worker's Dirty on the change
+// feed, composeLiveActivity's worker on the maintenance pool in its worker
+// slots sending through the one APNs client (here a local HTTP/2 recorder),
+// and Run gated by the node's readiness. live-activity-push-v1 is advertised
+// only once the worker is ready; a phone that registers through the composed
+// HTTP stack gets the push-to-start for a timer it started before it
+// registered; and a sync write reaches the worker through the change feed
+// (its flush, not the minute sweep, moves the family's dirty sequence).
+func proveLiveActivityComposition(t *testing.T, cfg config.Config, db *testpg.Fixture, readiness *databaseReadiness, authorityService *authority.Service,
+	families *family.Service, caregiver protocol.SessionResponse, familyID string) {
+	t.Helper()
+	type push struct {
+		path    string
+		headers http.Header
+		body    string
+	}
+	pushes := make(chan push, 16)
+	apple := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		pushes <- push{path: r.URL.Path, headers: r.Header.Clone(), body: string(body)}
+		w.WriteHeader(http.StatusOK)
+	}))
+	apple.EnableHTTP2 = true
+	apple.StartTLS()
+	defer apple.Close()
+	cfg.LiveActivity = config.LiveActivityConfig{Enabled: true, Credentials: liveActivityCredentials(t)}
+	client, err := apnsClientFor(cfg, func(creds config.APNSCredentials) (*apns.Client, error) {
+		return apns.NewWithTransport(creds, apple.Client().Transport, apple.URL, apple.URL, nil)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	dirty := newLiveActivityDirty(cfg)
+	options, err := applicationOptions(cfg, logger, readiness, authorityService, families, db.Runtime, nil, dirty)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer options.LiveHub.Shutdown(context.Background())
+	slots, err := database.NewWorkerSlots(db.Maintenance)
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker, err := composeLiveActivity(cfg, &options, authorityService, dirty, db.Maintenance, slots, client, logger)
+	if err != nil || worker == nil {
+		t.Fatalf("compose live activity: %v", err)
+	}
+	server := httptest.NewServer(httpapi.New(options))
+	defer server.Close()
+	advertised := func() bool {
+		t.Helper()
+		response, err := http.Get(server.URL + "/v1/server")
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		var info protocol.ServerInfo
+		if response.StatusCode != http.StatusOK || json.NewDecoder(response.Body).Decode(&info) != nil {
+			t.Fatalf("/v1/server %d", response.StatusCode)
+		}
+		return slices.Contains(info.Capabilities, protocol.CapabilityLiveActivityPushV1)
+	}
+	if advertised() {
+		t.Fatal("live-activity-push-v1 advertised before the worker ran")
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	stopped := make(chan error, 1)
+	go func() { stopped <- worker.Run(ctx, options.Readiness.Check) }()
+	defer func() {
+		cancel()
+		if err := <-stopped; !errors.Is(err, context.Canceled) {
+			t.Errorf("live activity worker stop: %v", err)
+		}
+	}()
+	for deadline := time.Now().Add(10 * time.Second); options.LiveActivityReady(t.Context()) != nil; time.Sleep(20 * time.Millisecond) {
+		if time.Now().After(deadline) {
+			t.Fatal("the live activity worker never became ready")
+		}
+	}
+	if !advertised() {
+		t.Fatal("live-activity-push-v1 not advertised once the worker was ready")
+	}
+	send := func(method, path, capabilities string, body any) int {
+		t.Helper()
+		raw, err := json.Marshal(body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := http.NewRequestWithContext(t.Context(), method, server.URL+path, strings.NewReader(string(raw)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request.Header = http.Header{"Authorization": []string{"Bearer " + caregiver.AccessToken}, "X-Baby-Tracker-Protocol": []string{"v1"},
+			"X-Baby-Tracker-Capabilities": []string{capabilities}, "Content-Type": []string{"application/json"}}
+		response, err := http.DefaultClient.Do(request)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer response.Body.Close()
+		if response.StatusCode != http.StatusOK {
+			answer, _ := io.ReadAll(io.LimitReader(response.Body, 512))
+			t.Logf("%s %s: %d %s", method, path, response.StatusCode, answer)
+		}
+		return response.StatusCode
+	}
+	highWater := func() int64 {
+		t.Helper()
+		var high int64
+		if err := db.Maintenance.QueryRow(t.Context(), `SELECT next_sequence FROM families WHERE id=$1`, familyID).Scan(&high); err != nil {
+			t.Fatal(err)
+		}
+		return high
+	}
+	// sync is one batch through the composed stack, with exactly the
+	// capabilities its surface requires (timer commands need theirs).
+	sync := func(capabilities []string, mutations ...protocol.Mutation) {
+		t.Helper()
+		cursor := protocol.Cursor{ServerInstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch, FamilyID: familyID, Sequence: uint64(highWater())}
+		if code := send(http.MethodPost, "/v1/sync", strings.Join(capabilities, ","), protocol.SyncRequest{RequestMeta: protocol.RequestMeta{ProtocolVersion: "v1",
+			Capabilities: capabilities}, Cursor: &cursor, Mutations: mutations}); code != http.StatusOK {
+			t.Fatalf("caregiver sync of %d mutations: %d", len(mutations), code)
+		}
+	}
+	// The caregiver's phone starts a feed, then registers for Live
+	// Activities: its timer predates the registration, so it is pushed a
+	// start (a timer started after it registered would show its own card).
+	const baby, timer = "11000000-0000-4000-8000-0000000000d1", "51000000-0000-4000-8000-0000000000d1"
+	sync([]string{protocol.CapabilityRecordsV1, protocol.CapabilityTimerCommandsV1}, caretest.Baby(baby), caretest.StartTimer(baby, timer, "feed"))
+	registration := protocol.LiveActivityDeviceRegistration{RequestMeta: protocol.RequestMeta{ProtocolVersion: "v1", Capabilities: []string{protocol.CapabilityLiveActivityPushV1}},
+		InstallationID: "70000000-0000-4000-8000-0000000000d1", RegistrationVersion: 1, APNsEnvironment: "sandbox", PayloadVersion: 1, PushToStartToken: "aabbccdd", FeedBreakMinutes: 30}
+	if code := send(http.MethodPut, "/v1/live-activities/device", protocol.CapabilityLiveActivityPushV1, registration); code != http.StatusOK {
+		t.Fatalf("live activity registration: %d", code)
+	}
+	select {
+	case got := <-pushes:
+		if got.path != "/3/device/aabbccdd" || got.headers.Get("apns-push-type") != "liveactivity" ||
+			got.headers.Get("apns-topic") != cfg.LiveActivity.Credentials.BundleID+".push-type.liveactivity" || !strings.Contains(got.body, `"event":"start"`) {
+			t.Fatalf("push %s %v %s", got.path, got.headers, got.body)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("no push-to-start reached APNs")
+	}
+	// A later write reaches the worker through the change feed: its flush
+	// moves the family's dirty sequence to the write's high water within a
+	// poll, a minute before the next sweep could.
+	sync([]string{protocol.CapabilityRecordsV1}, caretest.Baby("11000000-0000-4000-8000-0000000000d2"))
+	high := highWater()
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(50 * time.Millisecond) {
+		var flushed int64
+		if err := db.Owner.QueryRow(t.Context(), `SELECT journal_sequence FROM live_activity_family_dirty WHERE family_id=$1`, familyID).Scan(&flushed); err != nil {
+			t.Fatal(err)
+		}
+		if flushed >= high {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the change feed did not reach the worker: dirty sequence %d, family at %d", flushed, high)
+		}
+	}
 }

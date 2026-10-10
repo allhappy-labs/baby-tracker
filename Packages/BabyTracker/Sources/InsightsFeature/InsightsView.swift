@@ -103,7 +103,8 @@ public struct InsightsView: View {
             .accessibilityIdentifier("insights.range")
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.horizontal, 16)
+        // Home's inset, so the switcher sits in the same place on every tab.
+        .padding(.horizontal, 20)
         .padding(.vertical, 8)
         .background(.bar)
     }

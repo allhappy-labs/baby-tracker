@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/delivery"
 	"babytracker/server/internal/httpapi"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
@@ -41,6 +42,9 @@ func (allowLimiter) Take(context.Context, string, string, limits.Policy) (limits
 func (allowLimiter) TakeMany(context.Context, []limits.Charge) (limits.Decision, error) {
 	return limits.Decision{Allowed: true}, nil
 }
+func (allowLimiter) Peek(context.Context, []limits.Charge) (limits.Decision, error) {
+	return limits.Decision{Allowed: true}, nil
+}
 
 type protocolFixture struct {
 	t                *testing.T
@@ -48,7 +52,6 @@ type protocolFixture struct {
 	hub              *realtime.Hub
 	server           *httptest.Server
 	proxy            *httptest.Server
-	listener         *realtime.PostgresListener
 	issuer           *testidentity.Issuer
 	owner, caregiver *ProtocolClient
 	dropNextSync     atomic.Bool
@@ -82,25 +85,18 @@ func newProtocolFixture(t *testing.T) *protocolFixture {
 		t.Fatal(err)
 	}
 	h.ConfigureSignedIdentity(t, verifier)
-	authorizer, err := realtime.NewAuthorityAuthorizer(h.Security, true, func() time.Time { return h.Now })
+	authorizer, err := realtime.NewAuthorityAuthorizer(h.Authority)
 	if err != nil {
 		t.Fatal(err)
 	}
-	hub, err := realtime.NewHub(t.Context(), realtime.HubOptions{Limits: h.Limits, Authorizer: authorizer, Invalidations: h.Security, Now: func() time.Time { return h.Now }})
+	hub, err := realtime.NewHub(t.Context(), realtime.HubOptions{Limits: h.Limits, Authorizer: authorizer, Invalidations: h.Authority, Now: func() time.Time { return h.Now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	fixture := &protocolFixture{t: t, h: h, hub: hub, issuer: issuer}
-	fixture.listener, err = realtime.StartPostgresListener(t.Context(), realtime.PostgresOptions{Pool: h.Runtime, Hub: hub,
-		InstanceID: h.Info.InstanceID, RecoveryEpoch: h.Info.RecoveryEpoch, Resyncer: fixtureResyncer{h: h}})
-	if err != nil {
-		t.Fatal(err)
-	}
-	readyContext, cancel := context.WithTimeout(t.Context(), time.Second)
-	defer cancel()
-	if err = fixture.listener.WaitReady(readyContext); err != nil {
-		t.Fatal(err)
-	}
+	// As production composes it: each write's post-commit high water goes to
+	// the hub; the write transaction notifies nothing.
+	h.SetPublisher(t, delivery.NewObserver(hub, nil))
 	fixture.startServer()
 	fixture.startProxy()
 	fixture.owner = &ProtocolClient{fixture: fixture, principal: h.Owner, token: h.AccessToken("owner"), refreshToken: h.RefreshToken("owner"), deviceCredential: h.DeviceCredential("owner"), subject: "owner", frozen: map[string][]byte{}}
@@ -108,7 +104,6 @@ func newProtocolFixture(t *testing.T) *protocolFixture {
 	t.Cleanup(func() {
 		fixture.proxy.Close()
 		fixture.server.Close()
-		fixture.listener.Close()
 		_ = fixture.hub.Shutdown(context.Background())
 	})
 	return fixture
@@ -181,13 +176,6 @@ func (fixture *protocolFixture) DroppedSyncResponse() protocol.SyncResponse {
 	return response
 }
 
-type fixtureResyncer struct{ h *testkit.Harness }
-
-func (resyncer fixtureResyncer) Current(ctx context.Context, lease realtime.AuthorizationLease) (protocol.Cursor, error) {
-	response, err := resyncer.h.Service.ApplyAndPull(ctx, lease.Principal, resyncer.h.SyncRequest(nil, nil))
-	return response.HighWater, err
-}
-
 func (fixture *protocolFixture) startServer() {
 	if fixture.server != nil {
 		fixture.server.Close()
@@ -205,7 +193,7 @@ func (fixture *protocolFixture) startServer() {
 		AppleAuthorizationMode: "identity_token_only", ChallengeService: fixture.h.Identity, SessionService: fixture.h.Auth,
 		RecoveryService: fixture.h.Auth, RecoveryEnabled: true, RecoveryReadiness: ready{},
 		FamilyService: fixture.h.Family, SyncService: fixture.h.Service, ImportService: fixture.h.Importer,
-		LiveFamilyAuthorizer: fixture.h.Family, LiveHub: fixture.hub, Limiter: allowLimiter{}, ClientIPResolver: resolver,
+		RequestAuthorizer: fixture.h.Authority, LiveHub: fixture.hub, Limiter: allowLimiter{}, ClientIPResolver: resolver,
 		SyncMutationDevicePolicy: policies[limits.ScopeSyncMutationDevice], SyncMutationAccountPolicy: policies[limits.ScopeSyncMutationAccount],
 		SyncMutationFamilyPolicy: policies[limits.ScopeSyncMutationFamily], SyncPullDevicePolicy: policies[limits.ScopeSyncPullDevice],
 		SyncPullAccountPolicy: policies[limits.ScopeSyncPullAccount], LiveAttemptIPPolicy: policies[limits.ScopeLiveAttemptIP],
@@ -415,7 +403,7 @@ func (client *ProtocolClient) StopTimer(timerID, recordID string) protocol.Outco
 }
 
 func (fixture *protocolFixture) CountCompletedRecords(string) int {
-	return fixture.h.Count(fixture.t, "feed_entries", fixture.h.FamilyID)
+	return fixture.h.CareCount(fixture.t, "feed", fixture.h.FamilyID)
 }
 
 func (client *ProtocolClient) Snapshot() (protocol.SnapshotResponse, error) {

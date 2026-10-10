@@ -66,7 +66,7 @@ compose() {
     disposable_command_pid=""
     return "$command_status"
   else
-    docker compose --project-name "$project" -f Server/compose.yaml -f "$override" ${live_override:+-f "$live_override"} "$@"
+    docker compose --project-name "$project" -f Server/compose.yaml -f "$override" ${push_override:+-f "$push_override"} "$@"
   fi
 }
 
@@ -90,6 +90,7 @@ if [[ ${BT_DISPOSABLE_PERFORMANCE:-0} == 1 ]]; then
   : > "$BT_SECRETS_DIR/compose.env"
 fi
 override="$BT_SECRETS_DIR/compose.override.yaml"
+push_override=""
 state="$BT_SECRETS_DIR/client-state.json"
 binary="$BT_SECRETS_DIR/baby-tracker-server"
 source_sha=$(git rev-parse HEAD)
@@ -124,12 +125,13 @@ if [[ ${BT_DISPOSABLE_PERFORMANCE:-0} != 1 ]]; then
   trap 'exit 143' TERM
 fi
 
-for secret in bootstrap_password migrator_password runtime_password projector_password export_password identity_pepper session_token_pepper device_continuity_pepper apple_notification_pepper invitation_pepper page_token_key actor_id_pepper rate_limit_pepper; do
+for secret in bootstrap_password migrator_password runtime_password export_password identity_pepper session_token_pepper device_continuity_pepper apple_notification_pepper invitation_pepper page_token_key actor_id_pepper rate_limit_pepper; do
   openssl rand -hex 32 > "$BT_SECRETS_DIR/$secret"
 done
 printf 'postgres://baby_tracker_migrator:%s@db:5432/babytracker?sslmode=disable\n' "$(<"$BT_SECRETS_DIR/migrator_password")" > "$BT_SECRETS_DIR/migrator_database_url"
 printf 'postgres://baby_tracker_app:%s@db:5432/babytracker?sslmode=disable\n' "$(<"$BT_SECRETS_DIR/runtime_password")" > "$BT_SECRETS_DIR/runtime_database_url"
-printf 'postgres://baby_tracker_projector_app:%s@db:5432/babytracker?sslmode=disable\n' "$(<"$BT_SECRETS_DIR/projector_password")" > "$BT_SECRETS_DIR/projector_database_url"
+# The maintenance credential is required in every mode (decision D3).
+printf 'postgres://baby_tracker_export_app:%s@db:5432/babytracker?sslmode=disable\n' "$(<"$BT_SECRETS_DIR/export_password")" > "$BT_SECRETS_DIR/maintenance_database_url"
 chmod 0444 "$BT_SECRETS_DIR"/*_password "$BT_SECRETS_DIR"/*_pepper "$BT_SECRETS_DIR"/*_url "$BT_SECRETS_DIR/page_token_key"
 
 # A self-signed leaf for 127.0.0.1, and an nginx in front of the app to
@@ -220,53 +222,63 @@ if sys.argv[2] == 'start_failure':
 open(p,'w').write(s)
 PERF_OVERRIDE
 fi
+# A caller-owned extension point (the MCP proof uses it to add its private
+# secret mount and operator service). It runs before the first Compose call,
+# with this run's secret directory, override and TLS front already written.
+if declare -F disposable_sync_customize >/dev/null; then
+  disposable_sync_customize
+fi
 chmod 0600 "$override"
 
-# Optional Live Activity push profile (BT_DISPOSABLE_LIVE_ACTIVITY=1): the
-# production worker, role-separated pool and APNs transport, with a disposable
-# P-256 signing key and Apple's hosts replaced by the identitytest recorder
-# (BT_IDENTITYTEST_APNS_SINK). Nothing here is an Apple credential and nothing
-# can reach Apple. Off for performance runs, so their baselines are unchanged.
-live_override=""
-if [[ ${BT_DISPOSABLE_LIVE_ACTIVITY:-0} == 1 && ${BT_DISPOSABLE_PERFORMANCE:-0} != 1 ]]; then
-  live_override="$BT_SECRETS_DIR/compose.live-activity.yaml"
-  openssl rand -hex 32 > "$BT_SECRETS_DIR/live_activity_password"
-  printf 'postgres://baby_tracker_live_activity_app:%s@db:5432/babytracker?sslmode=disable\n' "$(<"$BT_SECRETS_DIR/live_activity_password")" > "$BT_SECRETS_DIR/live_activity_database_url"
+# Optional background-push profile (BT_DISPOSABLE_PUSH=1), main's Live
+# Activity profile narrowed to wakes: the production wake worker and APNs
+# client, with a throwaway P-256 signing key made here and Apple's hosts
+# replaced by the identitytest recorder (BT_IDENTITYTEST_APNS_SINK; an
+# identitytest image with wakes and without the sink refuses to start). The
+# team and key IDs are invented. Nothing here is an Apple credential and
+# nothing can reach Apple. Off for performance runs, so their baselines are
+# unchanged.
+#
+# The Live Activity profile (BT_DISPOSABLE_LIVE_ACTIVITY=1) is this profile
+# plus BT_LIVE_ACTIVITY_PUSH_ENABLED: the port's worker runs on the
+# maintenance pool and sends through the same APNs client and recorder, so it
+# needs no login, password or database URL of its own (main's worker
+# credential is not ported, and the server refuses its variable).
+if [[ ${BT_DISPOSABLE_LIVE_ACTIVITY:-0} == 1 && ${BT_DISPOSABLE_PUSH:-0} != 1 ]]; then
+  echo "the Live Activity profile (BT_DISPOSABLE_LIVE_ACTIVITY=1) needs the push profile (BT_DISPOSABLE_PUSH=1)" >&2
+  exit 2
+fi
+live_activity_push=false
+if [[ ${BT_DISPOSABLE_PUSH:-0} == 1 && ${BT_DISPOSABLE_PERFORMANCE:-0} != 1 ]]; then
+  [[ ${BT_DISPOSABLE_LIVE_ACTIVITY:-0} != 1 ]] || live_activity_push=true
+  push_override="$BT_SECRETS_DIR/compose.push.yaml"
   openssl ecparam -name prime256v1 -genkey -noout 2>/dev/null | openssl pkcs8 -topk8 -nocrypt -out "$BT_SECRETS_DIR/apns_key.p8"
-  # PostgreSQL's init reads the password; the server requires 0600 for the
-  # worker URL and the key (Docker Desktop maps bind-mount ownership).
-  chmod 0444 "$BT_SECRETS_DIR/live_activity_password"
-  chmod 0600 "$BT_SECRETS_DIR/live_activity_database_url" "$BT_SECRETS_DIR/apns_key.p8"
+  # The server requires 0600 for the key (Docker Desktop maps bind-mount
+  # ownership).
+  chmod 0600 "$BT_SECRETS_DIR/apns_key.p8"
   printf '%s\n' \
     'services:' \
-    '  db:' \
-    '    secrets: [live_activity_password]' \
     '  app:' \
     '    environment:' \
-    '      BT_LIVE_ACTIVITY_PUSH_ENABLED: "true"' \
-    '      BT_LIVE_ACTIVITY_DATABASE_URL_FILE: /run/secrets/live_activity_database_url' \
+    '      BT_APNS_WAKES_ENABLED: "true"' \
     '      BT_APNS_TEAM_ID: E2ETEAM001' \
     '      BT_APNS_KEY_ID: E2EKEY0001' \
     '      BT_APNS_BUNDLE_ID: com.example.babytracker.protocol' \
     '      BT_APNS_KEY_FILE: /run/secrets/apns_key' \
     '      BT_IDENTITYTEST_APNS_SINK: "1"' \
-    '    secrets: [live_activity_database_url, apns_key]' \
+    "      BT_LIVE_ACTIVITY_PUSH_ENABLED: \"$live_activity_push\"" \
+    '    secrets: [apns_key]' \
     'secrets:' \
-    '  live_activity_password:' \
-    "    file: $BT_SECRETS_DIR/live_activity_password" \
-    '  live_activity_database_url:' \
-    "    file: $BT_SECRETS_DIR/live_activity_database_url" \
     '  apns_key:' \
-    "    file: $BT_SECRETS_DIR/apns_key.p8" > "$live_override"
-  chmod 0600 "$live_override"
+    "    file: $BT_SECRETS_DIR/apns_key.p8" > "$push_override"
+  chmod 0600 "$push_override"
 fi
 
 compose config --quiet
 compose up -d --wait --wait-timeout 120 db
 compose build app
 compose run --rm --no-deps migrate
-compose run --rm --no-deps migrate security init --instance-id "$BT_SERVER_INSTANCE_ID" --epoch "$BT_RECOVERY_EPOCH" --confirm-instance "$BT_SERVER_INSTANCE_ID"
-compose run --rm --no-deps -e BT_DATABASE_URL_FILE=/run/secrets/runtime_database_url migrate security reconcile
+compose run --rm --no-deps migrate authority init --instance-id "$BT_SERVER_INSTANCE_ID" --epoch "$BT_RECOVERY_EPOCH" --confirm-instance "$BT_SERVER_INSTANCE_ID"
 [[ ${BT_DISPOSABLE_PERFORMANCE:-0} != 1 ]] || phase=app_start
 if [[ ${BT_SYNC_PERF_TEST_FAULT:-} == interrupt ]]; then kill -INT "$$"; fi
 if [[ ${BT_SYNC_PERF_TEST_FAULT:-} == timeout ]]; then
@@ -309,24 +321,29 @@ authority=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT in
 # server, answered /readyz twice, tore everything down and exited non-zero
 # without a word. So the two-client gate had not actually run since the
 # caregiver work began.
-#
-# 29 is 000029_baby_icon.sql. The embedded compatibility manifest and
-# the database's own privilege manifest must both name it too, so the literal,
-# the image and the tree cannot drift apart silently.
-manifest=$(jq -r '"\(.min):\(.max):\(.known[-1].name)"' Server/internal/migrate/compatibility.json)
-privilege_manifest=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c 'SELECT max(schema_version) FROM schema_privilege_manifest')
-if [[ $schema != 29 || $manifest != "29:29:000029_baby_icon.sql" || $privilege_manifest != 29 ]]; then
-  echo "disposable server schema=$schema manifest=$manifest privilege_manifest=$privilege_manifest; this gate expects 29" >&2
-  exit 1
-fi
-[[ $authority == "$BT_SERVER_INSTANCE_ID:$BT_RECOVERY_EPOCH" && $image_revision == "$source_sha" ]]
-live_activity_capability=$(curl --silent --fail --max-time 2 "$base/v1/server" | jq -r '.capabilities | index("live-activity-push-v1") != null')
-if [[ -n $live_override ]]; then
-  [[ $live_activity_capability == true ]] || { echo "push profile did not advertise live-activity-push-v1" >&2; exit 1; }
+[[ $schema == 32 && $authority == "$BT_SERVER_INSTANCE_ID:$BT_RECOVERY_EPOCH" && $image_revision == "$source_sha" ]]
+# The device push-token route exists exactly when the push profile is on.
+push_capability=$(curl --silent --fail --max-time 2 "$base/v1/server" | jq -r '.capabilities | index("push-token-v1") != null')
+if [[ -n $push_override ]]; then
+  [[ $push_capability == true ]] || { echo "push profile did not advertise push-token-v1" >&2; exit 1; }
 else
-  [[ $live_activity_capability == false ]] || { echo "push-disabled profile advertised live-activity-push-v1" >&2; exit 1; }
+  [[ $push_capability == false ]] || { echo "push-disabled composition advertised push-token-v1" >&2; exit 1; }
 fi
-echo "image proof: id=$image_id source_sha=$image_revision binary_sha=$binary_sha goarch=$image_arch schema=$schema manifest=$manifest authority=$authority live_activity_push=$live_activity_capability"
+# live-activity-push-v1 exactly when the Live Activity profile is on. The
+# worker's first pass (sweep, flush, claim) follows readiness rather than
+# gating it, and the capability waits for that pass: up to 10 s.
+live_activity_capability=""
+for _ in $(seq 1 100); do
+  live_activity_capability=$(curl --silent --fail --max-time 2 "$base/v1/server" | jq -r '.capabilities | index("live-activity-push-v1") != null')
+  [[ $live_activity_capability != "$live_activity_push" ]] || break
+  sleep 0.1
+done
+if [[ $live_activity_push == true ]]; then
+  [[ $live_activity_capability == true ]] || { echo "the Live Activity profile did not advertise live-activity-push-v1 within 10 s" >&2; exit 1; }
+else
+  [[ $live_activity_capability == false ]] || { echo "a composition without the Live Activity profile advertised live-activity-push-v1" >&2; exit 1; }
+fi
+echo "image proof: id=$image_id source_sha=$image_revision binary_sha=$binary_sha goarch=$image_arch schema=$schema authority=$authority push=$push_capability live_activity_push=$live_activity_capability"
 if [[ ${BT_PROTOCOL_DIAGNOSTICS:-0} == 1 && ${BT_RECOVERY_E2E_MODE:-} == self_hosted ]]; then
   python3 Server/scripts/lib/performance_control.py sample-loop "$app" "$db" "$BT_SECRETS_DIR/protocol-resource-samples.jsonl" & protocol_metrics_pid=$!
 fi

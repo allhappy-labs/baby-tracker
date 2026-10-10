@@ -1,0 +1,773 @@
+{
+  "list_babies": {
+    "revision": 37,
+    "babies": [
+      {
+        "entity_kind": "baby",
+        "meta": {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T12:34:56.123456Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "name": "Élie",
+          "birth_date": "2026-01-12",
+          "sort_order": 0
+        }
+      }
+    ]
+  },
+  "history": {
+    "revision": 37,
+    "as_of": "2026-09-21T12:00:00Z",
+    "entries": [
+      {
+        "kind": "feed",
+        "id": "20000000-0000-4000-8000-000000000001",
+        "start": "2026-09-20T12:00:00Z",
+        "end": null,
+        "unfinished": false,
+        "session": {
+          "id": "20000000-0000-4000-8000-000000000001",
+          "earliest_member_start": "2026-09-20T12:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 3,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:45:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000001",
+                "kind": "bottle",
+                "volume_ml": 1,
+                "contents": "formula"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": "owner's stale edit",
+            "started_at": "2026-09-20T12:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "kind": "feed",
+        "id": "20000000-0000-4000-8000-000000000002",
+        "start": "2026-09-20T12:00:00Z",
+        "end": "2026-09-20T12:10:00Z",
+        "unfinished": false,
+        "session": {
+          "id": "20000000-0000-4000-8000-000000000002",
+          "earliest_member_start": "2026-09-20T12:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000002",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000002",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300
+              },
+              {
+                "id": "31000000-0000-4000-8000-000000000003",
+                "kind": "breast",
+                "side": "right",
+                "seconds": 300
+              }
+            ],
+            "ended_at": "2026-09-20T12:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "breast",
+            "note": null,
+            "started_at": "2026-09-20T12:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "kind": "feed",
+        "id": "20000000-0000-4000-8000-000000000003",
+        "start": "2026-09-20T13:00:00Z",
+        "end": null,
+        "unfinished": false,
+        "session": {
+          "id": "20000000-0000-4000-8000-000000000003",
+          "earliest_member_start": "2026-09-20T13:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000003",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T13:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000006",
+                "kind": "solids",
+                "foods": [
+                  "banana",
+                  "yogurt"
+                ],
+                "amount": "some"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "solids",
+            "note": "Lunch 🍌 \u0026 yogurt",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "kind": "feed",
+        "id": "20000000-0000-4000-8000-000000000004",
+        "start": "2026-09-20T13:00:00Z",
+        "end": "2026-09-20T13:10:00Z",
+        "unfinished": false,
+        "session": {
+          "id": "20000000-0000-4000-8000-000000000004",
+          "earliest_member_start": "2026-09-20T13:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000004",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T13:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000004",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300
+              },
+              {
+                "id": "31000000-0000-4000-8000-000000000005",
+                "kind": "bottle",
+                "volume_ml": 60,
+                "contents": "breast_milk"
+              }
+            ],
+            "ended_at": "2026-09-20T13:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "breast",
+            "note": "Top-up",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "kind": "sleep",
+        "id": "30000000-0000-4000-8000-000000000001",
+        "start": "2026-09-20T13:00:00Z",
+        "end": "2026-09-20T14:00:00Z",
+        "unfinished": false,
+        "session": {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "earliest_member_start": "2026-09-20T13:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "sleep",
+          "meta": {
+            "id": "30000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "ended_at": "2026-09-20T14:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "note": null,
+            "kind_override": "nap",
+            "sleep_session_id": null
+          }
+        }
+      },
+      {
+        "kind": "measurement",
+        "id": "70000000-0000-4000-8000-000000000001",
+        "start": "2026-09-20T14:10:00Z",
+        "end": null,
+        "unfinished": false,
+        "entity": {
+          "entity_kind": "measurement",
+          "meta": {
+            "id": "70000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "measured_at": "2026-09-20T14:10:00.000000Z",
+            "logged_at": "2026-09-20T15:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "weight_kg": 7.125,
+            "length_cm": 65.5,
+            "head_circumference_cm": null,
+            "length_position": "lying"
+          }
+        }
+      }
+    ],
+    "next_cursor": "{{token}}",
+    "active_timers": [
+      {
+        "id": "50000000-0000-4000-8000-000000000003",
+        "timer_kind": "feed",
+        "started_at": "2026-09-20T19:00:00Z",
+        "entity": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000003",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T19:07:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000d1",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300,
+                "started_at": "2026-09-20T19:00:00.000000Z",
+                "ended_at": "2026-09-20T19:05:00.000000Z"
+              },
+              {
+                "id": "31000000-0000-4000-8000-0000000000d2",
+                "kind": "bottle",
+                "seconds": 120,
+                "volume_ml": 40,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T19:05:00.000000Z",
+                "ended_at": "2026-09-20T19:07:00.000000Z"
+              }
+            ],
+            "current_bottle_started_at": null,
+            "current_side": "right",
+            "current_side_started_at": "2026-09-20T19:07:00.000000Z",
+            "session_id": null,
+            "started_at": "2026-09-20T19:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000004",
+        "timer_kind": "sleep",
+        "started_at": "2026-09-20T20:00:00Z",
+        "entity": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000004",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T20:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T20:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "sleep"
+          }
+        }
+      }
+    ]
+  },
+  "history_page_two": {
+    "revision": 37,
+    "as_of": "2026-09-21T12:00:00Z",
+    "entries": [
+      {
+        "kind": "supplement",
+        "id": "60000000-0000-4000-8000-000000000001",
+        "start": "2026-09-20T14:10:00Z",
+        "end": null,
+        "unfinished": false,
+        "entity": {
+          "entity_kind": "supplement",
+          "meta": {
+            "id": "60000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T15:05:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T14:10:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "name": "Vitamin D",
+            "note": "dose\u2029given 💊 \u003e half",
+            "logged_at": "2026-09-20T15:00:00.000000Z"
+          }
+        }
+      },
+      {
+        "kind": "feed",
+        "id": "20000000-0000-4000-8000-000000000060",
+        "start": "2026-09-20T14:58:00Z",
+        "end": "2026-09-20T15:10:00Z",
+        "unfinished": false,
+        "session": {
+          "id": "20000000-0000-4000-8000-000000000060",
+          "earliest_member_start": "2026-09-20T14:58:00Z"
+        },
+        "entity": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000060",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000060",
+                "kind": "bottle",
+                "seconds": 300,
+                "volume_ml": 95,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T15:00:00.000000Z",
+                "ended_at": "2026-09-20T15:05:00.000000Z"
+              }
+            ],
+            "ended_at": "2026-09-20T15:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": null,
+            "started_at": "2026-09-20T14:58:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "kind": "sleep",
+        "id": "30000000-0000-4000-8000-000000000070",
+        "start": "2026-09-20T16:00:00Z",
+        "end": "2026-09-20T16:45:00Z",
+        "unfinished": false,
+        "session": {
+          "id": "30000000-0000-4000-8000-000000000070",
+          "earliest_member_start": "2026-09-20T16:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "sleep",
+          "meta": {
+            "id": "30000000-0000-4000-8000-000000000070",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T16:45:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T16:00:00.000000Z",
+            "ended_at": "2026-09-20T16:45:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "note": "Woke up happy 😴 \"quiet\"",
+            "kind_override": "nap",
+            "sleep_session_id": null
+          }
+        }
+      },
+      {
+        "kind": "feed",
+        "id": "20000000-0000-4000-8000-0000000000c1",
+        "start": "2026-09-20T18:00:00Z",
+        "end": "2026-09-20T18:10:00Z",
+        "unfinished": false,
+        "session": {
+          "id": "20000000-0000-4000-8000-0000000000c1",
+          "earliest_member_start": "2026-09-20T18:00:00Z"
+        },
+        "entity": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-0000000000c1",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000c1",
+                "kind": "breast",
+                "side": "right",
+                "seconds": 300
+              },
+              {
+                "id": "31000000-0000-4000-8000-0000000000c2",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300
+              }
+            ],
+            "ended_at": "2026-09-20T18:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "breast",
+            "note": "imported ✅",
+            "started_at": "2026-09-20T18:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      }
+    ],
+    "active_timers": [
+      {
+        "id": "50000000-0000-4000-8000-000000000003",
+        "timer_kind": "feed",
+        "started_at": "2026-09-20T19:00:00Z",
+        "entity": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000003",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T19:07:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000d1",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300,
+                "started_at": "2026-09-20T19:00:00.000000Z",
+                "ended_at": "2026-09-20T19:05:00.000000Z"
+              },
+              {
+                "id": "31000000-0000-4000-8000-0000000000d2",
+                "kind": "bottle",
+                "seconds": 120,
+                "volume_ml": 40,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T19:05:00.000000Z",
+                "ended_at": "2026-09-20T19:07:00.000000Z"
+              }
+            ],
+            "current_bottle_started_at": null,
+            "current_side": "right",
+            "current_side_started_at": "2026-09-20T19:07:00.000000Z",
+            "session_id": null,
+            "started_at": "2026-09-20T19:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000004",
+        "timer_kind": "sleep",
+        "started_at": "2026-09-20T20:00:00Z",
+        "entity": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000004",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T20:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T20:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "sleep"
+          }
+        }
+      }
+    ]
+  },
+  "summary": {
+    "baby_id": "10000000-0000-4000-8000-000000000001",
+    "start": "2026-09-18T22:00:00Z",
+    "end": "2026-09-21T22:00:00Z",
+    "timezone": "Europe/Zurich",
+    "elapsed_seconds": 259200,
+    "revision": 37,
+    "as_of": "2026-09-21T12:00:00Z",
+    "totals": {
+      "feed": {
+        "sessions": 6,
+        "logged_feeds": 6,
+        "bottle_volume_observations": 3,
+        "known_bottle_volume_ml": 156,
+        "bottles_missing_volume": 0
+      },
+      "sleep": {
+        "sessions": 2,
+        "completed_seconds": 6300,
+        "unfinished_sleeps": 0
+      },
+      "diapers": 0,
+      "supplement_doses": 1,
+      "measurement_observations": 1
+    },
+    "days": [
+      {
+        "date": "2026-09-19",
+        "start": "2026-09-18T22:00:00Z",
+        "end": "2026-09-19T22:00:00Z",
+        "elapsed_seconds": 86400,
+        "feed": {
+          "sessions": 0,
+          "logged_feeds": 0,
+          "bottle_volume_observations": 0,
+          "known_bottle_volume_ml": null,
+          "bottles_missing_volume": 0
+        },
+        "sleep": {
+          "sessions": 0,
+          "completed_seconds": 0,
+          "unfinished_sleeps": 0
+        },
+        "diapers": 0,
+        "supplement_doses": 0,
+        "measurement_observations": 0
+      },
+      {
+        "date": "2026-09-20",
+        "start": "2026-09-19T22:00:00Z",
+        "end": "2026-09-20T22:00:00Z",
+        "elapsed_seconds": 86400,
+        "feed": {
+          "sessions": 6,
+          "logged_feeds": 6,
+          "bottle_volume_observations": 3,
+          "known_bottle_volume_ml": 156,
+          "bottles_missing_volume": 0
+        },
+        "sleep": {
+          "sessions": 2,
+          "completed_seconds": 6300,
+          "unfinished_sleeps": 0
+        },
+        "diapers": 0,
+        "supplement_doses": 1,
+        "measurement_observations": 1
+      },
+      {
+        "date": "2026-09-21",
+        "start": "2026-09-20T22:00:00Z",
+        "end": "2026-09-21T22:00:00Z",
+        "elapsed_seconds": 86400,
+        "feed": {
+          "sessions": 0,
+          "logged_feeds": 0,
+          "bottle_volume_observations": 0,
+          "known_bottle_volume_ml": null,
+          "bottles_missing_volume": 0
+        },
+        "sleep": {
+          "sessions": 0,
+          "completed_seconds": 0,
+          "unfinished_sleeps": 0
+        },
+        "diapers": 0,
+        "supplement_doses": 0,
+        "measurement_observations": 0
+      }
+    ],
+    "supplements_by_name": [
+      {
+        "name": "Vitamin D",
+        "doses": 1
+      }
+    ],
+    "measurements": [
+      {
+        "id": "70000000-0000-4000-8000-000000000001",
+        "measured_at": "2026-09-20T14:10:00Z",
+        "day": "2026-09-20",
+        "weight_kg": 7.125,
+        "length_cm": 65.5,
+        "length_position": "lying"
+      }
+    ],
+    "active_timers": [
+      {
+        "id": "50000000-0000-4000-8000-000000000003",
+        "timer_kind": "feed",
+        "started_at": "2026-09-20T19:00:00Z",
+        "entity": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000003",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T19:07:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000d1",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300,
+                "started_at": "2026-09-20T19:00:00.000000Z",
+                "ended_at": "2026-09-20T19:05:00.000000Z"
+              },
+              {
+                "id": "31000000-0000-4000-8000-0000000000d2",
+                "kind": "bottle",
+                "seconds": 120,
+                "volume_ml": 40,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T19:05:00.000000Z",
+                "ended_at": "2026-09-20T19:07:00.000000Z"
+              }
+            ],
+            "current_bottle_started_at": null,
+            "current_side": "right",
+            "current_side_started_at": "2026-09-20T19:07:00.000000Z",
+            "session_id": null,
+            "started_at": "2026-09-20T19:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "id": "50000000-0000-4000-8000-000000000004",
+        "timer_kind": "sleep",
+        "started_at": "2026-09-20T20:00:00Z",
+        "entity": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000004",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T20:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T20:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "sleep"
+          }
+        }
+      }
+    ]
+  }
+}

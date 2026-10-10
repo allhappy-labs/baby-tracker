@@ -11,10 +11,7 @@ public enum SupplementSheetCopy {
     public static let name = LoggingL10n.text("Med name")
     public static let invitation = LoggingL10n.text("Add your first med")
     public static let validation = LoggingL10n.text("Enter a name of up to 64 characters, without control characters.")
-    public static let log = LoggingL10n.text("Log")
     public static let time = LoggingL10n.text("Date and time")
-    public static let note = LoggingL10n.text("Note")
-    public static let notePrompt = LoggingL10n.text("Optional")
 }
 
 /// Logs a med, or in edit mode (`editing:` an entry's id) renames it, moves
@@ -36,7 +33,7 @@ public final class SupplementSheetModel {
     public var selectedName = ""
     public var newName = ""
     public var when: Date
-    /// Edit mode only: the entry's note. Logging has no note field.
+    /// The entry's note, under Details when logging and editing alike.
     public var note = ""
     public let latestAllowedDate: Date
     /// Edit mode only: true once the entry has vanished. The sheet closes on it.
@@ -82,9 +79,9 @@ public final class SupplementSheetModel {
     public var canLog: Bool {
         guard writeContext != nil, !isGone,
               (try? SupplementName.normalized(isAddingName ? newName : selectedName)) != nil else { return false }
-        // Logging's time picker already stops at now; an edit is also
-        // checked here, because `save()` refuses what this refuses.
-        return !isEditing || when <= latestAllowedDate
+        // The time row already stops at `latestAllowedDate`; checked here
+        // too, because `save()` refuses what this refuses.
+        return when <= latestAllowedDate
     }
     public func addName() { isAddingName = true }
     public func useSavedNames() { isAddingName = false }
@@ -160,8 +157,8 @@ public final class SupplementSheetModel {
     public func log() -> Bool {
         guard canLog, let writeContext else { return false }
         do {
-            try store.logSupplement(name: isAddingName ? newName : selectedName,
-                                    for: babyID, at: when, expectedWriteContext: writeContext)
+            try store.logSupplement(name: isAddingName ? newName : selectedName, for: babyID, at: when,
+                                    note: EditModel.trimmedToNil(note), expectedWriteContext: writeContext)
             errorMessage = nil
             return true
         } catch {
@@ -180,24 +177,21 @@ public struct SupplementSheet: View {
     /// `onDone` runs once even when a delete is followed by the revision
     /// bump that marks the entry gone.
     @State private var isFinished = false
+    @State private var isShowingDetails: Bool
 
     public init(store: BabyStore, babyID: UUID, editing entryID: UUID? = nil, onDone: @escaping () -> Void) {
-        _model = State(initialValue: SupplementSheetModel(store: store, babyID: babyID, editing: entryID))
+        let model = SupplementSheetModel(store: store, babyID: babyID, editing: entryID)
+        _model = State(initialValue: model)
+        _isShowingDetails = State(initialValue: !model.note.isEmpty)
         self.store = store
         self.onDone = onDone
     }
 
     public var body: some View {
-        NavigationStack {
-            Form {
-                // Edit mode's title row: the entry's own time, with its date.
-                if model.isEditing {
-                    Section {
-                        EditTimeRow(SupplementSheetCopy.time, date: $model.when,
-                                    latest: model.latestAllowedDate, identifier: "supplement.time")
-                    }
-                }
-                Section {
+            EntryPanel(title: SupplementSheetCopy.title, icon: .meds, tint: Palette.meds, canSave: model.canLog,
+                       identifierPrefix: "supplement", onCancel: onDone,
+                       onSave: saveOrLog, onDelete: deleteAction, accessory: AnyView(addNameButton)) {
+                PanelSection {
                     if model.isAddingName {
                         if model.names.isEmpty { Text(SupplementSheetCopy.invitation) }
                         TextField(SupplementSheetCopy.name, text: $model.newName)
@@ -208,58 +202,55 @@ public struct SupplementSheet: View {
                             Button(LoggingL10n.text("Use saved meds")) { model.useSavedNames() }
                         }
                     } else if model.showsPicker {
-                        Picker(LoggingL10n.text("Med"), selection: $model.selectedName) {
-                            ForEach(model.names, id: \.self) { Text($0).tag($0) }
+                        // Outside a Form a menu picker shows no label: the
+                        // row names it.
+                        LabeledContent(LoggingL10n.text("Med")) {
+                            Picker(LoggingL10n.text("Med"), selection: $model.selectedName) {
+                                ForEach(model.names, id: \.self) { Text($0).tag($0) }
+                            }
+                            .labelsHidden()
+                            .accessibilityIdentifier("supplement.picker")
                         }
-                        .accessibilityIdentifier("supplement.picker")
                     } else {
                         Text(model.selectedName).accessibilityIdentifier("supplement.selectedName")
                     }
                 } footer: {
                     if model.isAddingName && !model.canLog { Text(SupplementSheetCopy.validation) }
                 }
-                if model.isEditing {
-                    // The old editor's note, so editing a med here loses nothing.
-                    Section {
-                        TextField(SupplementSheetCopy.note, text: $model.note,
-                                  prompt: Text(SupplementSheetCopy.notePrompt))
-                            .accessibilityLabel(SupplementSheetCopy.note)
-                            .accessibilityIdentifier("supplement.note")
-                    }
-                } else {
-                    Section {
-                        DatePicker(SupplementSheetCopy.time, selection: $model.when,
-                                   in: ...model.latestAllowedDate, displayedComponents: [.date, .hourAndMinute])
-                            .accessibilityIdentifier("supplement.time")
-                        Button(SupplementSheetCopy.log) {
-                            if model.log() { onDone() }
-                        }
-                        .disabled(!model.canLog)
-                        .accessibilityIdentifier("supplement.log")
-                    }
+                PanelSection {
+                    EditTimeRow(SupplementSheetCopy.time, date: $model.when,
+                                latest: model.latestAllowedDate, identifier: "supplement.time")
+                }
+                DetailsSection(isExpanded: $isShowingDetails, identifier: "supplement.details") {
+                    DetailFieldRow(EditChromeCopy.note, text: $model.note, identifier: "supplement.note")
                 }
                 if let error = model.errorMessage {
-                    Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("supplement.error") }
-                }
-            }
-            .editFooter(isPresented: model.isEditing, canSave: model.canLog, identifierPrefix: "supplement",
-                        onSave: save, onDelete: delete)
-            .navigationTitle(SupplementSheetCopy.title)
-            .editTitle(isPresented: model.isEditing, icon: .meds, tint: Palette.meds, label: SupplementSheetCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) { Button(LoggingL10n.text("Cancel"), action: onDone) }
-                ToolbarItem(placement: .primaryAction) {
-                    Button { model.addName(); nameFocused = true } label: { Image(systemName: "plus") }
-                        .accessibilityLabel(SupplementSheetCopy.addName)
-                        .accessibilityIdentifier("supplement.add")
+                    PanelSection { Text(error).foregroundStyle(.red).accessibilityIdentifier("supplement.error") }
                 }
             }
             .editLifecycle(isPresented: model.isEditing, revision: store.revision, isGone: model.isGone,
                            reload: model.reload, onGone: finish)
+    }
+
+    /// Add a med name: at the header's right, where the toolbar had it.
+    private var addNameButton: some View {
+        Button { model.addName(); nameFocused = true } label: {
+            Image(systemName: "plus").frame(width: 20, height: 20)
         }
+        .buttonStyle(.glass)
+        .controlSize(.large)
+        .accessibilityLabel(SupplementSheetCopy.addName)
+        .accessibilityIdentifier("supplement.add")
+    }
+
+    private func saveOrLog() {
+        if model.isEditing { save() } else if model.log() { onDone() }
+    }
+
+    /// Delete only in edit mode.
+    private var deleteAction: (() -> Void)? {
+        guard model.isEditing else { return nil }
+        return delete
     }
 
     // MARK: - Edit mode

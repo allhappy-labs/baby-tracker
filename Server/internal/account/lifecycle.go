@@ -2,16 +2,16 @@ package account
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"regexp"
 
 	"babytracker/server/internal/access"
-	"babytracker/server/internal/security"
+	"babytracker/server/internal/authority"
 )
 
+// Service deletes accounts through the authority.
 type Service struct {
-	Security *security.Service
+	Authority *authority.Service
 }
 
 type codedError string
@@ -27,12 +27,28 @@ var (
 	ErrUnavailable               = codedError("service_unavailable")
 )
 
+// AppleAuthorizationRevocationManual is the Apple authorization revocation
+// every deletion reports: the server keeps no Apple refresh token (hosted
+// sign-in exchanges the authorization code and discards the token), so the
+// person revokes the app's Sign in with Apple authorization themselves.
+// Hosted revocation returns with a credential vault (Phase 6).
+const AppleAuthorizationRevocationManual = "manual_required"
+
+// DeletionResult is a committed (or exactly retried) account deletion.
+type DeletionResult struct {
+	authority.Result
+	// AppleAuthorizationRevocation is AppleAuthorizationRevocationManual.
+	AppleAuthorizationRevocation string
+}
+
 var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 func validUUID(value string) bool {
 	return canonicalUUID.MatchString(value) && value != "00000000-0000-0000-0000-000000000000"
 }
 
+// Code is err's stable code: the account service's own code, else the
+// authority's (authority codes are the legacy strings).
 func Code(err error) string {
 	if err == nil {
 		return ""
@@ -41,50 +57,40 @@ func Code(err error) string {
 	if errors.As(err, &own) {
 		return string(own)
 	}
-	return security.Code(err)
+	return authority.CodeOf(err)
 }
 
-// Delete commits local account and identity removal. Provider credentials are
-// deliberately outside this request-path service and are handled by the
-// separately leased revocation worker.
-func (service *Service) Delete(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
+// Delete deletes the caller's account and identity binding in one authority
+// command. The command names the account's identity key, read first; a key
+// that changed in between refuses the command (session_revoked). An exact
+// retry returns the stored result.
+func (service *Service) Delete(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (DeletionResult, error) {
 	if !confirmed {
-		return security.CommandResult{}, ErrConfirmationRequired
+		return DeletionResult{}, ErrConfirmationRequired
 	}
-	if service == nil || service.Security == nil || !validUUID(commandID) {
-		return security.CommandResult{}, ErrInvalidRequest
+	if service == nil || service.Authority == nil || !validUUID(commandID) {
+		return DeletionResult{}, ErrInvalidRequest
 	}
-	var account security.AccountView
-	var ok bool
-	var receipt security.ReceiptView
-	var receiptExists bool
-	err := service.Security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		account, ok = view.Account(principal.AccountID)
-		receipt, receiptExists = view.Receipt(principal.AccountID, commandID)
-		return nil
-	})
+	if !validUUID(principal.AccountID) {
+		return DeletionResult{}, authority.ErrSessionRevoked
+	}
+	key, found, err := service.Authority.AccountIdentityKey(ctx, principal.AccountID)
 	if err != nil {
-		return security.CommandResult{}, err
+		return DeletionResult{}, err
 	}
-	if !ok {
-		return security.CommandResult{}, security.ErrMembershipRevoked
+	if !found {
+		return DeletionResult{}, authority.ErrMembershipRevoked
 	}
-	payload := security.AccountDeletedPayload{Version: "v1", AccountID: principal.AccountID, IdentityKey: account.IdentityKey}
-	raw, _ := json.Marshal(payload)
-	command := security.Command{ID: commandID, Kind: "account_deleted", AffectedAccountIDs: []string{principal.AccountID}, Payload: raw}
-	if receiptExists {
-		if receipt.Kind != command.Kind {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		hash, hashErr := security.CanonicalCommandHash(principal, command)
-		if hashErr != nil || hash != receipt.CommandHash {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		return receipt.Result, nil
+	result, err := service.Authority.DeleteAccount(ctx, authority.DeleteAccount{CommandID: commandID, AccountID: principal.AccountID,
+		IdentityKey: key, Principal: principal})
+	switch authority.CodeOf(err) {
+	case "":
+		return DeletionResult{Result: result, AppleAuthorizationRevocation: AppleAuthorizationRevocationManual}, nil
+	case "ownership_transfer_required":
+		return DeletionResult{}, ErrOwnershipTransferRequired
+	case "command_id_reused":
+		return DeletionResult{}, ErrCommandIDReused
+	default:
+		return DeletionResult{}, err
 	}
-	result, err := service.Security.Execute(ctx, principal, command)
-	if security.Code(err) == "ownership_transfer_required" {
-		return security.CommandResult{}, ErrOwnershipTransferRequired
-	}
-	return result, err
 }

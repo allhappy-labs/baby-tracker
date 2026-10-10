@@ -22,7 +22,7 @@ func TestSyntheticReadinessPerformanceProbe(t *testing.T) {
 		t.Fatal(err)
 	}
 	runner := migrate.New(migrations.Files)
-	for _, mode := range []string{"schema-compatibility", "role-separation", "database-readiness"} {
+	for _, mode := range []string{"schema-compatibility", "runtime-role", "database-readiness"} {
 		elapsed := make([]time.Duration, 15)
 		for i := range elapsed {
 			start := time.Now()
@@ -30,15 +30,15 @@ func TestSyntheticReadinessPerformanceProbe(t *testing.T) {
 			switch mode {
 			case "schema-compatibility":
 				_, err = runner.CompatibleVersion(ctx, db.Runtime, compatibility)
-			case "role-separation":
-				err = database.VerifyRoleSeparation(ctx, db.Runtime, db.Projector, compatibility.Max)
+			case "runtime-role":
+				err = database.VerifyRuntimeRole(ctx, db.Runtime, compatibility.Max)
 			case "database-readiness":
 				err = db.Runtime.Ping(ctx)
 				if err == nil {
 					var version int64
 					version, err = runner.CompatibleVersion(ctx, db.Runtime, compatibility)
 					if err == nil {
-						err = database.VerifyRoleSeparation(ctx, db.Runtime, db.Projector, version)
+						err = database.VerifyRuntimeRole(ctx, db.Runtime, version)
 					}
 					if err == nil {
 						_, err = runner.CompatibleVersion(ctx, db.Runtime, compatibility)

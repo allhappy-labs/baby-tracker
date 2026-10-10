@@ -7,6 +7,12 @@ import (
 	"babytracker/server/internal/testkit"
 )
 
+// Ported from main's internal/sync/baby_icon_test.go at fce422d5. Adapted
+// only where the branch differs: the service serves encoded wire, so the
+// pull and the snapshot go through this package's applyAndPull and
+// fullSnapshot (paging_test.go), which decode it as a client does; main's
+// fullSnapshot helper is therefore named snapshotEntities here.
+
 func TestBabyUpdateWithoutIconKeepsStoredIcon(t *testing.T) {
 	h := testkit.New(t)
 	id := h.SeedBabies(t, 1)[0].CanonicalEntity.Meta.ID
@@ -18,7 +24,7 @@ func TestBabyUpdateWithoutIconKeepsStoredIcon(t *testing.T) {
 		t.Fatalf("outcome payload = %+v", got)
 	}
 	// What the journal hands other phones.
-	page, err := h.Service.ApplyAndPull(t.Context(), h.Owner, h.SyncRequest(h.Cursor(0), nil))
+	page, err := applyAndPull(t, h.Service, h.Owner, h.SyncRequest(h.Cursor(0), nil))
 	if err != nil || page.NextPageToken != nil {
 		t.Fatalf("pull = %+v err=%v", page, err)
 	}
@@ -28,10 +34,10 @@ func TestBabyUpdateWithoutIconKeepsStoredIcon(t *testing.T) {
 	}
 	assertBabyIcon(t, "pull", pulled, id, "girl.2")
 	// What a fresh snapshot shows.
-	assertBabyIcon(t, "snapshot", fullSnapshot(t, h), id, "girl.2")
+	assertBabyIcon(t, "snapshot", snapshotEntities(t, h), id, "girl.2")
 	// A present icon replaces the stored one.
 	h.SetBabyIcon(t, id, "girl.4")
-	assertBabyIcon(t, "snapshot after replace", fullSnapshot(t, h), id, "girl.4")
+	assertBabyIcon(t, "snapshot after replace", snapshotEntities(t, h), id, "girl.4")
 }
 
 func TestBabyIconOutOfSetIsRejected(t *testing.T) {
@@ -50,14 +56,14 @@ func TestBabyIconOutOfSetIsRejected(t *testing.T) {
 	if err != nil || outcome.Status != "rejected" || outcome.Code == nil || *outcome.Code != "invalid_mutation" {
 		t.Fatalf("outcome=%+v err=%v", outcome, err)
 	}
-	if got := fullSnapshot(t, h); len(got) != 1 || got[0].Payload.(protocol.BabyPayload).Icon != nil {
+	if got := snapshotEntities(t, h); len(got) != 1 || got[0].Payload.(protocol.BabyPayload).Icon != nil {
 		t.Fatalf("rejected icon reached the stored baby: %+v", got)
 	}
 }
 
-func fullSnapshot(t *testing.T, h *testkit.Harness) []protocol.CanonicalEntity {
+func snapshotEntities(t *testing.T, h *testkit.Harness) []protocol.CanonicalEntity {
 	t.Helper()
-	snapshot, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	snapshot, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil || snapshot.NextPageToken != nil {
 		t.Fatalf("snapshot=%+v err=%v", snapshot, err)
 	}

@@ -16,12 +16,7 @@ public enum SolidsSheetCopy {
     /// button has a stated reason rather than being inexplicably dead.
     public static let foodsRequiredFooter = LoggingL10n.text("Name at least one food to save")
     public static let amountLabel = LoggingL10n.text("Amount")
-    public static let timeLabel = LoggingL10n.text("Time")
-    public static let cancel = LoggingL10n.text("Cancel")
-    public static let save = LoggingL10n.text("Save")
     public static let dateTimeLabel = LoggingL10n.text("Date and time")
-    public static let noteLabel = LoggingL10n.text("Note")
-    public static let notePrompt = LoggingL10n.text("Optional")
 
     /// Free text in, a clean list out: trimmed, with empties dropped so a
     /// trailing comma or a double comma does not become a blank food.
@@ -172,146 +167,138 @@ public final class SolidsEditModel {
     }
 }
 
-/// Solids have no timer and no volume, so the sheet is a description and a
-/// time. `foods` is free text rather than a curated list: what a baby eats is
-/// not a set we can enumerate.
+/// New mode's state and its one write: the foods, amount, time and note a
+/// solids entry is logged with.
+@MainActor @Observable
+public final class SolidsLogModel {
+    private let store: BabyStore
+    private let babyID: UUID
+
+    public var foodsText = ""
+    public var amount: SolidsAmount = .some
+    public var note = ""
+    /// Solids are logged after the fact as often as during, so the past —
+    /// yesterday included — is open and the future is not.
+    public var when: Date
+
+    public init(store: BabyStore, babyID: UUID) {
+        self.store = store
+        self.babyID = babyID
+        when = store.now
+    }
+
+    public var latestAllowedDate: Date { store.now }
+
+    public var canSave: Bool { SolidsSheetCopy.canSave(foodsText: foodsText) && when <= latestAllowedDate }
+
+    /// One `.create`, note included.
+    public func log() throws {
+        guard canSave else { throw EditModeError.invalid }
+        _ = try store.logSolids(foods: SolidsSheetCopy.foods(from: foodsText), amount: amount, for: babyID,
+                                at: when, note: EditModel.trimmedToNil(note))
+    }
+}
+
+/// Solids have no timer and no volume, so the panel is a description, a
+/// time and a note. `foods` is free text rather than a curated list: what a
+/// baby eats is not a set we can enumerate. Logging and editing are the same
+/// panel; editing adds Delete.
 public struct SolidsSheet: View {
     let store: BabyStore
     let babyID: UUID
     let onDone: () -> Void
 
-    @State private var foodsText: String = ""
-    @State private var amount: SolidsAmount = .some
-    @State private var when: Date
-    /// Present in edit mode only. Create mode keeps its own `@State` above
-    /// and never touches a model.
+    @State private var logModel: SolidsLogModel
+    /// Present in edit mode only.
     @State private var editModel: SolidsEditModel?
+    @State private var isShowingDetails: Bool
     /// `onDone` runs once even when a delete is followed by the revision
     /// bump that marks the entry gone.
     @State private var isFinished = false
     @Environment(\.errorReporter) private var errorReporter
 
-    private var canSave: Bool { editModel?.canSave ?? SolidsSheetCopy.canSave(foodsText: foodsText) }
-
-    /// Edit mode (`editing:` a solids feed's id) is the same form with the
-    /// entry's values: its time with the date at the top, a note, and Save
-    /// and Delete at the bottom.
     public init(store: BabyStore, babyID: UUID, editing feedID: UUID? = nil, onDone: @escaping () -> Void) {
         self.store = store
         self.babyID = babyID
         self.onDone = onDone
-        _when = State(wrappedValue: store.now)
-        _editModel = State(wrappedValue: feedID.map { SolidsEditModel(store: store, babyID: babyID, feedID: $0) })
+        let editModel = feedID.map { SolidsEditModel(store: store, babyID: babyID, feedID: $0) }
+        _logModel = State(wrappedValue: SolidsLogModel(store: store, babyID: babyID))
+        _editModel = State(wrappedValue: editModel)
+        _isShowingDetails = State(wrappedValue: !(editModel?.note.isEmpty ?? true))
     }
 
-    public var body: some View {
-        NavigationStack {
-            Form {
-                // Edit mode's title row: the entry's own time, with its date.
-                if let editModel {
-                    Section {
-                        EditTimeRow(
-                            SolidsSheetCopy.dateTimeLabel,
-                            date: Binding(get: { editModel.when }, set: { editModel.when = $0 }),
-                            latest: editModel.latestAllowedDate,
-                            identifier: "solids.time"
-                        )
-                    }
-                }
+    private var canSave: Bool { editModel?.canSave ?? logModel.canSave }
 
-                Section {
-                    TextField(
-                        SolidsSheetCopy.foodsLabel,
-                        text: field(\.foodsText, else: $foodsText),
-                        prompt: Text(SolidsSheetCopy.foodsPrompt)
-                    )
-                    .accessibilityLabel(SolidsSheetCopy.foodsLabel)
-                    .accessibilityIdentifier("solids.foods")
+    public var body: some View {
+        EntryPanel(title: SolidsSheetCopy.title, icon: .solids, tint: Palette.solids, canSave: canSave,
+                       identifierPrefix: "solids", onCancel: onDone,
+                       onSave: save, onDelete: deleteAction) {
+                PanelSection {
+                    TextField(SolidsSheetCopy.foodsLabel, text: foodsText, prompt: Text(SolidsSheetCopy.foodsPrompt))
+                        .accessibilityLabel(SolidsSheetCopy.foodsLabel)
+                        .accessibilityIdentifier("solids.foods")
                 } footer: {
                     Text(
-                        SolidsSheetCopy.canSave(foodsText: editModel?.foodsText ?? foodsText)
+                        SolidsSheetCopy.canSave(foodsText: foodsText.wrappedValue)
                             ? SolidsSheetCopy.foodsFooter
                             : SolidsSheetCopy.foodsRequiredFooter
                     )
                 }
 
-                Section {
-                    Picker(SolidsSheetCopy.amountLabel, selection: amountBinding) {
+                PanelSection {
+                    Picker(SolidsSheetCopy.amountLabel, selection: amount) {
                         ForEach(SolidsAmount.allCases, id: \.self) { candidate in
                             Text(candidate.displayName).tag(candidate)
                         }
                     }
                     .pickerStyle(.segmented)
-
-                    if editModel == nil {
-                        // Solids are logged after the fact as often as during, so
-                        // the past is open and the future is not.
-                        DatePicker(
-                            SolidsSheetCopy.timeLabel,
-                            selection: $when,
-                            in: ...store.now,
-                            displayedComponents: [.hourAndMinute]
-                        )
-                    }
                 }
 
-                if editModel != nil {
-                    // The old editor's note, so editing solids here loses nothing.
-                    Section {
-                        TextField(SolidsSheetCopy.noteLabel, text: field(\.note, else: .constant("")),
-                                  prompt: Text(SolidsSheetCopy.notePrompt))
-                            .accessibilityLabel(SolidsSheetCopy.noteLabel)
-                            .accessibilityIdentifier("solids.note")
-                    }
+                PanelSection {
+                    EditTimeRow(SolidsSheetCopy.dateTimeLabel, date: when,
+                                latest: editModel?.latestAllowedDate ?? logModel.latestAllowedDate,
+                                identifier: "solids.time")
                 }
-            }
-            .editFooter(isPresented: editModel != nil, canSave: canSave, identifierPrefix: "solids",
-                        onSave: saveEdit, onDelete: delete)
-            // Sized to the form. `.medium` left a third of the sheet empty
-            // under the time row. Edit mode adds a note row and the footer.
-            .sheetHeight(editModel == nil ? 340 : 400 + EditFooter.height)
-            .navigationTitle(SolidsSheetCopy.title)
-            .editTitle(isPresented: editModel != nil, icon: .solids, tint: Palette.solids, label: SolidsSheetCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(SolidsSheetCopy.cancel, action: onDone)
-                }
-                if editModel == nil {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(SolidsSheetCopy.save, action: log)
-                            .buttonStyle(.borderedProminent)
-                            .tint(Palette.feed)
-                            .disabled(!canSave)
-                    }
+
+                DetailsSection(isExpanded: $isShowingDetails, identifier: "solids.details") {
+                    DetailFieldRow(EditChromeCopy.note, text: note, identifier: "solids.note")
                 }
             }
             .editLifecycle(isPresented: editModel != nil, revision: store.revision,
                            isGone: editModel?.isGone ?? false, reload: { editModel?.reload() }, onGone: finish)
-        }
     }
 
-    /// The edit model's field in edit mode, the sheet's own state otherwise.
-    private func field(_ keyPath: ReferenceWritableKeyPath<SolidsEditModel, String>, else own: Binding<String>) -> Binding<String> {
-        guard let editModel else { return own }
-        return Binding(get: { editModel[keyPath: keyPath] }, set: { editModel[keyPath: keyPath] = $0 })
+    // MARK: - Fields: the edit model's in edit mode, the log model's otherwise
+
+    private var foodsText: Binding<String> {
+        if let editModel { Bindable(editModel).foodsText } else { $logModel.foodsText }
     }
 
-    private var amountBinding: Binding<SolidsAmount> {
-        guard let editModel else { return $amount }
-        return Binding(get: { editModel.amount }, set: { editModel.amount = $0 })
+    private var amount: Binding<SolidsAmount> {
+        if let editModel { Bindable(editModel).amount } else { $logModel.amount }
+    }
+
+    private var when: Binding<Date> {
+        if let editModel { Bindable(editModel).when } else { $logModel.when }
+    }
+
+    private var note: Binding<String> {
+        if let editModel { Bindable(editModel).note } else { $logModel.note }
+    }
+
+    private func save() {
+        if editModel == nil { log() } else { saveEdit() }
+    }
+
+    /// Delete only in edit mode.
+    private var deleteAction: (() -> Void)? {
+        guard editModel != nil else { return nil }
+        return delete
     }
 
     private func log() {
         do {
-            _ = try store.logSolids(
-                foods: SolidsSheetCopy.foods(from: foodsText),
-                amount: amount,
-                for: babyID,
-                at: when
-            )
+            try logModel.log()
             errorReporter.clear()
             onDone()
         } catch {

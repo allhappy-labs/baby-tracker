@@ -9,13 +9,30 @@ import (
 	"net"
 	"regexp"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"babytracker/server/internal/access"
-	"babytracker/server/internal/security"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/database"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
+
+// main's worker (main:Server/internal/liveactivity/worker.go) on the
+// branch: the queue and every maintenance call run on the maintenance pool,
+// each statement inside one of its worker slots; the snapshot is the
+// authority's (authority.WithLiveActivitySnapshot) on the runtime pool;
+// committed family changes arrive through Dirty (the post-commit change
+// feed) and are flushed before every claim; the registration sweep, the
+// work sweep and retention run once a minute.
+
+// codedError is an authority error code (main's security.IsCodedError):
+// the authority, not one job's data, refused or failed.
+func codedError(err error) bool {
+	var code authority.Code
+	return errors.As(err, &code)
+}
 
 const WorkerBatchLimit = 32
 const WorkerPollInterval = time.Second
@@ -40,7 +57,7 @@ func IsInfrastructureError(ctx context.Context, err error) bool {
 		return false
 	}
 	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) ||
-		errors.Is(err, ErrDependencyUnavailable) || security.IsCodedError(err) {
+		errors.Is(err, ErrDependencyUnavailable) || codedError(err) {
 		return true
 	}
 	var pgErr *pgconn.PgError
@@ -89,10 +106,10 @@ func SafeErrorCode(err error) string {
 		return "dependency_unavailable"
 	case errors.Is(err, ErrStaleClaim):
 		return "stale_claim"
-	case errors.Is(err, security.ErrLiveActivityAuthorizationChanged):
+	case errors.Is(err, authority.ErrLiveActivityAuthorizationChanged):
 		return "authorization_changed"
-	case security.IsCodedError(err):
-		return security.Code(err)
+	case codedError(err):
+		return authority.CodeOf(err)
 	case errors.As(err, &pgErr):
 		return "sqlstate_" + pgErr.Code
 	case errors.Is(err, pgx.ErrNoRows):
@@ -115,17 +132,40 @@ const PushExpiration = 8 * time.Hour
 
 var processSends = make(chan struct{}, 2)
 
+// SnapshotGuard is the authority's Live Activity snapshot
+// (authority.Service.WithLiveActivitySnapshot).
 type SnapshotGuard interface {
-	WithLiveActivitySnapshot(context.Context, security.LiveActivitySubject, func(pgx.Tx, access.Grant) error) error
-	SweepLiveActivityRegistrations(context.Context) (int, error)
+	WithLiveActivitySnapshot(context.Context, authority.LiveActivitySubject, func(pgx.Tx, access.Grant) error) error
 }
 
+// ErrWorkerUnavailable is Ready's answer while the worker has not completed
+// a full pass since it (re)started, or has stopped.
+var ErrWorkerUnavailable = errors.New("live_activity_worker_unavailable")
+
+// maximumSweepPages bounds one minute's registration sweep: each page
+// revokes up to SweepRegistrationsLimit registrations, so this many pages
+// cover any realistic node; the rest wait for the next minute.
+const maximumSweepPages = 100
+
 type Worker struct {
-	Queue     *Queue
-	Guard     SnapshotGuard
+	// Queue is on the maintenance pool.
+	Queue *Queue
+	Guard SnapshotGuard
+	// Transport is the APNs transport (APNSTransport over the one client).
 	Transport Transport
-	Now       func() time.Time
-	Jitter    func(time.Duration) time.Duration
+	// Dirty is the post-commit change feed's record of committed family
+	// advances, flushed before every claim. Nil: only the sweep dirties.
+	Dirty *Dirty
+	// Slots are the maintenance pool's worker slots: every queue statement
+	// runs inside one, so the readiness audit keeps its connection and the
+	// other maintenance workers (wake, export, purge) take theirs in turn.
+	// Nil runs without slots (tests).
+	Slots *database.WorkerSlots
+	// RequireEntitlement is hosted mode's family_sync rule for the
+	// registration sweep.
+	RequireEntitlement bool
+	Now                func() time.Time
+	Jitter             func(time.Duration) time.Duration
 	// Logger receives bounded, token-free lines: one per send APNs did not
 	// accept and one per parked job. Nil logs to slog.Default().
 	Logger      *slog.Logger
@@ -136,10 +176,15 @@ type Worker struct {
 	// ticker supplies Run's poll and maintenance ticks; tests substitute one
 	// they control. Nil uses time.NewTicker.
 	ticker func(time.Duration) (<-chan time.Time, func())
+	// running is set while Run's runners run; passed once one of them has
+	// completed a full pass (sweep, dirty flush, claims) since.
+	running, passed atomic.Bool
+	// retryWait is Run's wait before it resumes; nil waits on a timer.
+	retryWait func(context.Context, time.Duration) error
 }
 
-func NewWorker(q *Queue, g SnapshotGuard, t Transport) *Worker {
-	return &Worker{Queue: q, Guard: g, Transport: t, Now: time.Now, Jitter: func(d time.Duration) time.Duration { return time.Duration(float64(d) * (0.8 + rand.Float64()*0.4)) }}
+func NewWorker(q *Queue, g SnapshotGuard, t Transport, d *Dirty, slots *database.WorkerSlots) *Worker {
+	return &Worker{Queue: q, Guard: g, Transport: t, Dirty: d, Slots: slots, Now: time.Now, Jitter: func(d time.Duration) time.Duration { return time.Duration(float64(d) * (0.8 + rand.Float64()*0.4)) }}
 }
 
 func (w *Worker) tick(d time.Duration) (<-chan time.Time, func()) {
@@ -157,13 +202,88 @@ func (w *Worker) logger() *slog.Logger {
 	return slog.Default()
 }
 
-// Run keeps two bounded runners, so a slow send does not stop the one-second
-// scheduling poll. Each runner drains due work — up to WorkerBatchLimit claims
-// per pass — before it waits for the next tick. A separate minute tick sweeps
-// authority even at full capacity.
-func (w *Worker) Run(ctx context.Context) error {
+// inSlot runs one queue statement inside a maintenance worker slot. The
+// worker never holds a slot across a snapshot, a send or another slot.
+func (w *Worker) inSlot(ctx context.Context, work func(context.Context) error) error {
+	if w.Slots == nil {
+		return work(ctx)
+	}
+	return w.Slots.Do(ctx, work)
+}
+
+// Ready is nil after the first full pass (sweep, dirty flush, claim) since
+// Run last (re)started its runners, until Run stops them. The HTTP layer
+// advertises live-activity-push-v1 and accepts registrations only then.
+func (w *Worker) Ready(context.Context) error {
+	if w == nil || !w.running.Load() || !w.passed.Load() {
+		return ErrWorkerUnavailable
+	}
+	return nil
+}
+
+// Run supervises the worker until ctx ends, and then returns ctx's error.
+// It starts the runners (run) once ready (the node's cached readiness;
+// nil: always) answers nil. When they stop — the node became unready, or
+// an infrastructure failure (IsInfrastructureError) — it logs the code,
+// waits (2 s, doubling to a minute) and starts them again once ready.
+func (w *Worker) Run(ctx context.Context, ready func(context.Context) error) error {
+	delay := 2 * time.Second
+	for {
+		if ready != nil {
+			if err := ready(ctx); err != nil {
+				if waitErr := w.wait(ctx, WorkerPollInterval); waitErr != nil {
+					return waitErr
+				}
+				continue
+			}
+		}
+		started := time.Now()
+		stopped := w.run(ctx, ready)
+		if ctx.Err() != nil {
+			return ctx.Err()
+		}
+		if time.Since(started) > time.Minute {
+			delay = 2 * time.Second
+		}
+		// A code only: an error's message may carry data.
+		w.logger().Error("live activity worker stopped", "code", SafeErrorCode(stopped), "retry_in", delay.String())
+		if err := w.wait(ctx, delay); err != nil {
+			return err
+		}
+		delay = min(delay*2, time.Minute)
+	}
+}
+
+func (w *Worker) wait(ctx context.Context, d time.Duration) error {
+	if w.retryWait != nil {
+		return w.retryWait(ctx, d)
+	}
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+// run keeps two bounded runners, so a slow send does not stop the
+// one-second scheduling poll. Each runner checks readiness, then drains due
+// work — up to WorkerBatchLimit claims per pass — before it waits for the
+// next tick. A separate minute tick sweeps authority even at full capacity.
+// It returns the first runner's failure, after joining them all.
+func (w *Worker) run(ctx context.Context, ready func(context.Context) error) error {
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	w.maintenance.Lock()
+	w.nextSweep = time.Time{} // every (re)start sweeps at once
+	w.maintenance.Unlock()
+	w.running.Store(true)
+	defer func() {
+		w.running.Store(false)
+		w.passed.Store(false)
+	}()
 	failures := make(chan error, 3)
 	var runners sync.WaitGroup
 	for i := 0; i < 2; i++ {
@@ -173,10 +293,17 @@ func (w *Worker) Run(ctx context.Context) error {
 			ticks, stop := w.tick(WorkerPollInterval)
 			defer stop()
 			for {
+				if ready != nil {
+					if err := ready(ctx); err != nil {
+						failures <- errors.Join(ErrDependencyUnavailable, err)
+						return
+					}
+				}
 				if err := w.RunOnce(ctx, WorkerBatchLimit); err != nil {
 					failures <- err
 					return
 				}
+				w.passed.Store(true)
 				select {
 				case <-ctx.Done():
 					failures <- ctx.Err()
@@ -209,17 +336,49 @@ func (w *Worker) Run(ctx context.Context) error {
 	return err
 }
 
+// maintain, once a minute: the registration sweep (repeated while a page
+// comes back full), the work sweep (main's claim ran it), then retention.
 func (w *Worker) maintain(ctx context.Context) error {
 	w.maintenance.Lock()
 	defer w.maintenance.Unlock()
 	if !w.Now().Before(w.nextSweep) {
-		if _, err := w.Guard.SweepLiveActivityRegistrations(ctx); err != nil {
+		for page := 0; page < maximumSweepPages; page++ {
+			var revoked int
+			if err := w.inSlot(ctx, func(ctx context.Context) (err error) {
+				revoked, err = w.Queue.SweepRegistrations(ctx, w.RequireEntitlement)
+				return err
+			}); err != nil {
+				return err
+			}
+			if revoked < SweepRegistrationsLimit {
+				break
+			}
+		}
+		if err := w.inSlot(ctx, w.Queue.SweepWork); err != nil {
 			return err
 		}
-		if _, err := w.Queue.Retain(ctx); err != nil {
+		if err := w.inSlot(ctx, func(ctx context.Context) error { _, err := w.Queue.Retain(ctx); return err }); err != nil {
 			return err
 		}
 		w.nextSweep = w.Now().Add(time.Minute)
+	}
+	return nil
+}
+
+// flush dirties the families Dirty holds (Queue.FlushDirty, in batches of
+// MaximumDirtyBatch). A batch that fails is put back with every later one,
+// newer sequences recorded meanwhile winning, and the error returned.
+func (w *Worker) flush(ctx context.Context) error {
+	families, sequences := w.Dirty.take()
+	for start := 0; start < len(families); start += MaximumDirtyBatch {
+		end := min(start+MaximumDirtyBatch, len(families))
+		if err := w.inSlot(ctx, func(ctx context.Context) error {
+			_, err := w.Queue.FlushDirty(ctx, families[start:end], sequences[start:end])
+			return err
+		}); err != nil {
+			w.Dirty.restore(families[start:], sequences[start:])
+			return err
+		}
 	}
 	return nil
 }
@@ -233,12 +392,20 @@ func (w *Worker) RunOnce(ctx context.Context, limit int) error {
 		if err := w.maintain(ctx); err != nil {
 			return err
 		}
+		// Every claim follows a flush of the committed changes recorded so far.
+		if err := w.flush(ctx); err != nil {
+			return err
+		}
 		select {
 		case processSends <- struct{}{}:
 		case <-ctx.Done():
 			return ctx.Err()
 		}
-		claims, err := w.Queue.Claim(ctx, w.Now(), 1)
+		var claims []Claim
+		err := w.inSlot(ctx, func(ctx context.Context) (err error) {
+			claims, err = w.Queue.Claim(ctx, w.Now(), 1)
+			return err
+		})
 		if err != nil {
 			<-processSends
 			return err
@@ -248,7 +415,7 @@ func (w *Worker) RunOnce(ctx context.Context, limit int) error {
 			return nil
 		}
 		err = w.dispatch(ctx, claims[0])
-		if errors.Is(err, ErrStaleClaim) || errors.Is(err, security.ErrLiveActivityAuthorizationChanged) {
+		if errors.Is(err, ErrStaleClaim) || errors.Is(err, authority.ErrLiveActivityAuthorizationChanged) {
 			// Dispatch has returned, so no send for this lease is in flight. A
 			// release that fails leaves the lease to expire; it is logged by code
 			// only, and the worker carries on with the rest of the queue.
@@ -260,7 +427,7 @@ func (w *Worker) RunOnce(ctx context.Context, limit int) error {
 		switch {
 		case err == nil:
 			w.forgetFailures(claims[0].JobID)
-		case errors.Is(err, ErrStaleClaim) || errors.Is(err, security.ErrLiveActivityAuthorizationChanged):
+		case errors.Is(err, ErrStaleClaim) || errors.Is(err, authority.ErrLiveActivityAuthorizationChanged):
 		case IsInfrastructureError(ctx, err):
 			return err
 		case IsTransientConflict(err):
@@ -276,6 +443,20 @@ func (w *Worker) RunOnce(ctx context.Context, limit int) error {
 	return nil
 }
 
+// The queue calls dispatch makes, each inside a worker slot.
+func (w *Worker) loadTarget(ctx context.Context, c Claim) (state TargetState, err error) {
+	err = w.inSlot(ctx, func(ctx context.Context) error { state, err = w.Queue.LoadTarget(ctx, c); return err })
+	return state, err
+}
+
+func (w *Worker) saveTarget(ctx context.Context, c Claim, s TargetState, finish bool, deadline time.Time, invalidate *TokenFence) error {
+	return w.inSlot(ctx, func(ctx context.Context) error { return w.Queue.SaveTarget(ctx, c, s, finish, deadline, invalidate) })
+}
+
+func (w *Worker) saveOutcome(ctx context.Context, c Claim, s TargetState, deadline time.Time, invalidate *TokenFence, outcome *PushOutcome) error {
+	return w.inSlot(ctx, func(ctx context.Context) error { return w.Queue.SaveOutcome(ctx, c, s, deadline, invalidate, outcome) })
+}
+
 // deferTransient releases a job that lost a database race: the shortest
 // backoff the first time, further along the ordinary progression (capped at
 // 60 s) for a job that keeps losing, and never dispatch_failed. A delivery
@@ -286,7 +467,9 @@ func (w *Worker) deferTransient(ctx context.Context, c Claim, cause error) error
 	w.logger().Info("live activity job deferred", "kind", c.Kind, "code", SafeErrorCode(cause), "attempt", attempt, "retry_in", delay.Round(time.Second).String())
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerSendTimeout)
 	defer cancel()
-	err := w.Queue.Retry(cleanup, c, w.Now().Add(delay), "transient_conflict")
+	err := w.inSlot(cleanup, func(ctx context.Context) error {
+		return w.Queue.Retry(ctx, c, w.Now().Add(delay), "transient_conflict")
+	})
 	if errors.Is(err, ErrStaleClaim) {
 		return w.releaseStaleLease(ctx, c)
 	}
@@ -303,7 +486,7 @@ func (w *Worker) park(ctx context.Context, c Claim, cause error) error {
 	w.logger().Warn("live activity job parked", "kind", c.Kind, "code", SafeErrorCode(cause), "attempt", attempt, "retry_in", delay.Round(time.Second).String())
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerSendTimeout)
 	defer cancel()
-	err := w.Queue.Retry(cleanup, c, w.Now().Add(delay), "dispatch_failed")
+	err := w.inSlot(cleanup, func(ctx context.Context) error { return w.Queue.Retry(ctx, c, w.Now().Add(delay), "dispatch_failed") })
 	if errors.Is(err, ErrStaleClaim) {
 		// Newer work arrived meanwhile: release the lease so it is claimed again.
 		return w.releaseStaleLease(ctx, c)
@@ -376,11 +559,8 @@ func (w *Worker) snapshot(ctx context.Context, c Claim, state TargetState) (disp
 		// side switch), continue the same lifecycle. Follow that committed
 		// timer-to-record link, not time proximity or a client presentation claim.
 		if c.Kind == "feed" && out.desired != nil && state.TimerID != nil && state.SessionID == nil && out.desired.SessionID != nil && !referenceEqual(state.TimerID, out.desired.TimerID) {
-			var completed, completedSession *string
-			err = tx.QueryRow(ctx, `SELECT t.completed_record_id::text,COALESCE(f.feeding_session_id,f.id)::text FROM active_timers t
- LEFT JOIN feed_entries f ON f.family_id=t.family_id AND f.id=t.completed_record_id AND f.tombstoned_at IS NULL
- WHERE t.family_id=$1 AND t.id=$2 AND t.tombstoned_at IS NOT NULL`, c.FamilyID, *state.TimerID).Scan(&completed, &completedSession)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			completed, completedSession, err := ReadCompletedSession(ctx, tx, c.FamilyID, *state.TimerID)
+			if err != nil {
 				return err
 			}
 			if referenceEqual(completed, out.desired.SessionID) || referenceEqual(completedSession, out.desired.SessionID) {
@@ -388,13 +568,14 @@ func (w *Worker) snapshot(ctx context.Context, c Claim, state TargetState) (disp
 			}
 		}
 		if out.desired != nil && out.desired.TimerID != nil {
-			var origin string
-			var seq uint64
-			err = tx.QueryRow(ctx, `SELECT device_id::text,sequence FROM mutation_journal WHERE family_id=$1 AND entity_kind='timer' AND entity_id=$2 AND operation='timer_start' ORDER BY sequence LIMIT 1`, c.FamilyID, *out.desired.TimerID).Scan(&origin, &seq)
-			if err != nil && !errors.Is(err, pgx.ErrNoRows) {
+			// The timer's first version's device and sequence (care.Encode's
+			// origin): the phone that started it after it registered shows its
+			// own local card and gets no push-to-start.
+			origin, err := ReadTimerOrigin(ctx, tx, c.FamilyID, *out.desired.TimerID)
+			if err != nil {
 				return err
 			}
-			out.state.SuppressStart = origin == c.DeviceID && seq > registeredSequence
+			out.state.SuppressStart = origin.Sequence != 0 && origin.DeviceID == c.DeviceID && origin.Sequence > registeredSequence
 		}
 		// Byte order, whatever the database's collation: the phone keeps the
 		// smallest activity ID by Swift's String comparison, so the first card
@@ -524,7 +705,7 @@ func adoptOwnCard(state TargetState, desired *DesiredCard, kind string, tokens [
 }
 
 func (w *Worker) dispatch(ctx context.Context, c Claim) error {
-	state, err := w.Queue.LoadTarget(ctx, c)
+	state, err := w.loadTarget(ctx, c)
 	if err != nil {
 		return err
 	}
@@ -550,11 +731,11 @@ func (w *Worker) dispatch(ctx context.Context, c Claim) error {
 		}
 	}
 	if decision.Event == "none" || decision.Event == "wait" || snapshot.token == "" {
-		return w.Queue.SaveTarget(ctx, c, decision.State, true, decision.Deadline, nil)
+		return w.saveTarget(ctx, c, decision.State, true, decision.Deadline, nil)
 	}
 	// Write intent before I/O. A crash now leaves starts unconfirmed, even if the
 	// connection later dies after Apple accepted them.
-	if err = w.Queue.SaveTarget(ctx, c, decision.State, false, time.Time{}, nil); err != nil {
+	if err = w.saveTarget(ctx, c, decision.State, false, time.Time{}, nil); err != nil {
 		return err
 	}
 	latest, err := w.snapshot(ctx, c, decision.State)
@@ -565,14 +746,14 @@ func (w *Worker) dispatch(ctx context.Context, c Claim) error {
 		if decision.Event == "start" {
 			return w.abandonUnsentStart(ctx, c, decision, snapshot.state)
 		}
-		return w.Queue.SaveTarget(ctx, c, decision.State, true, w.Now().Add(time.Second), nil)
+		return w.saveTarget(ctx, c, decision.State, true, w.Now().Add(time.Second), nil)
 	}
 	if !w.Now().Add(WorkerSendTimeout).Before(c.LeaseDeadline) {
 		return errors.Join(ErrStaleClaim, w.abandonUnsentStart(ctx, c, decision, snapshot.state))
 	}
 	if decision.State.PendingEvent == "duplicateEnd" {
 		if latest.duplicate == nil || latest.duplicate.ID != duplicate.ID || latest.duplicate.Token != duplicate.Token || latest.duplicate.Version != duplicate.Version || latest.duplicate.GenerationID != duplicate.GenerationID {
-			return w.Queue.SaveTarget(ctx, c, decision.State, true, w.Now().Add(time.Second), nil)
+			return w.saveTarget(ctx, c, decision.State, true, w.Now().Add(time.Second), nil)
 		}
 		snapshot.token = duplicate.Token
 	}
@@ -617,7 +798,7 @@ func (w *Worker) dispatch(ctx context.Context, c Claim) error {
 		}
 		retry := w.Now().Add(retryDelay(s.Attempts, w.Jitter))
 		s.RetryAt = &retry
-		err = w.Queue.SaveOutcome(ctx, c, s, retry, nil, outcome)
+		err = w.saveOutcome(ctx, c, s, retry, nil, outcome)
 		if errors.Is(err, ErrStaleClaim) {
 			// Newer work took the lease's acknowledgement: release the intent
 			// through the lease-exact CAS instead, so no unsent start lingers.
@@ -676,7 +857,7 @@ func (w *Worker) dispatch(ctx context.Context, c Claim) error {
 	if s.ExpiresAt != nil && w.Now().Before(*s.ExpiresAt) && (deadline.IsZero() || s.ExpiresAt.Before(deadline)) {
 		deadline = *s.ExpiresAt
 	}
-	return w.Queue.SaveOutcome(ctx, c, s, deadline, invalidate, outcome)
+	return w.saveOutcome(ctx, c, s, deadline, invalidate, outcome)
 }
 
 // Only pre-transport branches may abandon an intent. Once Send is entered,
@@ -687,7 +868,7 @@ func (w *Worker) abandonUnsentStart(ctx context.Context, c Claim, d Decision, pr
 	}
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerSendTimeout)
 	defer cancel()
-	err := w.Queue.AbandonStart(cleanup, c, d.State, previous)
+	err := w.inSlot(cleanup, func(ctx context.Context) error { return w.Queue.AbandonStart(ctx, c, d.State, previous) })
 	if errors.Is(err, ErrStaleClaim) {
 		// A reclaimed lease or a revoked/deleted target belongs to its new owner.
 		return nil
@@ -701,7 +882,7 @@ func (w *Worker) abandonUnsentStart(ctx context.Context, c Claim, d Decision, pr
 func (w *Worker) releaseStaleLease(ctx context.Context, c Claim) error {
 	cleanup, cancel := context.WithTimeout(context.WithoutCancel(ctx), WorkerSendTimeout)
 	defer cancel()
-	if err := w.Queue.ReleaseStale(cleanup, c); err != nil && !errors.Is(err, ErrStaleClaim) {
+	if err := w.inSlot(cleanup, func(ctx context.Context) error { return w.Queue.ReleaseStale(ctx, c) }); err != nil && !errors.Is(err, ErrStaleClaim) {
 		return err
 	}
 	return nil

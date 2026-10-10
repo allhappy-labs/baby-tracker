@@ -1,3 +1,27 @@
+# Entry panels (2026-10-09)
+
+Spec: docs/superpowers/specs/2026-10-09-entry-panels-design.md
+Plan: docs/superpowers/plans/2026-10-09-entry-panels.md
+Verification: docs/verification/2026-10-09-entry-panels/README.md
+Rollout: docs/verification/2026-10-09-entry-panels-rollout.md
+Merged to `main` at `296312a7`. Client only, so no server deploy.
+
+- [x] Tasks 1–9: Start + End with a read-only Length for every interval; one panel for log and edit; Past entry folds into it. The running-timer editor shows Start/End for each finished part, and every sheet fits its content (`sheetHeight` removed). Each task was reviewed.
+- [x] Task 10: simulator screenshots of every panel, at default size and accessibility-large. The bottle part's − and + now sit beside the amount, so it fits without scrolling. With Details open, a focused note stays visible above Save.
+- [x] Final whole-branch review: one fix wave. A Past entry bottle no longer stores an unentered 10-min length. The running editor's VoiceOver labels name each part. A legacy 0 s breast part refuses Start moved past End. Dead code is removed.
+- [x] Verification: `make test` OK 1700 on the merged tree. UI subsets pass with no runner restarts.
+- [x] Installed on Phone B and Phone A. Both relaunched and sync 200s on the server.
+- [ ] User check on the phones.
+- [ ] Parked minors:
+  - unused catalog strings from Past entry and the duration stepper;
+  - "Bottle" shown twice in the running editor;
+  - stale accessibility-audit `statedHeight` allowances and comments;
+  - the running editor's "parts add up to more time" message used for End-before-Start and overlap (unreachable today);
+  - an open legacy sleep shows End = Start;
+  - the session sheet jumps ~34 pt once when it opens;
+  - iPad split-screen sheet sizing untested;
+  - a bottle with an End, or with Details open, scrolls under Save.
+
 # README with preview screenshots (2026-10-05 → 2026-10-09)
 
 - [x] README.md: intro, feature list, layout, build/test commands (`5022a63a`).

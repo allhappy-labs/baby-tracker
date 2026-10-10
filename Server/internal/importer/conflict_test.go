@@ -1,7 +1,11 @@
 package importer_test
 
 import (
+	"slices"
+	"strings"
+
 	"babytracker/server/internal/protocol"
+	"babytracker/server/internal/tenant"
 	"babytracker/server/internal/testkit"
 	"encoding/hex"
 	"encoding/json"
@@ -59,10 +63,14 @@ func TestJoinLocalAmbiguityRequiresDistinctOwnerChoices(t *testing.T) {
 	if e != nil || out.MappingComplete || len(out.Mappings) != 0 || len(out.Conflicts) != 2 || out.Conflicts[0].Kind != "ambiguous_local_babies" {
 		t.Fatalf("%+v %v", out, e)
 	}
+	// The owner's publishing choice announces the new high water to the live
+	// hub once, after the commit; the other choices publish nothing.
+	observer := &wakeObserver{}
+	h.Importer.SetPublisher(observer)
 	first := choose(h, out, out.Conflicts[0], "use_existing", &shared)
 	out, e = h.Importer.ResolveConflict(t.Context(), h.Owner, r.ImportID, first)
-	if e != nil || out.MappingComplete || len(out.Mappings) != 0 || len(out.Conflicts) != 1 {
-		t.Fatalf("first %+v %v", out, e)
+	if e != nil || out.MappingComplete || len(out.Mappings) != 0 || len(out.Conflicts) != 1 || observer.published != 0 {
+		t.Fatalf("first %+v %v, %d publishes", out, e, observer.published)
 	}
 	bad := choose(h, out, out.Conflicts[0], "use_existing", &shared)
 	if _, e = h.Importer.ResolveConflict(t.Context(), h.Owner, r.ImportID, bad); e == nil || e.Error() != "import_target_already_assigned" {
@@ -73,6 +81,9 @@ func TestJoinLocalAmbiguityRequiresDistinctOwnerChoices(t *testing.T) {
 	if e != nil || !out.MappingComplete || len(out.Mappings) != 2 || out.Mappings[0].SharedBabyID == out.Mappings[1].SharedBabyID {
 		t.Fatalf("publication %+v %v", out, e)
 	}
+	if observer.published != 1 || observer.cursors[0].Sequence != h.FamilySequence(t) || observer.cursors[0].FamilyID != h.FamilyID {
+		t.Fatalf("publication publishes=%d cursors=%+v at sequence %d", observer.published, observer.cursors, h.FamilySequence(t))
+	}
 	retry, e := h.Importer.ResolveConflict(t.Context(), h.Owner, r.ImportID, last)
 	if e != nil || !reflect.DeepEqual(out, retry) {
 		t.Fatalf("choice replay %+v %v", retry, e)
@@ -81,6 +92,9 @@ func TestJoinLocalAmbiguityRequiresDistinctOwnerChoices(t *testing.T) {
 	last.CanonicalBabyID = &shared
 	if _, e = h.Importer.ResolveConflict(t.Context(), h.Owner, r.ImportID, last); e == nil || e.Error() != "command_id_reused" {
 		t.Fatalf("choice reuse %v", e)
+	}
+	if observer.published != 1 {
+		t.Fatalf("a replayed or refused choice published: %d", observer.published)
 	}
 	targets := map[string]string{}
 	for _, mapping := range out.Mappings {
@@ -156,7 +170,7 @@ func TestImportConflictPagingBindsViewerRevisionKeyAndExpiry(t *testing.T) {
 		r.Babies = append(r.Babies, b)
 	}
 	h.Limits.SyncPageSize = 1
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	out, e := h.Importer.Resolve(t.Context(), h.Caregiver, r)
 	if e != nil || out.ConflictCount != 4 || out.ConflictsComplete || out.NextConflictPageToken == nil {
 		t.Fatalf("first page %+v %v", out, e)
@@ -193,7 +207,7 @@ func TestImportConflictPagingBindsViewerRevisionKeyAndExpiry(t *testing.T) {
 	if _, e = h.Importer.StatusPage(t.Context(), h.Caregiver, r.ImportID, token); e == nil {
 		t.Fatal("removed key accepted")
 	}
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	h.Now = h.Now.Add(16 * time.Minute)
 	if _, e = h.Importer.StatusPage(t.Context(), h.Caregiver, r.ImportID, token); e == nil || e.Error() != "page_expired" {
 		t.Fatalf("expired token %v", e)
@@ -216,7 +230,7 @@ func TestImportConflictPagingAccountsForWholeByteEnvelope(t *testing.T) {
 	h := testkit.New(t)
 	h.Limits.MaxLiveBabies = 100
 	h.Limits.SyncPageBytes = protocol.MinimumSyncPageBytes
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	for i := 0; i < 100; i++ {
 		seedBaby(t, h, fmt.Sprintf("10000000-0000-4000-8000-%012d", 100+i), "Élie")
 	}
@@ -276,5 +290,113 @@ func TestOwnerResolutionInvalidatesPriorChoiceBeforePublication(t *testing.T) {
 	out, e = h.Importer.Status(t.Context(), h.Caregiver, r.ImportID)
 	if e != nil || out.MappingComplete || len(out.Conflicts) != 2 || h.Count(t, "import_baby_mappings", h.FamilyID) != 0 {
 		t.Fatalf("prior choice survived graph change %+v %v", out, e)
+	}
+}
+
+// Publication's record conflict check reads the import's baby mappings in
+// one statement, however many records the manifest holds: a 30-record
+// import's publishing choice sends exactly the statements a 3-record
+// import's does (it once sent one mapping lookup per record, under the
+// family lock).
+func TestPublicationRecordCheckReadsMappingsOnce(t *testing.T) {
+	h := testkit.New(t)
+	seedBaby(t, h, "10000000-0000-4000-8000-000000000010", "Élie")
+	seedBaby(t, h, "10000000-0000-4000-8000-000000000011", "Élie")
+	pool, wire := testkit.CountedPool(t, h.Runtime)
+	counted := h.ImporterOn(h.AuthorityOn(t, pool))
+	shared := "10000000-0000-4000-8000-000000000010"
+	statements := map[int][]string{}
+	for i, records := range []int{3, 30} {
+		r := testkit.ImportRequest(i, "Élie", "2026-01-12")
+		for n := range records {
+			r.Records = append(r.Records, protocol.RecordManifest{RecordID: fmt.Sprintf("3%07d-0000-4000-8000-%012d", i, n+1), EntityKind: "feed",
+				LocalBabyID: r.Babies[0].LocalBabyID, ContentSHA256: strings.Repeat("ab", 32)})
+		}
+		r.TotalRecordCount = uint32(records)
+		out, e := h.Importer.Resolve(t.Context(), h.Caregiver, r)
+		if e != nil || out.MappingComplete || len(out.Conflicts) != 1 {
+			t.Fatalf("%d records: %+v %v", records, out, e)
+		}
+		wire.Reset()
+		out, e = counted.ResolveConflict(t.Context(), h.Owner, r.ImportID, choose(h, out, out.Conflicts[0], "use_existing", &shared))
+		if e != nil || !out.MappingComplete {
+			t.Fatalf("%d records: publication %+v %v", records, out, e)
+		}
+		statements[records] = wire.Statements()
+	}
+	reads := map[int]int{}
+	for records, sent := range statements {
+		for _, sql := range sent {
+			if strings.Contains(sql, "FROM import_baby_mappings") {
+				reads[records]++
+			}
+		}
+	}
+	if len(statements[30]) != len(statements[3]) || reads[30] != reads[3] {
+		t.Fatalf("publication sent %d statements (%d mapping reads) for 3 records, %d (%d) for 30", len(statements[3]), reads[3],
+			len(statements[30]), reads[30])
+	}
+}
+
+// Import conflict pages resume after the last served conflict id by the
+// uuid, so each page must also be read in uuid order, whatever the
+// database's collation. Under ICU's numeric collation the text of these
+// conflict ids sorts otherwise; a page read in text order served conflicts
+// past ones it had not served yet, and the next page, resuming after the
+// last uuid, skipped them for good.
+func TestImportConflictPagesFollowUUIDOrderUnderANumericCollation(t *testing.T) {
+	h := testkit.NewWithICUCollation(t, "und-u-kn-true")
+	seedBaby(t, h, "10000000-0000-4000-8000-000000000010", "Élie")
+	seedBaby(t, h, "10000000-0000-4000-8000-000000000011", "Élie")
+	r := testkit.ImportRequest(0, "Élie", "2026-01-12")
+	for i := 2; i <= 24; i++ {
+		b := r.Babies[0]
+		b.LocalBabyID = fmt.Sprintf("20000000-0000-4000-8000-%012d", i)
+		r.Babies = append(r.Babies, b)
+	}
+	h.Limits.SyncPageSize = 3
+	h.RebuildSyncService(t, h.Limits)
+	out, e := h.Importer.Resolve(t.Context(), h.Caregiver, r)
+	if e != nil || out.ConflictCount != uint64(len(r.Babies)) || out.ConflictsComplete {
+		t.Fatalf("first page %+v %v", out, e)
+	}
+	// Not vacuous: this database sorts these conflict ids' text otherwise.
+	var textOrderDiffers bool
+	tx, e := h.Migrator.Begin(t.Context())
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback(t.Context())
+	if e = tenant.SetLocal(t.Context(), tx, tenant.Context{AccountID: h.Caregiver.AccountID, FamilyID: h.FamilyID}); e != nil {
+		t.Fatal(e)
+	}
+	if e = tx.QueryRow(t.Context(), `SELECT array_agg(conflict_id::text ORDER BY conflict_id::text) <> array_agg(conflict_id::text ORDER BY conflict_id)
+		FROM import_conflicts WHERE family_id = $1 AND import_id = $2`, h.FamilyID, r.ImportID).Scan(&textOrderDiffers); e != nil {
+		t.Fatal(e)
+	}
+	if !textOrderDiffers {
+		t.Fatal("the numeric collation sorts these conflict ids' text in uuid order: the test proves nothing")
+	}
+	var served []string
+	for pages := 0; ; pages++ {
+		if pages > len(r.Babies) {
+			t.Fatal("conflict paging does not end")
+		}
+		for _, c := range out.Conflicts {
+			served = append(served, c.ConflictID)
+		}
+		if out.ConflictsComplete {
+			break
+		}
+		if out, e = h.Importer.StatusPage(t.Context(), h.Caregiver, r.ImportID, out.NextConflictPageToken); e != nil {
+			t.Fatal(e)
+		}
+	}
+	distinct := map[string]bool{}
+	for _, id := range served {
+		distinct[id] = true
+	}
+	if len(served) != len(r.Babies) || len(distinct) != len(r.Babies) || !slices.IsSorted(served) {
+		t.Fatalf("pages served %d conflicts (%d distinct) of %d, in uuid order %v: %v", len(served), len(distinct), len(r.Babies), slices.IsSorted(served), served)
 	}
 }

@@ -9,14 +9,16 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
-	"runtime"
 	"slices"
+	"sync"
 	"syscall"
 	"time"
 
-	"babytracker/server/internal/access"
 	"babytracker/server/internal/account"
+	"babytracker/server/internal/admission"
+	"babytracker/server/internal/apns"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/config"
 	"babytracker/server/internal/database"
 	"babytracker/server/internal/delivery"
@@ -28,16 +30,13 @@ import (
 	"babytracker/server/internal/importer"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/liveactivity"
-	"babytracker/server/internal/migrate"
+	"babytracker/server/internal/maintenance"
 	"babytracker/server/internal/probe"
 	"babytracker/server/internal/protocol"
+	"babytracker/server/internal/pushtoken"
 	"babytracker/server/internal/realtime"
-	"babytracker/server/internal/records"
-	"babytracker/server/internal/recovery"
-	"babytracker/server/internal/security"
-	"babytracker/server/internal/security/localstore"
 	familysync "babytracker/server/internal/sync"
-	"babytracker/server/migrations"
+	"babytracker/server/internal/wake"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -50,117 +49,19 @@ var sourceVersion = "unknown"
 
 const sourceURL = "https://github.com/allhappy-labs/baby-tracker"
 
-var (
-	errCredentialKeyUnavailable           = errors.New("credential_key_unavailable")
-	errHostedAdapterUnavailable           = errors.New("hosted_adapter_unavailable")
-	errHostedCredentialRotationUnverified = errors.New("hosted_credential_rotation_unverified")
-)
-
-type credentialKeyInventory interface {
-	ReferencedCredentialKeyIDs(context.Context) (security.CredentialKeyInventory, error)
-}
-
-type familyAuthorizer interface {
-	Authorize(context.Context, access.Principal, string, string) (access.Grant, error)
-}
-
-type syncFamilyResolver struct{ service httpapi.FamilyService }
-
-func (resolver syncFamilyResolver) Current(ctx context.Context, principal access.Principal) (string, error) {
-	view, err := resolver.service.Current(ctx, principal)
-	return view.ID, err
-}
-
-func familyAuthorizationDecision(current func() familyAuthorizer) security.Decision {
-	return func(ctx context.Context, principal access.Principal, familyID, action string) (access.Grant, error) {
-		if current == nil {
-			return access.Grant{}, security.ErrUnavailable
-		}
-		target := current()
-		if target == nil {
-			return access.Grant{}, security.ErrUnavailable
-		}
-		return target.Authorize(ctx, principal, familyID, action)
-	}
-}
-
-type authorityCredentialKeyInventory struct{ authority *security.Service }
-
-func (inventory authorityCredentialKeyInventory) ReferencedCredentialKeyIDs(ctx context.Context) (security.CredentialKeyInventory, error) {
-	if inventory.authority == nil {
-		return security.CredentialKeyInventory{}, errors.New("security authority is required")
-	}
-	return inventory.authority.ReferencedCredentialKeyIDs(ctx)
-}
-
-type applicationReadiness struct {
-	sessionKeyIDs                                  map[string]struct{}
-	base                                           httpapi.Readiness
-	inventory                                      credentialKeyInventory
-	mode                                           config.Mode
-	identityKeyIDs, deviceKeyIDs, invitationKeyIDs map[string]struct{}
-	hostedAdapterAvailable                         bool
-	hostedCredentialRotationVerified               bool
-}
-
-func (readiness applicationReadiness) Check(ctx context.Context) error {
-	if readiness.base == nil || readiness.inventory == nil {
-		return errors.New("service_unavailable")
-	}
-	if err := readiness.base.Check(ctx); err != nil {
-		return err
-	}
-	referenced, err := readiness.inventory.ReferencedCredentialKeyIDs(ctx)
-	if err != nil {
-		return err
-	}
-	if !containsEveryKeyID(readiness.identityKeyIDs, referenced.Identity) ||
-		!containsEveryKeyID(readiness.invitationKeyIDs, referenced.Invitation) {
-		return errCredentialKeyUnavailable
-	}
-	for _, ids := range []struct {
-		configured map[string]struct{}
-		referenced []string
-	}{
-		{readiness.sessionKeyIDs, referenced.SessionToken}, {readiness.deviceKeyIDs, referenced.DeviceContinuity},
-	} {
-		for _, id := range ids.referenced {
-			if _, ok := ids.configured[id]; !ok {
-				return fmt.Errorf("%w: %s", errCredentialKeyUnavailable, id)
-			}
-		}
-	}
-	if readiness.mode == config.ModeHosted {
-		if !readiness.hostedAdapterAvailable {
-			return errHostedAdapterUnavailable
-		}
-		if !readiness.hostedCredentialRotationVerified {
-			return errHostedCredentialRotationUnverified
-		}
-	}
-	return nil
-}
-
-func containsEveryKeyID(configured map[string]struct{}, referenced []string) bool {
-	for _, keyID := range referenced {
-		if _, ok := configured[keyID]; !ok {
-			return false
-		}
-	}
-	return true
-}
+var errHostedAdapterUnavailable = errors.New("hosted_adapter_unavailable")
 
 func main() {
 	if len(os.Args) > 1 && os.Args[1] == "probe" {
 		probeCommand(os.Args[2:])
 		return
 	}
-	if len(os.Args) > 1 && os.Args[1] == "live-activity-preflight" {
-		liveActivityPreflightCommand(os.Args[2:])
+	if len(os.Args) > 1 && os.Args[1] == "apns-preflight" {
+		apnsPreflightCommand(os.Args[2:])
 		return
 	}
 	if len(os.Args) > 1 {
-		fmt.Fprintln(os.Stderr, "usage: baby-tracker-server [probe --url <health-url> | live-activity-preflight [--environment sandbox|production|both] [--skip-apple] [--skip-database]]")
+		fmt.Fprintln(os.Stderr, "usage: baby-tracker-server [probe --url <health-url> | apns-preflight --environment sandbox|production]")
 		os.Exit(2)
 	}
 
@@ -170,106 +71,160 @@ func main() {
 		logger.Error("load configuration", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	pool, err := database.Open(context.Background(), cfg.DatabaseURL)
+	slog.SetDefault(logger)
+	pool, err := openApplicationPool(context.Background(), cfg.DatabaseURL, cfg.DatabasePools.Runtime, cfg.DatabasePools.Explicit())
 	if err != nil {
 		logger.Error("open database", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
 	defer pool.Close()
-	projectorPool, err := database.Open(context.Background(), cfg.ProjectorDatabaseURL)
+	// Beside the request pool, on the runtime credential: the readiness pool
+	// (one connection, the readiness monitor alone, so nothing can starve
+	// it) and the background pool (one connection: the audit verifier, the
+	// key inventory and the authority sweeps, one at a time). Neither waits
+	// for, or takes, a request connection.
+	readinessPool, err := database.OpenReadiness(context.Background(), cfg.DatabaseURL)
 	if err != nil {
-		logger.Error("open projector database", slog.String("error", err.Error()))
+		logger.Error("open readiness database", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	defer projectorPool.Close()
+	defer readinessPool.Close()
+	background, err := database.OpenBackground(context.Background(), cfg.DatabaseURL)
+	if err != nil {
+		logger.Error("open background database", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	defer background.Close()
+	// The maintenance credential is required in every mode (decision D3).
+	// Its login is verified by the readiness audit, so a database outage
+	// never stops the process serving liveness.
+	maintenancePool, err := openApplicationPool(context.Background(), cfg.RecoveryCleanup.WorkerDatabaseURL, cfg.DatabasePools.Maintenance, cfg.DatabasePools.Explicit())
+	if err != nil {
+		logger.Error("open maintenance database")
+		os.Exit(1)
+	}
+	defer maintenancePool.Close()
+	// Maintenance workers run inside a slot: one connection of each
+	// maintenance pool stays free for the readiness audit.
+	maintenanceSlots, err := database.NewWorkerSlots(maintenancePool)
+	if err != nil {
+		logger.Error("reserve the maintenance audit connection", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	maintenancePools := []*pgxpool.Pool{maintenancePool}
 	var exportPool *pgxpool.Pool
+	exportSlots := maintenanceSlots
 	if cfg.Export.Enabled {
-		exportPool, err = database.Open(context.Background(), cfg.Export.WorkerDatabaseURL)
-		if err != nil {
-			logger.Error("open export worker database")
-			os.Exit(1)
-		}
-		defer exportPool.Close()
-		if err := verifyExportPool(context.Background(), exportPool, "baby_tracker_export_app"); err != nil {
-			logger.Error("verify export worker database role")
-			os.Exit(1)
-		}
-	}
-
-	var recoveryPool *pgxpool.Pool
-	if cfg.RecoveryCleanup.Enabled {
-		if cfg.Export.Enabled && cfg.RecoveryCleanup.WorkerDatabaseURL == cfg.Export.WorkerDatabaseURL {
-			recoveryPool = exportPool
-		} else {
-			recoveryPool, err = database.Open(context.Background(), cfg.RecoveryCleanup.WorkerDatabaseURL)
+		exportPool = maintenancePool
+		if cfg.Export.WorkerDatabaseURL != cfg.RecoveryCleanup.WorkerDatabaseURL {
+			exportPool, err = openApplicationPool(context.Background(), cfg.Export.WorkerDatabaseURL, cfg.DatabasePools.Maintenance, cfg.DatabasePools.Explicit())
 			if err != nil {
-				logger.Error("open recovery maintenance database")
+				logger.Error("open export worker database")
 				os.Exit(1)
 			}
-			defer recoveryPool.Close()
-			if err = verifyExportPool(context.Background(), recoveryPool, "baby_tracker_export_app"); err != nil {
-				logger.Error("verify recovery maintenance database role")
+			defer exportPool.Close()
+			if exportSlots, err = database.NewWorkerSlots(exportPool); err != nil {
+				logger.Error("reserve the export audit connection", slog.String("error", err.Error()))
 				os.Exit(1)
 			}
+			maintenancePools = append(maintenancePools, exportPool)
 		}
 	}
 
-	gate, authority, familyService, err := runtimeServices(cfg, pool, projectorPool)
+	// The dedicated MCP pool exists only when MCP is enabled; disabled mode
+	// opens no MCP connection and reads no MCP secret.
+	mcpPool, err := openMCPPool(context.Background(), cfg)
 	if err != nil {
-		logger.Error("construct runtime gate", slog.String("error", err.Error()))
+		logger.Error("open mcp database")
 		os.Exit(1)
 	}
-	options, err := applicationOptions(cfg, logger, gate, authority, familyService, pool)
+	if mcpPool != nil {
+		defer mcpPool.Close()
+	}
+
+	budgets := serverPoolBudgets(pool, mcpPool, readinessPool, background, maintenancePool, exportPool)
+	if cfg.DatabasePools.Explicit() {
+		if err := database.ValidateBudget(budgets, cfg.DatabasePools.ServerMax, cfg.DatabasePools.Reserved); err != nil {
+			logger.Error("validate database connection budget", slog.String("error", err.Error()))
+			os.Exit(1)
+		}
+	}
+	var total int64
+	for _, budget := range budgets {
+		total += int64(budget.Max)
+	}
+	logger.Info("effective database connection budgets", slog.Int("runtime", int(pool.Config().MaxConns)), slog.Int("readiness", int(readinessPool.Config().MaxConns)), slog.Int("background", int(background.Config().MaxConns)), slog.Int("maintenance_pools", len(maintenancePools)), slog.Int64("total", total), slog.Int("mcp", int(cfg.DatabasePools.MCP)), slog.Int("mcp_admission", cfg.Admission.MCPMax), slog.Bool("mcp_enabled", cfg.MCP.Enabled), slog.Int("server_max", int(cfg.DatabasePools.ServerMax)), slog.Int("reserved", int(cfg.DatabasePools.Reserved)))
+	authorityService, familyService, err := runtimeServices(cfg, pool)
+	if err != nil {
+		logger.Error("construct security authority", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	readiness, verifier, err := composeNodeReadiness(cfg, readinessPools{Readiness: readinessPool, Maintenance: maintenancePools,
+		MaintenanceLogin: maintenanceLogin, Budgets: budgets,
+		Reset: append([]*pgxpool.Pool{pool, background, mcpPool}, maintenancePools...)}, background, logger)
+	if err != nil {
+		logger.Error("construct readiness", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	// Device progress for the wake worker, recorded in memory by the request
+	// path (sync and snapshot) and the post-commit observer.
+	wakeTracker := wake.NewTracker(0)
+	// Committed family changes for the Live Activity worker (push on only).
+	liveActivityDirty := newLiveActivityDirty(cfg)
+	options, err := applicationOptions(cfg, logger, readiness, authorityService, familyService, pool, wakeTracker, liveActivityDirty)
 	if err != nil {
 		logger.Error("construct application services", slog.String("error", err.Error()))
 		os.Exit(1)
 	}
-	if cfg.RecoveryCleanup.Enabled {
-		options.RecoveryReadiness = recoveryFunctionReadiness{pool: recoveryPool}
-	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	// Enabled push reconciles recovery before its first activation attempt, so
-	// a healthy boot activates at once. Not ready yet (database or migrations
-	// pending, recovery not reconcilable) is not an exit: the server starts not
-	// ready, like a disabled one, the lazy reconcile loop runs as it does for
-	// disabled servers, and supervision activates push once readiness passes.
-	reconciledAtBoot := false
-	if cfg.LiveActivity.Enabled {
-		startup, cancelStartup := context.WithTimeout(ctx, 10*time.Second)
-		err := gate.Reconcile(startup)
-		cancelStartup()
-		reconciledAtBoot = err == nil
-		if err != nil {
-			logger.Warn("live activity application readiness deferred")
-		}
-	}
-	// Only malformed configuration or composition fails here; activation that
-	// is not yet possible is deferred to the worker's supervision. A shutdown
-	// signal during the boot attempt is a clean stop, not a failure.
-	shutdownLiveActivities, err := configureLiveActivities(ctx, cfg, authority, pool, &options,
-		newDatabasePoolBudget(pool, projectorPool, exportPool, recoveryPool))
-	if liveActivityShutdownRequested(ctx, err) {
-		logger.Info("shutdown requested during live activity push activation")
-		return
-	}
-	if err != nil {
-		logger.Error("configure live activity push", slog.String("error", err.Error()))
-		os.Exit(1)
-	}
-	defer shutdownLiveActivities()
 	var exportWorker *familyexport.Worker
 	if cfg.Export.Enabled {
 		identity := protocol.ServerInfo{InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch,
 			CanonicalOrigin: cfg.PublicOrigin.String(), APIVersions: []string{"v1"}, Capabilities: options.Capabilities,
 			AppleAuthorizationMode: options.AppleAuthorizationMode, Limits: options.SyncLimits}
-		options.ExportService, exportWorker, err = familyexport.New(familyexport.Options{Security: authority,
-			Resolver: syncFamilyResolver{service: familyService}, Identity: identity, Runtime: pool,
+		options.ExportService, exportWorker, err = familyexport.New(familyexport.Options{Authority: authorityService,
+			Identity: identity, Runtime: pool,
 			WorkerPool: exportPool, Keys: cfg.Export.Keys, ActiveKeyID: cfg.Export.ActiveKeyID, Now: time.Now})
 		if err != nil {
 			logger.Error("construct export service")
 			os.Exit(1)
 		}
+	}
+	// Apple push exists only when wakes (decision D4) or Live Activities
+	// are configured, as one client for both: the wake worker sends through
+	// it; the push-token route, which stores the tokens, is composed under
+	// the wake flag (applicationOptions).
+	apnsClient, err := apnsClientFor(cfg, newAPNSClient)
+	if err != nil {
+		logger.Error("construct apns client", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	if apnsClient != nil {
+		defer apnsClient.CloseIdleConnections()
+	}
+	// Live Activity push (on with BT_LIVE_ACTIVITY_PUSH_ENABLED): its worker
+	// sends through the same APNs client and runs on the maintenance pool.
+	liveActivityWorker, err := composeLiveActivity(cfg, &options, authorityService, liveActivityDirty, maintenancePool, maintenanceSlots, apnsClient, logger)
+	if err != nil {
+		logger.Error("construct live activity push", slog.String("error", err.Error()))
+		os.Exit(1)
+	}
+	var capacity, mcpCapacity *diagnostics.CapacityCollector
+	var mcpRecorder diagnostics.Recorder
+	if os.Getenv("BT_SYNC_DIAGNOSTICS") == "1" {
+		capacity = &diagnostics.CapacityCollector{}
+		options.SyncDiagnosticRecorder = capacity.Recorder()
+		options.AdmissionMetrics = capacity
+		if cfg.MCP.Enabled {
+			// MCP guard phases use their own collector so sync histograms and
+			// integrity totals stay sync-only.
+			mcpCapacity = &diagnostics.CapacityCollector{}
+			mcpRecorder = mcpCapacity.Recorder()
+		}
+	}
+	if err := attachMCP(cfg, &options, mcpDependencies{Authority: authorityService, Pool: mcpPool,
+		Others: []*pgxpool.Pool{pool, readinessPool, background, maintenancePool, exportPool}, Recorder: mcpRecorder}); err != nil {
+		logger.Error("construct mcp adapter", slog.String("error", err.Error()))
+		os.Exit(1)
 	}
 	server := &http.Server{
 		Addr:              cfg.ListenAddress,
@@ -281,28 +236,66 @@ func main() {
 		IdleTimeout:       60 * time.Second,
 		MaxHeaderBytes:    maxHeaderBytes,
 	}
-	if recoveryPool != nil {
-		cleanupContext, cancelCleanup := context.WithCancel(ctx)
-		cleanupDone := make(chan struct{})
-		go func() {
-			defer close(cleanupDone)
-			runRecoveryCleanup(cleanupContext, gate, recoveryCleanup{pool: recoveryPool, now: time.Now}, logger, recoveryCleanupInterval)
-		}()
-		defer func() { cancelCleanup(); <-cleanupDone }()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if capacity != nil {
+		pools := poolRoles(pool, nil, exportPool, maintenancePool, mcpPool)
+		sampler := resourceSampler{collector: capacity, mcp: mcpCapacity, read: func() diagnostics.ResourceSample { return readResources(pools) }, emit: func(row diagnostics.ResourceSample) { logger.Info("capacity resource sample", slog.Any("sample", row)) }}
+		sampleContext, cancelSamples := context.WithCancel(ctx)
+		sampleDone := make(chan struct{})
+		go func() { defer close(sampleDone); sampler.RunResourceSampler(sampleContext, 5*time.Second) }()
+		defer func() { cancelSamples(); <-sampleDone }()
 	}
+	// The key inventory and the first readiness refresh (fast probe and
+	// audit) run before serving, within a bounded attempt so an unreachable
+	// database never delays liveness; until they succeed readiness refuses,
+	// the authority loop retries the inventory and the monitor re-probes
+	// every 2 seconds.
+	startupContext, cancelStartup := context.WithTimeout(ctx, keyInventoryStartupBudget)
+	if err := readiness.inventory.Refresh(startupContext); err != nil {
+		logger.Warn("credential key inventory unavailable at startup", slog.String("error", err.Error()))
+	}
+	_ = readiness.Refresh(startupContext)
+	cancelStartup()
+	stopAuthorityLoops := startAuthorityLoops(ctx, verifier, readiness.inventory, logger)
+	defer stopAuthorityLoops()
+	monitorContext, cancelMonitor := context.WithCancel(ctx)
+	monitorDone := make(chan struct{})
+	go func() { defer close(monitorDone); readiness.Run(monitorContext) }()
+	defer func() { cancelMonitor(); <-monitorDone }()
 	if exportWorker != nil {
-		go runExportWorker(ctx, options.Readiness, exportWorker, logger)
+		go runExportWorker(ctx, options.Readiness, exportSlots, exportWorker, logger)
 	}
-	listener, err := realtime.StartPostgresListener(ctx, realtime.PostgresOptions{Pool: pool, Hub: options.LiveHub,
-		InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch, Resyncer: syncCursorResyncer{service: options.SyncService}})
-	if err != nil {
-		logger.Error("construct live listener", slog.String("error", err.Error()))
-		os.Exit(1)
+	// The wake worker flushes the tracker to device_sync_cursors and wakes
+	// devices behind their family through the live hub, or through an APNs
+	// background push when they hold no connection and APNs wakes are
+	// enabled, on the maintenance pool inside a worker slot, while the node
+	// is ready.
+	wakeWorker := newWakeWorker(cfg, options.LiveHub, maintenancePool, maintenanceSlots, wakeTracker, apnsClient, logger)
+	wakeContext, cancelWake := context.WithCancel(ctx)
+	wakeDone := make(chan struct{})
+	go func() { defer close(wakeDone); wakeWorker.Run(wakeContext, options.Readiness.Check) }()
+	defer func() { cancelWake(); <-wakeDone }()
+	// The Live Activity worker flushes the change feed, sweeps and claims on
+	// the maintenance pool inside its worker slots while the node is ready;
+	// live-activity-push-v1 is advertised once its first pass completed.
+	if liveActivityWorker != nil {
+		liveActivityContext, cancelLiveActivity := context.WithCancel(ctx)
+		liveActivityDone := make(chan struct{})
+		go func() {
+			defer close(liveActivityDone)
+			_ = liveActivityWorker.Run(liveActivityContext, options.Readiness.Check)
+		}()
+		defer func() { cancelLiveActivity(); <-liveActivityDone }()
 	}
-	defer listener.Close()
-	if !reconciledAtBoot {
-		go reconcileLoop(ctx, gate)
-	}
+	// Retention of the authority's rows (background pool) and of care
+	// receipts, page bindings, snapshot sessions and device cursors, the
+	// audit partition roll (maintenance pool), which runs once before
+	// serving when the node starts ready, the hourly push-token sweep, and the
+	// family purge (the request authority, so its invalidations reach the live
+	// hub, and the maintenance pool).
+	_, stopMaintenance := startMaintenance(ctx, readiness, authorityService, maintenancePool, maintenanceSlots, logger)
+	defer stopMaintenance()
 	if err := runServerLifecycle(ctx, func(runContext context.Context) error {
 		return httpapi.Run(runContext, server)
 	}, options.LiveHub.Shutdown); err != nil {
@@ -311,20 +304,171 @@ func main() {
 	}
 }
 
-type syncCursorResyncer struct{ service httpapi.SyncService }
+const (
+	// retentionLoopOffset starts the retention loop half an interval after
+	// startup. It shares the one-connection background pool with the audit
+	// verifier (which starts at once, then every 5 minutes) and the key
+	// inventory (2.5 minutes out of phase): every 10 s pass then falls
+	// between their starts. Each pass holds the background pool for three
+	// short transactions (its care sweeps run on the maintenance pool), so
+	// neither waits on it for long.
+	retentionLoopOffset = maintenance.RetentionInterval / 2
+	// auditRollStartupBudget bounds the audit partition roll before serving
+	// (its own lock waits are bounded to 1 s).
+	auditRollStartupBudget = 2 * time.Second
+	// pushTokenLoopOffset starts the push-token sweep five minutes after
+	// startup: never before serving, and clear of the startup audit roll.
+	pushTokenLoopOffset = 5 * time.Minute
+)
 
-func (resyncer syncCursorResyncer) Current(ctx context.Context, lease realtime.AuthorizationLease) (protocol.Cursor, error) {
-	response, err := resyncer.service.ApplyAndPull(ctx, lease.Principal, protocol.SyncRequest{RequestMeta: protocol.RequestMeta{
-		ProtocolVersion: "v1", Capabilities: []string{protocol.CapabilityRecordsV1}}, Mutations: []protocol.Mutation{}})
-	return response.HighWater, err
+// maintenanceLoops composes the maintenance loops over the node: retention
+// every 10 s and the audit partition roll every hour. Retention runs, in
+// order, SessionSweep through the node's background authority (on the
+// background pool: the authority's rows are pruned with the runtime
+// credential, never on a request connection), then on the maintenance pool
+// inside its worker slots the care receipt sweep (30 days, releasing each
+// receipt's charge) and the expiry sweeps of continuation bindings, snapshot
+// sessions (an hour past expiry) and device cursors (35 days unseen). The
+// audit roll runs on the maintenance pool inside its worker slots (at once
+// at startup, and after a not-ready start as soon as the node is ready; a
+// failed roll is retried within a minute). The push-token sweep (APNs tokens
+// of devices without a family session) runs hourly in its own loop on the
+// maintenance pool inside its worker slots, first pushTokenLoopOffset after
+// startup (never before serving), a failed pass retried within a minute; it
+// shares no pass with the audit roll, so neither one's failure re-runs the
+// other. All run only while the node's cached readiness reports ready.
+func maintenanceLoops(node *databaseReadiness, maintenancePool *pgxpool.Pool, slots *database.WorkerSlots,
+	logger *slog.Logger) (retention, auditPartitions, pushTokens maintenance.Loop) {
+	retention = maintenance.Loop{Name: "retention", Sweeps: []maintenance.Sweep{
+		&maintenance.SessionSweep{Authority: node.background, Logger: logger},
+		&maintenance.ReceiptSweep{Pool: maintenancePool, Slots: slots, Logger: logger},
+		&maintenance.ExpirySweep{Pool: maintenancePool, Table: "sync_page_bindings", Slots: slots, Logger: logger},
+		&maintenance.ExpirySweep{Pool: maintenancePool, Table: "sync_snapshot_sessions", Slots: slots, Logger: logger},
+		&maintenance.ExpirySweep{Pool: maintenancePool, Table: "device_sync_cursors", Slots: slots, Logger: logger},
+	}, Interval: maintenance.RetentionInterval, Offset: retentionLoopOffset, Ready: node.Check, Now: time.Now, Logger: logger}
+	auditPartitions = maintenance.Loop{Name: "audit-partitions",
+		Sweeps:   []maintenance.Sweep{maintenance.AuditPartitionSweep{Pool: maintenancePool, Slots: slots, Logger: logger}},
+		Interval: maintenance.AuditPartitionInterval, FailureRetry: maintenance.DefaultFailureRetry, Ready: node.Check, Now: time.Now, Logger: logger}
+	pushTokens = maintenance.Loop{Name: "push-tokens",
+		Sweeps:   []maintenance.Sweep{&maintenance.PushTokenSweep{Pool: maintenancePool, Slots: slots, Logger: logger}},
+		Interval: maintenance.PushTokenInterval, Offset: pushTokenLoopOffset, FailureRetry: maintenance.DefaultFailureRetry,
+		Ready: node.Check, Now: time.Now, Logger: logger}
+	return retention, auditPartitions, pushTokens
 }
 
-func applicationOptions(cfg config.Config, logger *slog.Logger, gate *recovery.Gate, authority *security.Service,
-	familyService *family.Service, runtimePool *pgxpool.Pool) (httpapi.Options, error) {
-	if gate == nil || authority == nil || familyService == nil || runtimePool == nil {
-		return httpapi.Options{}, errors.New("runtime gate, security authority, family service, and database pool are required")
+// rollBeforeServing rolls the audit partitions once before the node serves,
+// bounded by auditRollStartupBudget, when the node is already ready: after a
+// long downtime the current month's partition then exists before the
+// month's first audit row is written (a row in the default partition would
+// block that month's attach). It returns the loop to run: when the roll
+// succeeded, its first pass waits a whole interval (no second roll at
+// startup); when the node is not ready yet (an unreachable database never
+// delays liveness) or the roll failed, the loop's first pass comes at once
+// and is retried as the loop retries.
+func rollBeforeServing(ctx context.Context, roll maintenance.Loop) maintenance.Loop {
+	if roll.Ready != nil && roll.Ready(ctx) != nil {
+		return roll
 	}
-	identityRepository, err := identity.NewRepository(runtimePool)
+	rollContext, cancel := context.WithTimeout(ctx, auditRollStartupBudget)
+	defer cancel()
+	if _, err := roll.Pass(rollContext); err == nil {
+		roll.Offset = roll.Interval
+	}
+	return roll
+}
+
+// purgeLoopOffset starts the purge loop a retention interval after startup,
+// out of phase with the retention passes (5 s, then every 10 s).
+const purgeLoopOffset = maintenance.RetentionInterval
+
+// purgeLoop composes the family purge every 30 s: maintenance.Purger over
+// the request authority (StartFamilyPurge and CompleteFamilyPurge publish
+// their invalidations to its subscribers, the live hub among them) and the
+// maintenance pool inside its worker slots, while the node's cached
+// readiness reports ready.
+func purgeLoop(node *databaseReadiness, requestAuthority *authority.Service, maintenancePool *pgxpool.Pool, slots *database.WorkerSlots,
+	logger *slog.Logger) maintenance.Loop {
+	return maintenance.Loop{Name: "family-purge",
+		Sweeps:   []maintenance.Sweep{&maintenance.Purger{Authority: requestAuthority, Pool: maintenancePool, Slots: slots, Logger: logger}},
+		Interval: maintenance.PurgeInterval, Offset: purgeLoopOffset, Ready: node.Check, Now: time.Now, Logger: logger}
+}
+
+// startMaintenance composes the maintenance loops (maintenanceLoops and
+// purgeLoop), rolls the audit partitions before returning when the node is
+// ready (rollBeforeServing), and runs the loops until ctx ends. It returns
+// the loops it started and their stop, which cancels them and waits.
+func startMaintenance(ctx context.Context, node *databaseReadiness, requestAuthority *authority.Service, maintenancePool *pgxpool.Pool,
+	slots *database.WorkerSlots, logger *slog.Logger) ([]maintenance.Loop, func()) {
+	retention, auditPartitions, pushTokens := maintenanceLoops(node, maintenancePool, slots, logger)
+	auditPartitions = rollBeforeServing(ctx, auditPartitions)
+	purge := purgeLoop(node, requestAuthority, maintenancePool, slots, logger)
+	loops := []maintenance.Loop{retention, auditPartitions, pushTokens, purge}
+	return loops, runLoops(ctx, loops...)
+}
+
+// runLoops runs each loop on its own goroutine until ctx ends; the returned
+// stop cancels them and waits.
+func runLoops(ctx context.Context, loops ...maintenance.Loop) func() {
+	loopContext, cancel := context.WithCancel(ctx)
+	var wg sync.WaitGroup
+	for _, loop := range loops {
+		wg.Go(func() { loop.Run(loopContext) })
+	}
+	return func() {
+		cancel()
+		wg.Wait()
+	}
+}
+
+// apnsClientFor builds the server's one APNs client when wakes or Live
+// Activities are enabled, and none otherwise. Both read the same BT_APNS_*
+// credentials; a composition whose two switches disagree is refused.
+func apnsClientFor(cfg config.Config, build func(config.APNSCredentials) (*apns.Client, error)) (*apns.Client, error) {
+	switch {
+	case cfg.APNSWakes.Enabled && cfg.LiveActivity.Enabled && cfg.APNSWakes.Credentials != cfg.LiveActivity.Credentials:
+		return nil, errors.New("APNs wakes and Live Activities must share the BT_APNS_* credentials")
+	case cfg.APNSWakes.Enabled:
+		return build(cfg.APNSWakes.Credentials)
+	case cfg.LiveActivity.Enabled:
+		return build(cfg.LiveActivity.Credentials)
+	default:
+		return nil, nil
+	}
+}
+
+// newWakeWorker is the production wake worker: it flushes tracker (which
+// the request path records into) on the maintenance pool, inside its worker
+// slots, and wakes devices behind their family: those the live hub holds a
+// connection for through the hub, the others through push (an APNs
+// background push, only when APNs wakes are enabled).
+func newWakeWorker(cfg config.Config, hub *realtime.Hub, pool *pgxpool.Pool, slots *database.WorkerSlots, tracker *wake.Tracker,
+	push *apns.Client, logger *slog.Logger) *wake.Worker {
+	worker := &wake.Worker{Pool: pool, Slots: slots, Tracker: tracker, Logger: logger, Now: time.Now, Connected: hub.DeviceConnected,
+		Sender: wake.HubSender{Hub: hub, Server: protocol.ServerInfo{InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch}}}
+	if cfg.APNSWakes.Enabled && push != nil { // never a typed-nil Pusher
+		worker.Pusher = push
+	}
+	return worker
+}
+
+// applicationOptions composes the HTTP application. progress (nil: none)
+// records each device's sync progress and each committed change for the wake
+// worker; liveActivity (newLiveActivityDirty: nil when Live Activity push is
+// off, required when it is on) records each committed change for the Live
+// Activity worker.
+func applicationOptions(cfg config.Config, logger *slog.Logger, readiness *databaseReadiness, authorityService *authority.Service,
+	familyService *family.Service, runtimePool *pgxpool.Pool, progress *wake.Tracker, liveActivity *liveactivity.Dirty) (httpapi.Options, error) {
+	if readiness == nil || authorityService == nil || familyService == nil || runtimePool == nil {
+		return httpapi.Options{}, errors.New("readiness, security authority, family service, and database pool are required")
+	}
+	if cfg.LiveActivity.Enabled && liveActivity == nil {
+		return httpapi.Options{}, errors.New("live activity push needs its change feed recorder")
+	}
+	// Direct test compositions use the same defaults as Load.
+	if cfg.Admission == (config.AdmissionConfig{}) {
+		cfg.Admission = config.DefaultAdmission()
+	}
+	admissionController, err := admission.New(cfg.Admission.Total, cfg.Admission.MCPMax)
 	if err != nil {
 		return httpapi.Options{}, err
 	}
@@ -333,58 +477,41 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, gate *recovery.G
 		return httpapi.Options{}, err
 	}
 	identityService, err := identity.New(identity.Options{
-		Verifier: verifier, Repository: identityRepository, Origin: cfg.PublicOrigin.String(), InstanceID: cfg.ServerInstanceID,
+		Verifier: verifier, Authority: authorityService.IdentityAuthority(), Origin: cfg.PublicOrigin.String(), InstanceID: cfg.ServerInstanceID,
 		IdentityKeys: composeDigestKeyring(cfg.Auth.IdentityKeys), Now: time.Now,
 	})
 	if err != nil {
 		return httpapi.Options{}, err
 	}
-	authRepository, err := auth.NewRepository(runtimePool)
-	if err != nil {
-		return httpapi.Options{}, err
-	}
-	var sessionService httpapi.SessionService
-	var recoverySessions *auth.Service
+	sessionOptions := sessionServiceOptions(cfg, identityService, verifier, authorityService)
 	var notificationService httpapi.AppleNotificationService
-	hostedAdapterAvailable := false
-	if cfg.Mode != config.ModeHosted {
-		created, createErr := auth.New(sessionServiceOptions(cfg, identityService, verifier, authority, authRepository))
-		err = createErr
+	if cfg.Mode == config.ModeHosted {
+		// Hosted sign-in exchanges the Apple authorization code before the
+		// sign-in transaction; only the identitytest exchanger exists, so
+		// hosted composition without it fails here (runtimeServices refuses
+		// it first).
+		available, err := configureIdentityTestHostedAuth(cfg, &sessionOptions)
 		if err != nil {
 			return httpapi.Options{}, err
 		}
-		sessionService = created
-		recoverySessions = created
-	} else {
-		sessionOptions := sessionServiceOptions(cfg, identityService, verifier, authority, authRepository)
-		hostedAdapterAvailable, err = configureIdentityTestHostedAuth(cfg, &sessionOptions)
-		if err != nil {
-			return httpapi.Options{}, err
+		if !available {
+			return httpapi.Options{}, errHostedAdapterUnavailable
 		}
-		if hostedAdapterAvailable {
-			created, createErr := auth.New(sessionOptions)
-			if createErr != nil {
-				return httpapi.Options{}, createErr
-			}
-			sessionService = created
-			recoverySessions = created
-		}
-		created, createErr := identity.NewNotificationService(identity.NotificationOptions{
+		created, err := identity.NewNotificationService(identity.NotificationOptions{
 			Audience: cfg.AppleAudience, InstanceID: cfg.ServerInstanceID,
 			IdentityKeys: composeDigestKeyring(cfg.Auth.IdentityKeys), NotificationKeys: composeDigestKeyring(cfg.Auth.AppleNotificationKeys),
-			Repository: identityRepository, Security: authority, Now: time.Now,
+			Authority: authorityService.IdentityAuthority(), Now: time.Now,
 		})
-		err = createErr
 		if err != nil {
 			return httpapi.Options{}, err
 		}
 		notificationService = created
 	}
-	limitRepository, err := limits.NewRepository(runtimePool)
+	sessions, err := auth.New(sessionOptions)
 	if err != nil {
 		return httpapi.Options{}, err
 	}
-	limiter, err := limits.New(limits.Options{Repository: limitRepository, Pepper: cfg.Auth.RateLimitPepper, Now: time.Now})
+	limiter, err := limits.New(limits.Options{Pepper: cfg.Auth.RateLimitPepper, Now: time.Now, Logger: logger})
 	if err != nil {
 		return httpapi.Options{}, err
 	}
@@ -425,6 +552,14 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, gate *recovery.G
 	exportIPPolicy, exportIPOK := cfg.Limits.Policies[limits.ScopeExportIP]
 	exportAccountPolicy, exportAccountOK := cfg.Limits.Policies[limits.ScopeExportAccount]
 	exportDevicePolicy, exportDeviceOK := cfg.Limits.Policies[limits.ScopeExportDevice]
+	pushTokenDevicePolicy, pushTokenDeviceOK := cfg.Limits.Policies[limits.ScopePushTokenDevice]
+	pushTokenAccountPolicy, pushTokenAccountOK := cfg.Limits.Policies[limits.ScopePushTokenAccount]
+	bearerFailureIPPolicy, bearerFailureIPOK := cfg.Limits.Policies[limits.ScopeBearerFailureIP]
+	liveActivityAccountPolicy, liveActivityAccountOK := cfg.Limits.Policies[limits.ScopeLiveActivityAccount]
+	liveActivityDevicePolicy, liveActivityDeviceOK := cfg.Limits.Policies[limits.ScopeLiveActivityDevice]
+	if !liveActivityAccountOK || !liveActivityDeviceOK {
+		return httpapi.Options{}, errors.New("live activity rate-limit policies are required")
+	}
 	if !familyStructuralAccountOK || !familyStructuralDeviceOK || !invitationCreateAccountOK || !invitationCreateIPOK ||
 		!invitationRedeemAccountOK || !invitationRedeemIPOK {
 		return httpapi.Options{}, errors.New("family rate-limit policies are required")
@@ -438,81 +573,85 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, gate *recovery.G
 	if !exportIPOK || !exportAccountOK || !exportDeviceOK {
 		return httpapi.Options{}, errors.New("export rate-limit policies are required")
 	}
+	if !pushTokenDeviceOK || !pushTokenAccountOK {
+		return httpapi.Options{}, errors.New("push-token rate-limit policies are required")
+	}
+	if !bearerFailureIPOK {
+		return httpapi.Options{}, errors.New("failed-bearer rate-limit policy is required")
+	}
 	capabilities := protocol.ServerCapabilities()
 	if !cfg.Export.Enabled {
 		capabilities = slices.DeleteFunc(capabilities, func(value string) bool { return value == protocol.CapabilityExportV1 })
 	}
+	// The device push-token route (push-token-v1) exists only on a server
+	// with APNs wakes configured (decision D4); without them it is not
+	// registered and the capability is not advertised.
+	var pushTokens httpapi.PushTokenService
+	if cfg.APNSWakes.Enabled {
+		pushTokens = pushtoken.New(authorityService, time.Now)
+	} else {
+		capabilities = slices.DeleteFunc(capabilities, func(value string) bool { return value == protocol.CapabilityPushTokenV1 })
+	}
+	// live-activity-push-v1 is not among them: httpapi advertises it only
+	// while Live Activity push is composed (composeLiveActivity) and its
+	// worker and the node are ready.
 	serverInfo := protocol.ServerInfo{InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch, CanonicalOrigin: cfg.PublicOrigin.String(),
 		APIVersions: []string{"v1"}, Capabilities: capabilities, AppleAuthorizationMode: authorizationMode, Limits: &cfg.Sync.Limits}
-	liveAuthorizer, err := realtime.NewAuthorityAuthorizer(authority, deliveryQueueHosted(cfg.Mode), time.Now)
+	liveAuthorizer, err := realtime.NewAuthorityAuthorizer(authorityService)
 	if err != nil {
 		return httpapi.Options{}, err
 	}
-	liveHub, err := realtime.NewHub(context.Background(), realtime.HubOptions{Limits: cfg.Sync.Limits, Authorizer: liveAuthorizer, Invalidations: authority})
+	liveHub, err := realtime.NewHub(context.Background(), realtime.HubOptions{Limits: cfg.Sync.Limits, Authorizer: liveAuthorizer, Invalidations: authorityService})
 	if err != nil {
 		return httpapi.Options{}, err
 	}
-	observer := delivery.NewObserver(delivery.NewRepository(deliveryQueueHosted(cfg.Mode)), liveHub)
-	syncService := familysync.NewServiceWithPaging(authority, records.NewRepository(), serverInfo, cfg.Sync.Limits, time.Now,
-		syncFamilyResolver{service: familyService}, observer, composeDigestKeyring(cfg.Auth.PageTokenKeys))
-	importService := importer.NewService(authority, records.NewRepository(), syncFamilyResolver{service: familyService}, serverInfo, cfg.Sync.Limits, composeDigestKeyring(cfg.Auth.PageTokenKeys), time.Now)
-	importService.SetCommitObserver(observer)
+	// The write transaction schedules no wake; the observer publishes the
+	// new high water to the hub after the commit and records the change for
+	// the wake worker, which also reads each request's progress.
+	// It also records it for the Live Activity worker when push is on.
+	var syncProgress familysync.Progress
+	if progress != nil {
+		syncProgress = progress
+	}
+	observer := delivery.NewObserver(liveHub, changeFeed(progress, liveActivity))
+	syncService := familysync.New(familysync.Options{Guard: authorityService, Server: serverInfo, Limits: cfg.Sync.Limits, Now: time.Now,
+		Publisher: observer, PageKeys: composeDigestKeyring(cfg.Auth.PageTokenKeys),
+		Allowed: family.Allowed, Progress: syncProgress})
+	importService := importer.NewService(authorityService, serverInfo, cfg.Sync.Limits, composeDigestKeyring(cfg.Auth.PageTokenKeys), time.Now)
+	importService.SetPublisher(observer)
 	syncService.SetImportAdmission(importService)
-	readiness := applicationReadiness{
-		base: gate, inventory: authorityCredentialKeyInventory{authority: authority}, mode: cfg.Mode,
-		sessionKeyIDs:  configuredKeyIDs(cfg.Auth.SessionTokenKeys),
-		identityKeyIDs: configuredKeyIDs(cfg.Auth.IdentityKeys), deviceKeyIDs: configuredKeyIDs(cfg.Auth.DeviceContinuityKeys),
-		invitationKeyIDs: configuredKeyIDs(cfg.Auth.InvitationKeys), hostedAdapterAvailable: hostedAdapterAvailable,
-		hostedCredentialRotationVerified: hostedAdapterAvailable,
-	}
-	// Explicit process-local opt-in. The default is nil, so production records
-	// nothing; enabled output contains only the fixed phase and bounded time.
-	var syncRecorder diagnostics.Recorder
-	if os.Getenv("BT_SYNC_DIAGNOSTICS") == "1" {
-		syncRecorder = func(_ context.Context, phase diagnostics.Phase, elapsed time.Duration) {
-			logger.Info("sync diagnostic", slog.String("phase", string(phase)), slog.Int64("elapsed_ns", elapsed.Nanoseconds()))
-			// Cumulative process/runtime-pool counters; consumers take non-overlapping
-			// time-window deltas, never sum overlapping per-request samples.
-			var memory runtime.MemStats
-			runtime.ReadMemStats(&memory)
-			var usage syscall.Rusage
-			if syscall.Getrusage(syscall.RUSAGE_SELF, &usage) == nil {
-				pool := runtimePool.Stat()
-				rss := int64(usage.Maxrss) * 1024 // Linux server container reports KiB.
-				if runtime.GOOS == "darwin" {
-					rss = int64(usage.Maxrss)
-				}
-				cpu := float64(usage.Utime.Sec+usage.Stime.Sec) + float64(usage.Utime.Usec+usage.Stime.Usec)/1e6
-				logger.Info("sync resource diagnostic", slog.Uint64("alloc_total_bytes", memory.TotalAlloc), slog.Float64("cpu_total_seconds", cpu), slog.Int64("rss_peak_bytes", rss), slog.Int64("runtime_pool_acquire_ns", pool.AcquireDuration().Nanoseconds()), slog.Int64("runtime_pool_acquire_count", pool.AcquireCount()), slog.Int64("runtime_pool_wait_ns", pool.EmptyAcquireWaitTime().Nanoseconds()), slog.Int("runtime_pool_total_connections", int(pool.TotalConns())))
-			}
-
-		}
-	}
 	return httpapi.Options{
-		Logger:                        logger,
-		SyncDiagnosticRecorder:        syncRecorder,
-		Readiness:                     readiness,
-		InstanceID:                    cfg.ServerInstanceID,
-		RecoveryEpoch:                 cfg.RecoveryEpoch,
-		CanonicalOrigin:               cfg.PublicOrigin.String(),
-		SyncLimits:                    &cfg.Sync.Limits,
-		Gate:                          gate,
-		ServerState:                   gate,
-		AppleAuthorizationMode:        authorizationMode,
-		SourceVersion:                 sourceVersion,
-		SourceURL:                     sourceURL,
-		Capabilities:                  capabilities,
-		ChallengeService:              identityService,
-		SessionService:                sessionService,
-		RecoveryService:               recoverySessions,
+		Admission:              admissionController,
+		Logger:                 logger,
+		Readiness:              readiness,
+		InstanceID:             cfg.ServerInstanceID,
+		RecoveryEpoch:          cfg.RecoveryEpoch,
+		CanonicalOrigin:        cfg.PublicOrigin.String(),
+		SyncLimits:             &cfg.Sync.Limits,
+		Gate:                   readiness,
+		ServerState:            readiness,
+		AppleAuthorizationMode: authorizationMode,
+		SourceVersion:          sourceVersion,
+		SourceURL:              sourceURL,
+		Capabilities:           capabilities,
+		ChallengeService:       identityService,
+		SessionService:         sessions,
+		RecoveryService:        sessions,
+		// Refresh recovery follows the maintenance credential, which every
+		// configuration now supplies (decision D3); the authority prunes
+		// refresh receipts inside the refresh transactions. Recovery has no
+		// dependency beyond the node readiness, which the recovery routes
+		// (authDependenciesError) and the capability check (/v1/server)
+		// already read, so it is not read a second time per request.
 		RecoveryEnabled:               cfg.RecoveryCleanup.Enabled,
+		RecoveryReadiness:             nodeReadinessCovered{},
 		AppleNotifications:            notificationService,
-		AccountService:                &account.Service{Security: authority},
+		AccountService:                &account.Service{Authority: authorityService},
 		FamilyService:                 familyService,
 		SyncService:                   syncService,
 		ImportService:                 importService,
-		LiveActivityUnregistration:    liveactivity.NewUnregistration(authority, syncFamilyResolver{service: familyService}),
-		LiveFamilyAuthorizer:          familyService,
+		PushTokens:                    pushTokens,
+		RequestAuthorizer:             authorityService,
 		LiveHub:                       liveHub,
 		Limiter:                       limiter,
 		ClientIPResolver:              resolver,
@@ -539,7 +678,29 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, gate *recovery.G
 		ExportIPPolicy:                exportIPPolicy,
 		ExportAccountPolicy:           exportAccountPolicy,
 		ExportDevicePolicy:            exportDevicePolicy,
+		PushTokenDevicePolicy:         pushTokenDevicePolicy,
+		PushTokenAccountPolicy:        pushTokenAccountPolicy,
+		BearerFailureIPPolicy:         bearerFailureIPPolicy,
+		// A phone may always withdraw its Live Activity registration, push
+		// on or off; registration itself is composeLiveActivity's.
+		LiveActivityUnregistration: liveactivity.NewUnregistration(authorityService),
+		LiveActivityAccountPolicy:  liveActivityAccountPolicy,
+		LiveActivityDevicePolicy:   liveActivityDevicePolicy,
 	}, nil
+}
+
+// changeFeed is the post-commit observer's recorder: the wake tracker, then
+// the Live Activity worker's Dirty, each when composed (nil: none). Only
+// composed recorders are passed on: a typed nil is not a nil recorder.
+func changeFeed(progress *wake.Tracker, liveActivity *liveactivity.Dirty) delivery.ChangeRecorder {
+	var recorders []delivery.ChangeRecorder
+	if progress != nil {
+		recorders = append(recorders, progress)
+	}
+	if liveActivity != nil {
+		recorders = append(recorders, liveActivity)
+	}
+	return delivery.Changes(recorders...)
 }
 
 // Development sessions use the same lifetime policy as self-hosted sessions.
@@ -551,17 +712,15 @@ func authenticationMode(mode config.Mode) config.Mode {
 }
 
 func sessionServiceOptions(cfg config.Config, identityService *identity.Service, verifier identity.IdentityVerifier,
-	authority *security.Service, repository *auth.Repository) auth.Options {
+	authorityService *authority.Service) auth.Options {
 	origin := ""
 	if cfg.PublicOrigin != nil {
 		origin = cfg.PublicOrigin.String()
 	}
-	mode := authenticationMode(cfg.Mode)
 	return auth.Options{
-		Identity: identityService, Verifier: verifier, Security: authority, Repository: repository, Mode: mode,
+		Identity: identityService, Verifier: verifier, Authority: authorityService, Mode: authenticationMode(cfg.Mode),
 		Origin: origin, InstanceID: cfg.ServerInstanceID, TokenKeys: composeDigestKeyring(cfg.Auth.SessionTokenKeys),
-		DeviceKeys: composeDigestKeyring(cfg.Auth.DeviceContinuityKeys), NotificationKeys: composeDigestKeyring(cfg.Auth.AppleNotificationKeys),
-		ActorIDKey: cfg.Auth.ActorIDPepper, Now: time.Now,
+		DeviceKeys: composeDigestKeyring(cfg.Auth.DeviceContinuityKeys), ActorIDKey: cfg.Auth.ActorIDPepper, Now: time.Now,
 	}
 }
 
@@ -583,157 +742,85 @@ func configuredKeyIDs(ring config.DigestKeyringConfig) map[string]struct{} {
 	return result
 }
 
-func familyServiceOptions(cfg config.Config, authority *security.Service, repository *family.Repository) family.Options {
-	var entitlements family.EntitlementPolicy = family.SelfHostedEntitlementPolicy{}
-	if deliveryQueueHosted(cfg.Mode) {
-		entitlements = family.HostedEntitlementPolicy{Security: authority}
+// requireFamilySyncEntitlement is whether mode requires the family_sync
+// entitlement (hosted).
+func requireFamilySyncEntitlement(mode config.Mode) bool { return mode == config.ModeHosted }
+
+// authorityOptions is the production authority composition. The token
+// keyring is the exact keyring auth digests tokens with (same keys, same
+// order): auth.New refuses any other.
+func authorityOptions(cfg config.Config, runtimePool *pgxpool.Pool) authority.Options {
+	return authority.Options{
+		Pool: runtimePool, Now: time.Now, InstanceID: cfg.ServerInstanceID, RecoveryEpoch: cfg.RecoveryEpoch,
+		TokenKeys:     composeDigestKeyring(cfg.Auth.SessionTokenKeys),
+		MaxCaregivers: cfg.Limits.MaxCaregivers, MaxInvitations: cfg.Limits.MaxInvitations,
+		RequireFamilySyncEntitlement: requireFamilySyncEntitlement(cfg.Mode),
+		Allowed:                      family.Allowed, EntitlementExempt: authority.LegacyEntitlementExempt,
+	}
+}
+
+// runtimeServices composes the PostgreSQL authority over the request pool
+// and the family service over it. Hosted mode without an Apple code
+// exchanger is refused before anything is composed.
+func runtimeServices(cfg config.Config, runtimePool *pgxpool.Pool) (*authority.Service, *family.Service, error) {
+	if runtimePool == nil {
+		return nil, nil, errors.New("runtime pool is required")
+	}
+	if cfg.Mode == config.ModeHosted && !identityTestHostedAdapterEnabled(cfg) {
+		return nil, nil, errHostedAdapterUnavailable
+	}
+	authorityService, err := authority.New(authorityOptions(cfg, runtimePool))
+	if err != nil {
+		return nil, nil, err
 	}
 	origin := ""
 	if cfg.PublicOrigin != nil {
 		origin = cfg.PublicOrigin.String()
 	}
-	return family.Options{
-		Security: authority, Repository: repository, Entitlements: entitlements,
-		InvitationKeys: composeDigestKeyring(cfg.Auth.InvitationKeys), Origin: origin, Now: time.Now,
-		MaxCaregivers: cfg.Limits.MaxCaregivers, MaxInvitations: cfg.Limits.MaxInvitations, InvitationTTL: cfg.Limits.InvitationTTL,
+	familyService, err := family.New(family.Options{Authority: authorityService, InvitationKeys: composeDigestKeyring(cfg.Auth.InvitationKeys),
+		Origin: origin, Now: time.Now, InvitationTTL: cfg.Limits.InvitationTTL})
+	if err != nil {
+		return nil, nil, err
 	}
+	return authorityService, familyService, nil
 }
 
-func deliveryQueueHosted(mode config.Mode) bool { return mode == config.ModeHosted }
-
-type securityFamilySettings struct {
-	maxCaregivers, maxInvitations int
-	requireEntitlement            bool
+// composeNodeReadiness composes node readiness on pools.Readiness, and on
+// the background pool the authority its key inventory reads and the audit
+// chain verifier: the readiness monitor never shares a connection with
+// them.
+func composeNodeReadiness(cfg config.Config, pools readinessPools, background *pgxpool.Pool, logger *slog.Logger,
+	options ...readinessOption) (*databaseReadiness, *authority.Verifier, error) {
+	if pools.Readiness != nil && pools.Readiness == background {
+		return nil, nil, errors.New("readiness and background pools must differ")
+	}
+	backgroundAuthority, verifier, err := backgroundServices(cfg, background, logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	readiness, err := newDatabaseReadiness(cfg, pools, backgroundAuthority, logger, options...)
+	if err != nil {
+		return nil, nil, err
+	}
+	return readiness, verifier, nil
 }
 
-func composeSecurityFamilySettings(cfg config.Config) securityFamilySettings {
-	return securityFamilySettings{
-		maxCaregivers: cfg.Limits.MaxCaregivers, maxInvitations: cfg.Limits.MaxInvitations,
-		requireEntitlement: deliveryQueueHosted(cfg.Mode),
+// backgroundServices composes the authority over the background pool (the
+// key inventory reads it) and the audit chain verifier on that pool, so
+// neither takes a request connection.
+func backgroundServices(cfg config.Config, background *pgxpool.Pool, logger *slog.Logger) (*authority.Service, *authority.Verifier, error) {
+	if background == nil {
+		return nil, nil, errors.New("background pool is required")
 	}
-}
-
-func runtimeGate(cfg config.Config, runtimePool, projectorPool *pgxpool.Pool) (*recovery.Gate, error) {
-	gate, _, _, err := runtimeServices(cfg, runtimePool, projectorPool)
-	return gate, err
-}
-
-func runtimeServices(cfg config.Config, runtimePool, projectorPool *pgxpool.Pool) (*recovery.Gate, *security.Service, *family.Service, error) {
-	if runtimePool == nil || projectorPool == nil || runtimePool == projectorPool {
-		return nil, nil, nil, errors.New("distinct runtime and projector pools are required")
-	}
-	// No concrete provider factory is registered yet. Hosted mode must fail
-	// before local paths are opened; readiness-only rejection would still leave
-	// a filesystem authority running behind an unhealthy endpoint.
-	if cfg.Mode == config.ModeHosted && !identityTestHostedAdapterEnabled(cfg) {
-		return nil, nil, nil, errHostedAdapterUnavailable
-	}
-	stores, err := localstore.Open(cfg.SecurityLedgerDir, cfg.LedgerHeadDir)
+	backgroundAuthority, err := authority.New(authorityOptions(cfg, background))
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	durable, err := recovery.NewVerifiedStore(cfg.LedgerHeadDir, stores.Fence, stores.Ledger, stores.Heads)
+	verifier, err := authority.NewAuditVerifier(background, time.Now, logger)
 	if err != nil {
-		return nil, nil, nil, err
+		return nil, nil, err
 	}
-	recoveryRepository, err := auth.NewRepository(runtimePool)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	recoveryReferences, err := auth.NewRecoveryKeyReferences(recoveryRepository, authenticationMode(cfg.Mode), time.Now)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	var familyAuthorizerTarget familyAuthorizer
-	familySettings := composeSecurityFamilySettings(cfg)
-	authority, err := security.New(security.Options{RecoveryKeyReferences: func(ctx context.Context, view security.AuthorityView) (security.RecoveryKeyReferencesResult, error) {
-		result, err := recoveryReferences(ctx, view)
-		return security.RecoveryKeyReferencesResult{Inventory: security.CredentialKeyInventory{SessionToken: result.Inventory.SessionToken, DeviceContinuity: result.Inventory.DeviceContinuity}, RevalidateAt: result.RevalidateAt, Cacheable: result.Cacheable}, err
-	}, Ledger: stores.Ledger, Heads: stores.Heads, Projection: security.NewProjector(projectorPool), Fence: stores.Fence, Now: time.Now,
-		Runtime: runtimePool, Decide: familyAuthorizationDecision(func() familyAuthorizer { return familyAuthorizerTarget }),
-		Binding: func(ctx context.Context) (security.AuthorityBinding, error) {
-			state, err := durable.LoadUnderFence(ctx)
-			return security.AuthorityBinding{InstanceID: state.InstanceID, Epoch: state.Epoch, TrustedHead: state.TrustedHead}, err
-		},
-		Epoch: func(ctx context.Context) (uint64, error) {
-			state, err := durable.LoadUnderFence(ctx)
-			return state.Epoch, err
-		}, MaxCaregivers: familySettings.maxCaregivers, MaxInvitations: familySettings.maxInvitations,
-		RequireFamilySyncEntitlement: familySettings.requireEntitlement})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	familyRepository, err := family.NewRepository(runtimePool)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	familyService, err := family.New(familyServiceOptions(cfg, authority, familyRepository))
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	familyAuthorizerTarget = familyService
-	compatibility, err := migrate.EmbeddedCompatibility()
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	mirror, err := recovery.NewPostgresMirror(runtimePool, projectorPool)
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	gate, err := recovery.NewGate(recovery.Options{Store: durable, Security: authority,
-		Schema: databaseReadiness{pool: runtimePool, projector: projectorPool, runner: migrate.New(migrations.Files), compatibility: compatibility}, Mirror: mirror,
-		ExpectedInstanceID: cfg.ServerInstanceID, ExpectedEpoch: cfg.RecoveryEpoch, ActorIDKey: cfg.Auth.ActorIDPepper})
-	if err != nil {
-		return nil, nil, nil, err
-	}
-	return gate, authority, familyService, nil
-}
-
-func reconcileLoop(ctx context.Context, gate *recovery.Gate) {
-	delay := 100 * time.Millisecond
-	for {
-		attempt, cancel := context.WithTimeout(ctx, 2*time.Second)
-		err := gate.Reconcile(attempt)
-		cancel()
-		if err == nil {
-			return
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-time.After(delay):
-			if delay < 5*time.Second {
-				delay *= 2
-			}
-		}
-	}
-}
-
-type databaseReadiness struct {
-	pool          *pgxpool.Pool
-	projector     *pgxpool.Pool
-	runner        *migrate.Runner
-	compatibility migrate.Compatibility
-}
-
-func (r databaseReadiness) Check(ctx context.Context) error {
-	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
-	defer cancel()
-	if err := r.pool.Ping(ctx); err != nil {
-		return database.ErrUnavailable
-	}
-	version, err := r.runner.CompatibleVersion(ctx, r.pool, r.compatibility)
-	if err != nil {
-		return database.ErrUnavailable
-	}
-	if err := database.VerifyRoleSeparation(ctx, r.pool, r.projector, version); err != nil {
-		return database.ErrUnavailable
-	}
-	confirmedVersion, err := r.runner.CompatibleVersion(ctx, r.pool, r.compatibility)
-	if err != nil || confirmedVersion != version {
-		return database.ErrUnavailable
-	}
-	return nil
+	return backgroundAuthority, verifier, nil
 }
 
 func probeCommand(arguments []string) {
@@ -749,4 +836,34 @@ func probeCommand(arguments []string) {
 		fmt.Fprintln(os.Stderr, "probe failed")
 		os.Exit(1)
 	}
+}
+
+func openApplicationPool(ctx context.Context, dsn string, max int32, explicit bool) (*pgxpool.Pool, error) {
+	if explicit {
+		return database.OpenWithMax(ctx, dsn, max)
+	}
+	return database.Open(ctx, dsn)
+}
+
+// actualPoolBudgets assigns identifiers in composition order (runtime,
+// readiness, background, then each maintenance-credential pool),
+// deduplicating shared pointers rather than credentials or role.
+// serverPoolBudgets adds the dedicated MCP pool.
+func actualPoolBudgets(runtime, readiness, background *pgxpool.Pool, maintenance ...*pgxpool.Pool) []database.NamedPoolBudget {
+	var result []database.NamedPoolBudget
+	seen := map[*pgxpool.Pool]bool{}
+	appendPool := func(pool *pgxpool.Pool, identity string) {
+		if pool == nil || seen[pool] {
+			return
+		}
+		seen[pool] = true
+		result = append(result, database.NamedPoolBudget{Identity: identity, Max: pool.Config().MaxConns})
+	}
+	appendPool(runtime, "runtime")
+	appendPool(readiness, "readiness")
+	appendPool(background, "background")
+	for i, pool := range maintenance {
+		appendPool(pool, fmt.Sprintf("maintenance-%d", i+1))
+	}
+	return result
 }

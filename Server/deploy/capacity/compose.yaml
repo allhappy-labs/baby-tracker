@@ -1,0 +1,18 @@
+# Documented quota contract; owned runner verifies Docker HostConfig after start.
+# The runner supplies generated private config and starts exact labeled objects.
+services:
+  app:
+    image: ${CAPACITY_PRODUCT_IMAGE:?immutable release image ID required}
+    cpus: ${CAPACITY_APP_CPUS:-1}
+    mem_limit: ${CAPACITY_APP_MEMORY:-512m}
+    memswap_limit: ${CAPACITY_APP_MEMORY:-512m}
+  db:
+    image: postgres:17.6-alpine@sha256:ef257d85f76e48da1c64832459b59fcaba1a4dac97bf5d7450c77753542eee94
+    cpus: ${CAPACITY_DB_CPUS:-2.5}
+    mem_limit: ${CAPACITY_DB_MEMORY:-3g}
+    memswap_limit: ${CAPACITY_DB_MEMORY:-3g}
+  proxy:
+    image: nginx:1.27-alpine@sha256:65645c7bb6a0661892a8b03b89d0743208a18dd2f3f17a54ef4b76fb8e2f2a10
+    cpus: ${CAPACITY_PROXY_CPUS:-0.5}
+    mem_limit: ${CAPACITY_PROXY_MEMORY:-512m}
+    memswap_limit: ${CAPACITY_PROXY_MEMORY:-512m}

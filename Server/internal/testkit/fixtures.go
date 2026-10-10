@@ -4,24 +4,20 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"path/filepath"
-	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/care"
 	"babytracker/server/internal/config"
 	"babytracker/server/internal/family"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/importer"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
-	"babytracker/server/internal/security"
-	"babytracker/server/internal/security/localstore"
 	familysync "babytracker/server/internal/sync"
-	"babytracker/server/internal/tenant"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
@@ -37,65 +33,39 @@ const (
 )
 
 type Harness struct {
-	t                                                   *testing.T
-	Owner, Caregiver, Outsider                          access.Principal
-	FamilyID                                            string
-	Service                                             *familysync.Service
-	Importer                                            *importer.Service
-	Admin, Runtime, Migrator, Maintenance, LiveActivity *pgxpool.Pool
-	Auth                                                *auth.Service
-	Identity                                            *identity.Service
-	Family                                              *family.Service
-	Security                                            *security.Service
-	Info                                                protocol.ServerInfo
-	Limits                                              protocol.Limits
-	Now                                                 time.Time
-	ids                                                 atomic.Uint64
-	bundles                                             map[string]auth.SessionBundle
-	deviceCredentials                                   map[string]string
-	commitObserver                                      familysync.CommitObserver
-}
-
-type PendingWake struct {
-	FamilyID, DeviceID string
-	Cursor             protocol.Cursor
-	NotBefore          time.Time
-	Attempts           uint32
-	Generation         uint64
-}
-
-type hostedQueueObserver struct{ publish bool }
-
-func (observer *hostedQueueObserver) Schedule(ctx context.Context, tx pgx.Tx, grant access.Grant, deviceID string, cursor protocol.Cursor) error {
-	if _, err := tx.Exec(ctx, `SELECT app.schedule_family_wakes($1,$2,$3,$4,$5)`, grant.FamilyID, deviceID,
-		cursor.ServerInstanceID, cursor.RecoveryEpoch, cursor.Sequence); err != nil {
-		return err
-	}
-	payload, err := json.Marshal(protocol.Hint{FamilyID: grant.FamilyID, Cursor: cursor})
-	if err != nil {
-		return err
-	}
-	_, err = tx.Exec(ctx, `SELECT pg_notify('family_cursor_v1',$1)`, string(payload))
-	return err
-}
-func (*hostedQueueObserver) Publish(context.Context, string, protocol.Cursor) error { return nil }
-
-type familyResolver struct{ service *family.Service }
-
-func (r familyResolver) Current(ctx context.Context, p access.Principal) (string, error) {
-	view, err := r.service.Current(ctx, p)
-	return view.ID, err
+	t                                     *testing.T
+	Owner, Caregiver, Outsider            access.Principal
+	FamilyID                              string
+	Service                               *familysync.Service
+	Importer                              *importer.Service
+	Admin, Runtime, Migrator, Maintenance *pgxpool.Pool
+	Auth                                  *auth.Service
+	Identity                              *identity.Service
+	Family                                *family.Service
+	// Authority is the PostgreSQL security authority the services run on.
+	Authority *authority.Service
+	Info      protocol.ServerInfo
+	Limits    protocol.Limits
+	Now       time.Time
+	ids       atomic.Uint64
+	bundles   map[string]auth.SessionBundle
+	// guard is what the sync and import services authorize through (the
+	// Authority).
+	guard             authority.RequestGuard
+	deviceCredentials map[string]string
+	pageKeys          identity.DigestKeyring
+	// publisher receives each write's post-commit high water (SetPublisher).
+	publisher care.Publisher
+	// authorityOptions builds Authority; AuthorityOn reuses them on
+	// another pool.
+	authorityOptions authority.Options
+	// composition is what Compose built the services with (identity, keys,
+	// origin), every default filled in.
+	composition Composition
 }
 
 func New(t *testing.T) *Harness {
 	return newHarness(t, "", false)
-}
-
-// NewThrough builds the harness on a database migrated only up to version, so
-// a test can hold state written at an older schema and then apply the next
-// migrations itself as h.Migrator, the table-owning role production migrates as.
-func NewThrough(t *testing.T, version int64) *Harness {
-	return newHarnessOn(t, NewPostgresThrough(t, version), "", false)
 }
 
 func NewHosted(t *testing.T) *Harness {
@@ -110,72 +80,82 @@ func NewWithUnrefreshedCaregiver(t *testing.T) *Harness {
 	return newHarness(t, "caregiver", false)
 }
 
-func newHarness(t *testing.T, unrefreshedSubject string, hosted bool) *Harness {
+// NewAtFixtureClock is New built and run at FixtureClock, for a test that
+// replays data written against that instant: the legacy corpora and
+// goldens (whose family and audit times are the harness's creation time),
+// the recorded legacy decisions, and timer times an hour or a day before it.
+// Its sessions are issued at FixtureClock, so the database's own clock
+// stops honouring them for refresh a year later (2027-09-21): such a test
+// must not depend on the database judging a session (app.push_targets,
+// app.prune_push_tokens, app.live_activity_authorized). Use New for those.
+func NewAtFixtureClock(t *testing.T) *Harness {
 	t.Helper()
-	return newHarnessOn(t, NewPostgres(t), unrefreshedSubject, hosted)
+	return newHarnessOn(t, NewPostgres(t), "", false, func(*testing.T, Postgres) time.Time { return FixtureClock })
 }
 
-func newHarnessOn(t *testing.T, db Postgres, unrefreshedSubject string, hosted bool) *Harness {
+// NewAtDatabaseClock is New with the harness clock at the database's
+// clock_timestamp() to the second rather than its latest noon, for a test
+// whose services stamp rows the database then compares with its own clock
+// within minutes (a Live Activity registration's lease and retry times
+// against clock_timestamp()). The test may keep the clocks together with
+// h.Now = h.DatabaseNow() without outrunning the harness's ten-minute access
+// tokens.
+func NewAtDatabaseClock(t *testing.T) *Harness {
 	t.Helper()
-	h := &Harness{t: t, Admin: db.Admin, Runtime: db.Runtime, Migrator: db.Migrator, Maintenance: db.Maintenance, LiveActivity: db.LiveActivity, Now: time.Date(2026, 9, 21, 12, 0, 0, 0, time.UTC), bundles: map[string]auth.SessionBundle{}, deviceCredentials: map[string]string{}}
-	store, err := localstore.Open(filepath.Join(t.TempDir(), "ledger"), filepath.Join(t.TempDir(), "head"))
-	if err != nil {
-		t.Fatal(err)
+	return newHarnessOn(t, NewPostgres(t), "", false, databaseSecond)
+}
+
+func newHarness(t *testing.T, unrefreshedSubject string, hosted bool) *Harness {
+	t.Helper()
+	return newHarnessOn(t, NewPostgres(t), unrefreshedSubject, hosted, databaseNoon)
+}
+
+// NewBound is New: every harness's authority is bound to the fixture's
+// instance and epoch, which server_state holds, as production composition
+// does. Integration credentials and readers use it.
+func NewBound(t *testing.T) *Harness {
+	t.Helper()
+	return New(t)
+}
+
+// InstanceID is the fixture's server instance, the one server_state holds.
+const InstanceID = testInstance
+
+// RecoveryEpoch is the fixture's recovery epoch.
+const RecoveryEpoch uint64 = 1
+
+// databaseNoon is the latest 12:00:00 UTC at or before db's
+// clock_timestamp(): the database's date at the fixture's time of day. The
+// harness clock starts there, so it follows the database by less than a day
+// and keeps FixtureClock's alignment: on the hour (a fixed-window limiter's
+// first refusal says the whole window) and mid-afternoon in Europe/Zurich
+// (no test straddles a local midnight).
+func databaseNoon(t *testing.T, db Postgres) time.Time {
+	t.Helper()
+	return databaseSecond(t, db).Add(-12 * time.Hour).Truncate(24 * time.Hour).Add(12 * time.Hour)
+}
+
+// databaseSecond is db's clock_timestamp() in UTC, truncated to the second.
+func databaseSecond(t *testing.T, db Postgres) time.Time {
+	t.Helper()
+	var now time.Time
+	if err := db.Admin.QueryRow(t.Context(), `SELECT clock_timestamp()`).Scan(&now); err != nil {
+		t.Fatalf("database clock: %v", err)
 	}
-	if err = store.InitializeEmpty(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	verifier := identity.IdentityVerifierFunc(func(_ context.Context, token, nonce string) (identity.VerifiedIdentity, error) {
-		subject, bound, ok := strings.Cut(token, "|")
-		if !ok || subject == "" || bound != nonce {
-			return identity.VerifiedIdentity{}, fmt.Errorf("nonce mismatch")
-		}
-		return identity.VerifiedIdentity{Provider: "apple", Audience: "com.example.babytracker", Subject: subject, IssuedAt: h.Now.Add(-time.Minute), ExpiresAt: h.Now.Add(time.Hour)}, nil
-	})
-	idRepo, err := identity.NewRepository(db.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.Identity, err = identity.New(identity.Options{Verifier: verifier, Repository: idRepo, Origin: testOrigin, InstanceID: testInstance, IdentityKeys: keyring("identity.v1", 0x11), Now: func() time.Time { return h.Now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	var familyService *family.Service
-	authority, err := security.New(security.Options{Ledger: store.Ledger, Heads: store.Heads, Projection: security.NewProjector(db.Projector), Fence: store.Fence, Now: func() time.Time { return h.Now }, Runtime: db.Runtime, Epoch: func(context.Context) (uint64, error) { return 1, nil }, Decide: func(ctx context.Context, p access.Principal, familyID, action string) (access.Grant, error) {
-		if familyService == nil {
-			return access.Grant{}, security.ErrUnavailable
-		}
-		return familyService.Authorize(ctx, p, familyID, action)
-	}, MaxCaregivers: 10, MaxInvitations: 10, RequireFamilySyncEntitlement: hosted})
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.Security = authority
-	authRepo, err := auth.NewRepository(db.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var actor [32]byte
-	for i := range actor {
-		actor[i] = 0x55
-	}
-	h.Auth, err = auth.New(auth.Options{Identity: h.Identity, Verifier: verifier, Security: authority, Repository: authRepo, Mode: config.ModeSelfHosted, Origin: testOrigin, InstanceID: testInstance, TokenKeys: keyring("session.v1", 0x22), DeviceKeys: keyring("device.v1", 0x33), NotificationKeys: keyring("notification.v1", 0x44), ActorIDKey: actor, Now: func() time.Time { return h.Now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	familyRepo, err := family.NewRepository(db.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var entitlementPolicy family.EntitlementPolicy = family.SelfHostedEntitlementPolicy{}
-	if hosted {
-		entitlementPolicy = family.HostedEntitlementPolicy{Security: authority}
-	}
-	familyService, err = family.New(family.Options{Security: authority, Repository: familyRepo, Entitlements: entitlementPolicy, InvitationKeys: keyring("invitation.v1", 0x66), Origin: testOrigin, Now: func() time.Time { return h.Now }, MaxCaregivers: 10, MaxInvitations: 10, InvitationTTL: 7 * 24 * time.Hour})
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.Family = familyService
+	return now.UTC().Truncate(time.Second)
+}
+
+// newHarnessOn builds the harness on db with its clock, Now, at start(db);
+// the clock moves only when a test moves it. The database judges sessions by
+// its own clock (app.push_targets, app.prune_push_tokens,
+// app.live_activity_authorized), so New starts at databaseNoon: sessions
+// issued against a fixed calendar date would stop counting once the real
+// calendar passed that date plus the refresh window.
+func newHarnessOn(t *testing.T, db Postgres, unrefreshedSubject string, hosted bool, start func(*testing.T, Postgres) time.Time) *Harness {
+	t.Helper()
+	now := start(t, db)
+	authorityExec(t, db.Migrator, `INSERT INTO server_state(singleton,instance_id,recovery_epoch) VALUES (true,$1,$2)`, testInstance, int64(RecoveryEpoch))
+	h := Compose(t, db, Composition{Now: now, Hosted: hosted})
 	h.Owner = h.signIn("owner", "Owner")
 	created, err := h.Family.Create(t.Context(), h.Owner, h.commandID(), "Family")
 	if err != nil {
@@ -199,27 +179,156 @@ func newHarnessOn(t *testing.T, db Postgres, unrefreshedSubject string, hosted b
 		h.Caregiver = h.refresh("caregiver")
 	}
 	h.Outsider = h.signIn("outsider", "Outsider")
-	if hosted {
-		head, headErr := authority.Head(t.Context())
-		if headErr != nil {
-			t.Fatal(headErr)
-		}
-		if _, mirrorErr := db.Projector.Exec(t.Context(), `SELECT app.update_server_state($1,$2,$3,$4,$5)`, testInstance, 1,
-			head.Generation, head.Revision, head.EventHash[:]); mirrorErr != nil {
-			t.Fatal(mirrorErr)
-		}
-	}
-	limits := protocol.DefaultLimits()
-	info := protocol.ServerInfo{InstanceID: testInstance, RecoveryEpoch: 1, CanonicalOrigin: testOrigin, APIVersions: []string{"v1"}, Capabilities: protocol.ServerCapabilities(), AppleAuthorizationMode: "identity_token_only", Limits: &limits}
-	h.Info, h.Limits = info, limits
-	if hosted {
-		h.commitObserver = &hostedQueueObserver{publish: true}
-	}
-	h.Service = familysync.NewServiceWithPaging(authority, records.NewRepository(), info, limits, func() time.Time { return h.Now }, familyResolver{h.Family}, h.commitObserver, keyring("page.v1", 0x77))
-	h.Importer = importer.NewService(authority, records.NewRepository(), familyResolver{h.Family}, info, limits, keyring("page.v1", 0x77), func() time.Time { return h.Now })
-	h.Importer.SetCommitObserver(h.commitObserver)
-	h.Service.SetImportAdmission(h.Importer)
 	return h
+}
+
+// AuthorityOn is an authority over pool with the harness authority's
+// options (round-trip tests run it on a counted pool).
+func (h *Harness) AuthorityOn(t *testing.T, pool *pgxpool.Pool) *authority.Service {
+	t.Helper()
+	options := h.authorityOptions
+	options.Pool = pool
+	service, err := authority.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// AuthorityOnWith is AuthorityOn with the harness authority's options
+// changed by change first (another clock or recovery epoch, for refusal
+// tests).
+func (h *Harness) AuthorityOnWith(t *testing.T, pool *pgxpool.Pool, change func(*authority.Options)) *authority.Service {
+	t.Helper()
+	options := h.authorityOptions
+	options.Pool = pool
+	change(&options)
+	service, err := authority.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
+}
+
+// AuthorityExec runs one statement as the table owner inside an authority
+// transaction (the authority flag raised): a test's direct state change,
+// such as a family status the commands would only reach through deletion.
+func (h *Harness) AuthorityExec(t *testing.T, statement string, args ...any) {
+	t.Helper()
+	authorityExec(t, h.Migrator, statement, args...)
+}
+
+// ImporterOn is the harness import service (limits, keys) guarded by
+// guard (round-trip tests pass an AuthorityOn a counted pool).
+func (h *Harness) ImporterOn(guard authority.FamilyGuard) *importer.Service {
+	return importer.NewService(guard, h.Info, h.Limits, h.pageKeys, func() time.Time { return h.Now })
+}
+
+// SyncServiceOn is the harness sync service (limits, keys, importer)
+// guarded by guard.
+func SyncServiceOn(t *testing.T, h *Harness, guard authority.RequestGuard) *familysync.Service {
+	t.Helper()
+	return SyncServiceWith(t, h, guard, nil)
+}
+
+// SyncServiceWith is SyncServiceOn reporting each completed request's
+// progress to progress (nil: none), as production reports it to the wake
+// tracker.
+func SyncServiceWith(t *testing.T, h *Harness, guard authority.RequestGuard, progress familysync.Progress) *familysync.Service {
+	t.Helper()
+	service := familysync.New(familysync.Options{Guard: guard, Server: h.Info, Limits: h.Limits, Now: func() time.Time { return h.Now },
+		Publisher: h.publisher, PageKeys: h.pageKeys, Allowed: family.Allowed, Progress: progress})
+	service.SetImportAdmission(h.Importer)
+	return service
+}
+
+// SetPublisher rebuilds the sync and import services publishing each
+// write's post-commit high water to p (a live hub's delivery.Observer, as
+// production composes it).
+func (h *Harness) SetPublisher(t *testing.T, p care.Publisher) {
+	t.Helper()
+	h.publisher = p
+	h.RebuildSyncServiceWithPageKeys(t, h.pageKeys)
+}
+
+// Decoded is response as a client reads it: encoded as the HTTP handler
+// writes it and decoded with protocol.SyncResponse.UnmarshalJSON, so
+// Changes holds the served changes.
+func Decoded(t *testing.T, response protocol.SyncResponse) protocol.SyncResponse {
+	t.Helper()
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded protocol.SyncResponse
+	if err := decoded.UnmarshalJSON(raw); err != nil {
+		t.Fatalf("decode sync response: %v", err)
+	}
+	return decoded
+}
+
+// DecodedSnapshot is Decoded for a snapshot page: Entities holds the served
+// entities.
+func DecodedSnapshot(t *testing.T, response protocol.SnapshotResponse) protocol.SnapshotResponse {
+	t.Helper()
+	raw, err := json.Marshal(response)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var decoded protocol.SnapshotResponse
+	if err := decoded.UnmarshalJSON(raw); err != nil {
+		t.Fatalf("decode snapshot response: %v", err)
+	}
+	return decoded
+}
+
+// setServices builds Info, Limits and the sync and import services over
+// h.guard.
+func (h *Harness) setServices() {
+	limits := protocol.DefaultLimits()
+	c := h.composition
+	info := protocol.ServerInfo{InstanceID: c.InstanceID, RecoveryEpoch: c.RecoveryEpoch, CanonicalOrigin: c.Origin, APIVersions: []string{"v1"}, Capabilities: protocol.ServerCapabilities(), AppleAuthorizationMode: "identity_token_only", Limits: &limits}
+	h.Info, h.Limits = info, limits
+	h.RebuildSyncServiceWithPageKeys(h.t, c.PageKeys)
+}
+
+// configureIdentity builds the identity and auth services over h.Authority
+// with verifier.
+func (h *Harness) configureIdentity(t *testing.T, verifier identity.IdentityVerifier) {
+	t.Helper()
+	clock := func() time.Time { return h.Now }
+	c := h.composition
+	var err error
+	h.Identity, err = identity.New(identity.Options{Verifier: verifier, Authority: h.Authority.IdentityAuthority(), Origin: c.Origin,
+		InstanceID: c.InstanceID, IdentityKeys: c.IdentityKeys, Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.Auth, err = auth.New(auth.Options{Identity: h.Identity, Verifier: verifier, Authority: h.Authority, Mode: config.ModeSelfHosted,
+		Origin: c.Origin, InstanceID: c.InstanceID, TokenKeys: c.TokenKeys, DeviceKeys: c.ContinuityKeys, ActorIDKey: c.ActorKey, Now: clock})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+// authorityExec runs one statement as the table owner inside an authority
+// transaction (the authority flag raised), as authority seeds are written.
+func authorityExec(t *testing.T, pool *pgxpool.Pool, statement string, args ...any) {
+	t.Helper()
+	tx, err := pool.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if _, err := tx.Exec(t.Context(), `SELECT set_config('app.authority','1',true)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(t.Context(), statement, args...); err != nil {
+		t.Fatalf("authority seed %q: %v", statement, err)
+	}
+	if err := tx.Commit(t.Context()); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func (h *Harness) authenticate(subject string) access.Principal {
@@ -256,41 +365,18 @@ func (h *Harness) DeviceCredential(subject string) string { return h.deviceCrede
 
 // ConfigureSignedIdentity replaces only the identity/auth service adapters.
 // Existing durable sessions remain valid because this uses the fixture's same
-// repositories and key material, while subsequent exchanges exercise the
+// authority and key material, while subsequent exchanges exercise the
 // supplied verifier.
 func (h *Harness) ConfigureSignedIdentity(t *testing.T, verifier identity.IdentityVerifier) {
 	t.Helper()
-	identityRepository, err := identity.NewRepository(h.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.Identity, err = identity.New(identity.Options{Verifier: verifier, Repository: identityRepository, Origin: testOrigin,
-		InstanceID: testInstance, IdentityKeys: keyring("identity.v1", 0x11), Now: func() time.Time { return h.Now }})
-	if err != nil {
-		t.Fatal(err)
-	}
-	authRepository, err := auth.NewRepository(h.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var actor [32]byte
-	for index := range actor {
-		actor[index] = 0x55
-	}
-	h.Auth, err = auth.New(auth.Options{Identity: h.Identity, Verifier: verifier, Security: h.Security, Repository: authRepository,
-		Mode: config.ModeSelfHosted, Origin: testOrigin, InstanceID: testInstance, TokenKeys: keyring("session.v1", 0x22),
-		DeviceKeys: keyring("device.v1", 0x33), NotificationKeys: keyring("notification.v1", 0x44), ActorIDKey: actor,
-		Now: func() time.Time { return h.Now }})
-	if err != nil {
-		t.Fatal(err)
-	}
+	h.configureIdentity(t, verifier)
 }
 func (h *Harness) signIn(subject, name string) access.Principal {
 	challenge, err := h.Identity.Challenge(h.t.Context())
 	if err != nil {
 		h.t.Fatal(err)
 	}
-	nonce, err := identity.AppleNonce(testOrigin, testInstance, challenge.Challenge)
+	nonce, err := identity.AppleNonce(h.composition.Origin, h.composition.InstanceID, challenge.Challenge)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -325,7 +411,7 @@ func (h *Harness) Reauthenticate(subject string) (access.Principal, error) {
 	if err != nil {
 		return access.Principal{}, err
 	}
-	nonce, err := identity.AppleNonce(testOrigin, testInstance, challenge.Challenge)
+	nonce, err := identity.AppleNonce(h.composition.Origin, h.composition.InstanceID, challenge.Challenge)
 	if err != nil {
 		return access.Principal{}, err
 	}
@@ -346,7 +432,7 @@ func (h *Harness) CrossAccountContinuity(subject, targetSubject string) error {
 	if err != nil {
 		return err
 	}
-	nonce, err := identity.AppleNonce(testOrigin, testInstance, challenge.Challenge)
+	nonce, err := identity.AppleNonce(h.composition.Origin, h.composition.InstanceID, challenge.Challenge)
 	if err != nil {
 		return err
 	}
@@ -357,23 +443,49 @@ func (h *Harness) CrossAccountContinuity(subject, targetSubject string) error {
 	return err
 }
 func (h *Harness) NewDevice(subject string) (access.Principal, error) {
+	p, _, err := h.NewDeviceSession(subject)
+	return p, err
+}
+
+// NewDeviceSession is NewDevice that also returns the new device's
+// refreshed access token (the subject's own token stays its first
+// device's).
+func (h *Harness) NewDeviceSession(subject string) (access.Principal, string, error) {
 	challenge, err := h.Identity.Challenge(h.t.Context())
 	if err != nil {
-		return access.Principal{}, err
+		return access.Principal{}, "", err
 	}
-	nonce, err := identity.AppleNonce(testOrigin, testInstance, challenge.Challenge)
+	nonce, err := identity.AppleNonce(h.composition.Origin, h.composition.InstanceID, challenge.Challenge)
 	if err != nil {
-		return access.Principal{}, err
+		return access.Principal{}, "", err
 	}
 	bundle, err := h.Auth.Exchange(h.t.Context(), identity.ExchangeRequest{CommandID: h.commandID(), Challenge: challenge.Challenge, IdentityToken: subject + "|" + nonce, InstallationID: fmt.Sprintf("installation-%s-%d", subject, h.ids.Add(1))})
 	if err != nil {
-		return access.Principal{}, err
+		return access.Principal{}, "", err
 	}
 	bundle, err = h.Auth.Refresh(h.t.Context(), bundle.RefreshToken)
 	if err != nil {
-		return access.Principal{}, err
+		return access.Principal{}, "", err
 	}
-	return h.Auth.Authenticate(h.t.Context(), bundle.AccessToken)
+	p, err := h.Auth.Authenticate(h.t.Context(), bundle.AccessToken)
+	return p, bundle.AccessToken, err
+}
+
+// SignInDevice signs subject in on a new installation and returns the
+// session bundle (its refresh token and device credential included). It
+// touches no harness map, so goroutines may call it while others run (the
+// harness's own sign-ins, Refresh and AccessToken may not).
+func (h *Harness) SignInDevice(ctx context.Context, subject string) (auth.SessionBundle, error) {
+	challenge, err := h.Identity.Challenge(ctx)
+	if err != nil {
+		return auth.SessionBundle{}, err
+	}
+	nonce, err := identity.AppleNonce(h.composition.Origin, h.composition.InstanceID, challenge.Challenge)
+	if err != nil {
+		return auth.SessionBundle{}, err
+	}
+	return h.Auth.Exchange(ctx, identity.ExchangeRequest{CommandID: h.commandID(), Challenge: challenge.Challenge, IdentityToken: subject + "|" + nonce,
+		InstallationID: fmt.Sprintf("installation-%s-%d", subject, h.ids.Add(1)), Profile: &identity.ProfileInput{DisplayName: subject, Confirmed: true}})
 }
 
 func (h *Harness) AddCaregiver(t *testing.T, subject string) access.Principal {
@@ -410,61 +522,19 @@ func (h *Harness) DeviceCount(t *testing.T, accountID string) int {
 	}
 	return count
 }
-func (h *Harness) PendingWakes(t *testing.T) []PendingWake {
-	t.Helper()
-	tx, err := h.Migrator.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(t.Context())
-	if err = tenant.SetLocal(t.Context(), tx, tenant.Context{AccountID: h.Owner.AccountID, FamilyID: h.FamilyID}); err != nil {
-		t.Fatal(err)
-	}
-	rows, err := tx.Query(t.Context(), `SELECT family_id::text,device_id::text,instance_id::text,recovery_epoch,sequence,not_before,attempts,generation
-		FROM delivery_pending WHERE family_id=$1 ORDER BY device_id`, h.FamilyID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var result []PendingWake
-	for rows.Next() {
-		var wake PendingWake
-		var epoch, sequence, attempts, generation int64
-		if err = rows.Scan(&wake.FamilyID, &wake.DeviceID, &wake.Cursor.ServerInstanceID, &epoch, &sequence,
-			&wake.NotBefore, &attempts, &generation); err != nil {
-			t.Fatal(err)
-		}
-		if epoch < 1 || sequence < 1 || attempts < 0 || attempts > int64(^uint32(0)) || generation < 1 {
-			t.Fatalf("invalid pending wake counters epoch=%d sequence=%d attempts=%d generation=%d", epoch, sequence, attempts, generation)
-		}
-		wake.Cursor.RecoveryEpoch, wake.Cursor.Sequence, wake.Cursor.FamilyID = uint64(epoch), uint64(sequence), wake.FamilyID
-		wake.Attempts, wake.Generation = uint32(attempts), uint64(generation)
-		result = append(result, wake)
-	}
-	if err = rows.Err(); err != nil {
-		t.Fatal(err)
-	}
-	return result
-}
-func (h *Harness) SuppressHintPublisher(t *testing.T) {
-	t.Helper()
-	observer, ok := h.commitObserver.(*hostedQueueObserver)
-	if !ok {
-		t.Fatal("hint publisher suppression requires hosted harness")
-	}
-	observer.publish = false
-}
 func (h *Harness) RestartServices(t *testing.T) {
 	t.Helper()
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 }
+
+// Pull is one pull page as the client decodes it (Decoded).
 func (h *Harness) Pull(t *testing.T, principal access.Principal, cursor *protocol.Cursor, pageToken *string) protocol.SyncResponse {
 	t.Helper()
 	response, err := h.Service.ApplyAndPull(t.Context(), principal, h.SyncRequest(cursor, pageToken))
 	if err != nil {
 		t.Fatal(err)
 	}
-	return response
+	return Decoded(t, response)
 }
 func (h *Harness) ExecFamily(t *testing.T, query string, args ...any) {
 	execFamily(t, h.Migrator, h.Owner.AccountID, h.FamilyID, query, args...)
@@ -488,15 +558,24 @@ func (h *Harness) StopFeed(t *testing.T, principal access.Principal, id, recordI
 	fixture := MustMutation(t, "timer-feed.json")
 	p := fixture.Payload.(protocol.TimerStartPayload)
 	fixture.MutationID, fixture.EntityID, fixture.Operation = h.commandID(), id, "timer_stop"
-	fixture.Payload = protocol.TimerStopPayload{BabyID: p.BabyID, CompletedRecordID: recordID, StoppedAt: "2026-09-20T15:10:00.000000Z"}
+	// A breast timer's stop names the part it completes; the part is
+	// derived from the record so a stop is reproducible.
+	fixture.Payload = protocol.TimerStopPayload{BabyID: p.BabyID, CompletedRecordID: recordID, StoppedAt: "2026-09-20T15:10:00.000000Z",
+		ComponentID: "4" + recordID[1:]}
 	return h.applyTimer(t, principal, fixture)
 }
 
+// applyTimer applies a timer command and fails the test unless it was
+// applied: a rejected start or stop would otherwise let a test that waits
+// for its effect pass without it.
 func (h *Harness) applyTimer(t *testing.T, principal access.Principal, mutation protocol.Mutation) protocol.Outcome {
 	t.Helper()
 	outcome, err := h.Service.Apply(t.Context(), principal, h.FamilyID, mutation)
 	if err != nil {
 		t.Fatal(err)
+	}
+	if outcome.Status != "applied" {
+		t.Fatalf("%s %s was not applied: %+v", mutation.Operation, mutation.EntityID, outcome)
 	}
 	return outcome
 }
@@ -504,13 +583,16 @@ func (h *Harness) applyTimer(t *testing.T, principal access.Principal, mutation 
 func (h *Harness) ReadFeed(t *testing.T, id string) protocol.CanonicalEntity {
 	t.Helper()
 	var found protocol.CanonicalEntity
-	err := h.Security.WithAuthorizedTransaction(t.Context(), h.Owner, h.FamilyID, "read", func(tx pgx.Tx, _ access.Grant) error {
-		return records.NewRepository().StreamCanonical(t.Context(), tx, h.FamilyID, func(entity protocol.CanonicalEntity) error {
-			if entity.EntityKind == "feed" && entity.Meta.ID == id {
-				found = entity
-			}
-			return nil
-		})
+	err := h.guard.WithFamilyTx(t.Context(), h.Owner, "read", func(tx pgx.Tx, _ access.Grant) error {
+		row, err := care.Get(t.Context(), tx, h.FamilyID, id)
+		if err != nil {
+			return err
+		}
+		if row.Kind != "feed" {
+			return fmt.Errorf("%s is a %s", id, row.Kind)
+		}
+		found, err = row.Entity()
+		return err
 	})
 	if err != nil || found.Meta.ID == "" {
 		t.Fatalf("read feed %s: entity=%+v err=%v", id, found, err)
@@ -526,8 +608,8 @@ func (h *Harness) FamilyHighWater(t *testing.T) protocol.Cursor {
 func (h *Harness) TimerIsLive(t *testing.T, id string) bool {
 	t.Helper()
 	live := false
-	err := h.Security.WithAuthorizedTransaction(t.Context(), h.Owner, h.FamilyID, "read", func(tx pgx.Tx, _ access.Grant) error {
-		return tx.QueryRow(t.Context(), `SELECT tombstoned_at IS NULL FROM active_timers WHERE family_id=$1 AND id=$2`, h.FamilyID, id).Scan(&live)
+	err := h.guard.WithFamilyTx(t.Context(), h.Owner, "read", func(tx pgx.Tx, _ access.Grant) error {
+		return tx.QueryRow(t.Context(), `SELECT tombstoned_at IS NULL FROM care_entities WHERE family_id=$1 AND id=$2 AND kind=5`, h.FamilyID, id).Scan(&live)
 	})
 	if err != nil {
 		t.Fatalf("read timer %s: %v", id, err)
@@ -538,8 +620,8 @@ func (h *Harness) TimerIsLive(t *testing.T, id string) bool {
 func (h *Harness) TimerVersion(t *testing.T, id string) uint64 {
 	t.Helper()
 	var version uint64
-	err := h.Security.WithAuthorizedTransaction(t.Context(), h.Owner, h.FamilyID, "read", func(tx pgx.Tx, _ access.Grant) error {
-		return tx.QueryRow(t.Context(), `SELECT entity_version FROM active_timers WHERE family_id=$1 AND id=$2`, h.FamilyID, id).Scan(&version)
+	err := h.guard.WithFamilyTx(t.Context(), h.Owner, "read", func(tx pgx.Tx, _ access.Grant) error {
+		return tx.QueryRow(t.Context(), `SELECT entity_version FROM care_entities WHERE family_id=$1 AND id=$2 AND kind=5`, h.FamilyID, id).Scan(&version)
 	})
 	if err != nil {
 		t.Fatalf("read timer version %s: %v", id, err)
@@ -547,19 +629,22 @@ func (h *Harness) TimerVersion(t *testing.T, id string) uint64 {
 	return version
 }
 
-func (h *Harness) RebuildSyncService(t *testing.T) {
+// RebuildSyncService rebuilds the sync and import services under limits
+// (small page sizes for paging tests), which become h.Limits.
+func (h *Harness) RebuildSyncService(t *testing.T, limits protocol.Limits) {
 	t.Helper()
-	h.RebuildSyncServiceWithPageKeys(t, keyring("page.v1", 0x77))
-
+	h.Limits = limits
+	h.RebuildSyncServiceWithPageKeys(t, h.composition.PageKeys)
 }
 
 func (h *Harness) RebuildSyncServiceWithPageKeys(t *testing.T, keys identity.DigestKeyring) {
 	t.Helper()
-	h.Service = familysync.NewServiceWithPaging(h.Security, records.NewRepository(), h.Info, h.Limits,
-		func() time.Time { return h.Now }, familyResolver{h.Family}, h.commitObserver, keys)
-	h.Importer = importer.NewService(h.Security, records.NewRepository(), familyResolver{h.Family}, h.Info, h.Limits, keys, func() time.Time { return h.Now })
-	h.Importer.SetCommitObserver(h.commitObserver)
-	h.Service.SetImportAdmission(h.Importer)
+	h.pageKeys = keys
+	h.Importer = importer.NewService(h.guard, h.Info, h.Limits, keys, func() time.Time { return h.Now })
+	if h.publisher != nil {
+		h.Importer.SetPublisher(h.publisher)
+	}
+	h.Service = SyncServiceOn(t, h, h.guard)
 }
 
 func ImportRequest(i int, name, date string) protocol.ImportResolveRequest {

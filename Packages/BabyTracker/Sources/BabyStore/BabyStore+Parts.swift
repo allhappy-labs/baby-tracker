@@ -127,11 +127,12 @@ public extension BabyStore {
     /// One timed breast component, entered after the fact, joined like any
     /// other part. Durations under 30 s are not worth a record.
     @discardableResult
-    func logBreast(side: BreastSide, from start: Date, to end: Date, for babyID: UUID) throws -> FeedEntry {
+    func logBreast(side: BreastSide, from start: Date, to end: Date, for babyID: UUID, note: String? = nil) throws -> FeedEntry {
         let seconds = try Self.breastSeconds(from: start, to: end)
         let expected = try captureWriteContext()
         return try withRealmWrite(expected: expected) {
             let entry = self.breastEntry(side: side, seconds: seconds, from: start, to: end, for: babyID)
+            entry.note = note
             entry.feedingSessionID = try self.continuedSessionID(.feed, for: babyID, startingAt: start)
             self.context.insert(entry)
             try self.recordLocked(.create, on: entry)

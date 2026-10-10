@@ -125,7 +125,9 @@ public struct LiveActivityRevision: Codable, Hashable, Sendable {
     }
 }
 
-public enum LiveActivityAPNsEnvironment: String, Codable, Sendable { case sandbox, production }
+/// The push-token gateway type: one enum for both features, with the same
+/// `sandbox`/`production` wire values.
+public typealias LiveActivityAPNsEnvironment = PushEnvironment
 public enum LiveActivityRegistrationState: String, Codable, Sendable { case active, ended, dismissed }
 
 /// A foreground Activity.activities inventory is the only absence proof. A

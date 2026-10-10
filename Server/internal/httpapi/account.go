@@ -31,13 +31,12 @@ func accountDeleteHandler(options Options) http.HandlerFunc {
 			writeFamilyCode(w, request, account.Code(err))
 			return
 		}
-		revocation := "manual_required"
-		if options.AppleAuthorizationMode == "code_exchange_required" {
-			revocation = "pending"
-		}
+		// The account service reports the Apple revocation state; Phase 1
+		// keeps no Apple refresh token, so it is manual_required in every
+		// mode (hosted ruling).
 		writeJSON(w, http.StatusOK, protocol.AccountDeletionResponse{
-			CommandResponse:              commandResponse(result),
-			AppleAuthorizationRevocation: revocation,
+			CommandResponse:              commandResponse(result.Result),
+			AppleAuthorizationRevocation: result.AppleAuthorizationRevocation,
 		})
 	}
 }

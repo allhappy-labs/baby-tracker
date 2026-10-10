@@ -220,4 +220,11 @@ import BabyCore
         #expect(diaper.note == " legacy ")
         #expect(diaper.contents == .dirty)
     }
+
+    @Test func aNewDiaperKeepsTheChosenDay() throws {
+        let (store, baby, clock) = try fixture()
+        let yesterday = clock.now.addingTimeInterval(-26 * 3600)
+        try DiaperSheet.log(.wet, at: yesterday, store: store, babyID: baby)
+        #expect(try store.lastDiaper(for: baby)?.startedAt == yesterday)
+    }
 }

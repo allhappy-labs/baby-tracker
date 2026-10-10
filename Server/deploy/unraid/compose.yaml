@@ -1,6 +1,4 @@
 services:
-  # Optional push uses a separate live-activity-push.yaml overlay so ordinary
-  # self-hosted deployments do not evaluate or mount absent APNs secrets.
   db:
     restart: unless-stopped
 
@@ -47,6 +45,13 @@ services:
       # server's ping times out, ~30 s; with one slot every reconnect in that
       # window is a 429 and the phone is back on polling.
       BT_SOCKET_DEVICE_LIMIT: "2"
+      # Private read-only MCP stays disabled unless the operator opts in (see
+      # README "Private MCP endpoint"). When enabled, /mcp is reachable only
+      # through the Tailscale Serve proxy below (tailnet only, no Funnel), which
+      # forwards to baby-tracker-sync-app-1:8080 (the app container's name) on this compose network with the original Host
+      # (baby-sync.<tailnet>.ts.net), which must equal BT_PUBLIC_ORIGIN.
+      BT_MCP_ENABLED: ${BT_MCP_ENABLED:-false}
+    # No published ports: the app is reachable only on the compose network.
     ports: !reset []
     restart: unless-stopped
     depends_on:
@@ -88,18 +93,6 @@ volumes:
       type: none
       o: bind
       device: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/database
-  security_ledger:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/security-ledger
-  ledger_head:
-    driver: local
-    driver_opts:
-      type: none
-      o: bind
-      device: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/ledger-head
 
 secrets:
   tailscale_auth_key:

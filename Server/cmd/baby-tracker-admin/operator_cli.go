@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/operator"
-	"babytracker/server/internal/security"
 )
 
 // OperatorCommands is injected by main composition after the lifecycle
@@ -19,10 +19,11 @@ import (
 // without granting the executable ambient authority.
 type OperatorCommands interface {
 	PrepareRecovery(context.Context, operator.RecoveryProposal) (operator.Confirmation, error)
-	RecoverOwner(context.Context, operator.RecoveryProposal, operator.Confirmation) (security.CommandResult, error)
+	RecoverOwner(context.Context, operator.RecoveryProposal, operator.Confirmation) (authority.Result, error)
 	PrepareEntitlement(context.Context, operator.EntitlementProposal) (operator.Confirmation, error)
-	GrantEntitlement(context.Context, operator.EntitlementProposal, operator.Confirmation) (security.CommandResult, error)
-	SuspendEntitlement(context.Context, operator.EntitlementProposal, operator.Confirmation) (security.CommandResult, error)
+	GrantEntitlement(context.Context, operator.EntitlementProposal, operator.Confirmation) (authority.Result, error)
+	SuspendEntitlement(context.Context, operator.EntitlementProposal, operator.Confirmation) (authority.Result, error)
+	IntegrationCommands
 }
 
 // RunWithServices parses the exact operator command grammar and invokes the
@@ -38,7 +39,10 @@ func RunWithServices(ctx context.Context, arguments []string, commands OperatorC
 	if len(arguments) >= 3 && arguments[0] == "entitlement" {
 		return runOperatorEntitlement(ctx, arguments, commands, output)
 	}
-	return errors.New("usage: ownership-recover prepare|commit or entitlement grant|suspend prepare|commit")
+	if len(arguments) >= 2 && arguments[0] == "mcp" {
+		return runMCP(ctx, arguments, commands, output)
+	}
+	return errors.New("usage: ownership-recover prepare|commit, entitlement grant|suspend prepare|commit, or mcp issue|revoke prepare|commit|list; " + mcpLabelRule)
 }
 
 func runOwnershipRecovery(ctx context.Context, arguments []string, commands OperatorCommands, output io.Writer) error {
@@ -112,7 +116,7 @@ func runOperatorEntitlement(ctx context.Context, arguments []string, commands Op
 	if err != nil {
 		return err
 	}
-	var result security.CommandResult
+	var result authority.Result
 	if operation == "grant" {
 		result, err = commands.GrantEntitlement(ctx, proposal, confirmation)
 	} else {

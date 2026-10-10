@@ -9,11 +9,15 @@ public extension BabyStore {
         from start: Date,
         to end: Date?,
         for babyID: UUID,
+        kindOverride: SleepKind? = nil,
+        note: String? = nil,
         expectedWriteContext: RealmWriteContext? = nil
     ) throws -> SleepEntry {
         let expected = try expectedWriteContext ?? captureWriteContext()
         return try withRealmWrite(expected: expected) {
             let entry = self.sleepEntry(from: start, to: end, for: babyID)
+            entry.kindOverride = kindOverride
+            entry.note = note
             if let end {
                 entry.sleepSessionID = try self.continuedSessionID(.sleep, for: babyID, startingAt: start)
             }

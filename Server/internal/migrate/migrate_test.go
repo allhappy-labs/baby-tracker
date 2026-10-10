@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io/fs"
 	"os"
@@ -12,6 +13,7 @@ import (
 	"testing"
 	"testing/fstest"
 
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -125,7 +127,13 @@ func TestRunnerRejectsGapsInAppliedHistory(t *testing.T) {
 	}
 }
 
-func TestRecoveryCompatibilityMigrationInstallsMirrorFunction(t *testing.T) {
+// Schema 29 replaces the projector-owned recovery mirror
+// (app.update_server_state and the generation/revision/event_hash chain head)
+// with one server_state row that `baby-tracker-admin authority init` writes
+// as the migrator: an instance ID, a wire-safe recovery epoch and the
+// actor-ID key commitment. Epoch monotonicity is the admin rotate-epoch
+// command's (cmd/baby-tracker-admin TestAuthorityRotateEpochIsMonotonicAndInvalidatesSessions).
+func TestServerStateIsOneBoundRowWithoutRecoveryMirror(t *testing.T) {
 	databaseURL := os.Getenv("BABY_TRACKER_TEST_DATABASE_URL")
 	if databaseURL == "" {
 		t.Skip("BABY_TRACKER_TEST_DATABASE_URL is not set")
@@ -142,50 +150,51 @@ func TestRecoveryCompatibilityMigrationInstallsMirrorFunction(t *testing.T) {
 	if err := New(os.DirFS("../../migrations")).Apply(ctx, pool); err != nil {
 		t.Fatal(err)
 	}
-	aheadHash := make([]byte, 32)
-	aheadHash[0] = 2
-	if _, err := pool.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)",
-		"123e4567-e89b-42d3-a456-426614174000", int64(1), int64(1), int64(2), aheadHash); err != nil {
-		t.Fatalf("initial mirror update failed: %v", err)
+	var mirror bool
+	var headColumns int
+	if err := pool.QueryRow(ctx, `SELECT to_regprocedure('app.update_server_state(uuid,bigint,bigint,bigint,bytea)') IS NOT NULL,
+		(SELECT count(*) FROM information_schema.columns WHERE table_schema='public' AND table_name='server_state'
+		   AND column_name IN ('generation','revision','event_hash'))`).Scan(&mirror, &headColumns); err != nil {
+		t.Fatal(err)
 	}
-	for name, update := range map[string]struct {
-		revision int64
-		hash     []byte
+	if mirror || headColumns != 0 {
+		t.Fatalf("legacy mirror survived function=%t head columns=%d", mirror, headColumns)
+	}
+	const instance = "123e4567-e89b-42d3-a456-426614174000"
+	commitment := bytesWithFirst(7)
+	for name, row := range map[string]struct {
+		epoch      int64
+		commitment []byte
 	}{
-		"lower revision": {1, bytesWithFirst(1)},
-		"changed hash":   {2, bytesWithFirst(3)},
+		"zero epoch":          {0, commitment},
+		"unsafe epoch":        {9007199254740992, commitment},
+		"short commitment":    {1, commitment[:31]},
+		"oversize commitment": {1, append(append([]byte(nil), commitment...), 0)},
 	} {
 		t.Run(name, func(t *testing.T) {
-			if _, err := pool.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)",
-				"123e4567-e89b-42d3-a456-426614174000", int64(1), int64(1), update.revision, update.hash); err == nil {
-				t.Fatalf("same-epoch mirror accepted %s", name)
-			}
-			var gotRevision int64
-			var gotHash []byte
-			if err := pool.QueryRow(ctx, "SELECT revision,event_hash FROM server_state WHERE singleton").Scan(&gotRevision, &gotHash); err != nil || gotRevision != 2 || !bytes.Equal(gotHash, aheadHash) {
-				t.Fatalf("same-epoch rejection changed mirror revision=%d hash=%x err=%v", gotRevision, gotHash, err)
+			_, err := pool.Exec(ctx, `INSERT INTO server_state(instance_id,recovery_epoch,actor_key_commitment) VALUES ($1,$2,$3)`, instance, row.epoch, row.commitment)
+			var pgErr *pgconn.PgError
+			if !errors.As(err, &pgErr) || pgErr.Code != "23514" {
+				t.Fatalf("server_state accepted %s: %v", name, err)
 			}
 		})
 	}
-	if _, err := pool.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)",
-		"123e4567-e89b-42d3-a456-426614174000", int64(2), int64(1), int64(0), make([]byte, 32)); err != nil {
-		t.Fatalf("higher-epoch recovery transition rejected: %v", err)
+	if _, err := pool.Exec(ctx, `INSERT INTO server_state(instance_id,recovery_epoch,actor_key_commitment) VALUES ($1,9007199254740991,$2)`, instance, commitment); err != nil {
+		t.Fatalf("bound server_state rejected: %v", err)
 	}
-	if _, err := pool.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)",
-		"123e4567-e89b-42d3-a456-426614174000", int64(9007199254740991), int64(1), int64(0), make([]byte, 32)); err != nil {
-		t.Fatalf("projection-owned mirror update failed: %v", err)
+	_, err = pool.Exec(ctx, `INSERT INTO server_state(instance_id,recovery_epoch) VALUES ($1,1)`, "223e4567-e89b-42d3-a456-426614174000")
+	var pgErr *pgconn.PgError
+	if !errors.As(err, &pgErr) || pgErr.Code != "23505" {
+		t.Fatalf("second server_state row: %v", err)
 	}
-	if _, err := pool.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)",
-		"123e4567-e89b-42d3-a456-426614174000", int64(9007199254740992), int64(1), int64(0), make([]byte, 32)); err == nil {
-		t.Fatal("mirror function accepted an unsafe integer epoch")
-	}
-	var instance string
-	var epoch, generation, revision int64
-	if err := pool.QueryRow(ctx, "SELECT instance_id::text,recovery_epoch,generation,revision FROM server_state WHERE singleton").Scan(&instance, &epoch, &generation, &revision); err != nil {
+	var gotInstance string
+	var epoch int64
+	var gotCommitment []byte
+	if err := pool.QueryRow(ctx, "SELECT instance_id::text,recovery_epoch,actor_key_commitment FROM server_state WHERE singleton").Scan(&gotInstance, &epoch, &gotCommitment); err != nil {
 		t.Fatal(err)
 	}
-	if instance != "123e4567-e89b-42d3-a456-426614174000" || epoch != 9007199254740991 || generation != 1 || revision != 0 {
-		t.Fatalf("server state mirror=%s/%d/%d/%d", instance, epoch, generation, revision)
+	if gotInstance != instance || epoch != 9007199254740991 || !bytes.Equal(gotCommitment, commitment) {
+		t.Fatalf("server state=%s/%d/%x", gotInstance, epoch, gotCommitment)
 	}
 	var compatibilityRows int
 	if err := pool.QueryRow(ctx, "SELECT count(*) FROM schema_compatibility WHERE singleton").Scan(&compatibilityRows); err != nil || compatibilityRows != 1 {

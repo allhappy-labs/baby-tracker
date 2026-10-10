@@ -118,7 +118,7 @@ public struct HistoryView: View {
                     if let empty = model.emptyState, empty == .noData || !model.hasMore { emptyView(empty) }
                 }
         }
-        .sheet(isPresented: $isShowingFilter) {
+        .fittedSheet(isPresented: $isShowingFilter) {
             HistoryFilterSheet(filter: model.filter, toggle: toggle) { isShowingFilter = false }
         }
         .sheet(isPresented: $isExporting) {
@@ -264,7 +264,8 @@ public struct HistoryView: View {
                 showingChip
             }
         }
-        .padding(.horizontal, 16)
+        // Home's inset, so the switcher sits in the same place on every tab.
+        .padding(.horizontal, 20)
         .padding(.top, 8)
         .padding(.bottom, 8)
         .background(.bar)
@@ -745,37 +746,34 @@ struct HistoryFilterSheet: View {
     let onDone: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
+    /// Presented with `fittedSheet`: as tall as this, so the title and Done
+    /// are drawn here.
     var body: some View {
-        NavigationStack {
-            Group {
+        VStack(spacing: 0) {
+            SheetHeader(cancelTitle: "", onCancel: nil) {
+                SheetTitleText(HistoryCopy.show)
+            } trailing: {
+                Button(HistoryCopy.done, action: onDone)
+                    .buttonStyle(.glass)
+                    .controlSize(.large)
+                    .accessibilityIdentifier("history.filter.done")
+            }
+            ScrollView {
                 if typeSize.isAccessibilitySize {
-                    ScrollView {
-                        VStack(alignment: .leading, spacing: 8) {
-                            ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
-                        }
-                        .padding(20)
+                    VStack(alignment: .leading, spacing: 8) {
+                        ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
                     }
+                    .padding(20)
                 } else {
                     HStack(alignment: .top, spacing: 8) {
                         ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
                     }
                     .padding(.horizontal, 16)
-                    .padding(.top, 8)
-                    .frame(maxHeight: .infinity, alignment: .top)
+                    .padding(.vertical, 8)
                 }
             }
-            .navigationTitle(HistoryCopy.show)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(HistoryCopy.done, action: onDone)
-                        .accessibilityIdentifier("history.filter.done")
-                }
-            }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .sheetHeight(190)
     }
 
     private func toggleButton(_ tracker: Tracker) -> some View {

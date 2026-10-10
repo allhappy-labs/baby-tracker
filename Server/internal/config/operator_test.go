@@ -159,3 +159,66 @@ func writeOperatorFile(t *testing.T, directory, name, content string, mode os.Fi
 	}
 	return path
 }
+
+func TestLoadOperatorIntegrationPolicyFromMountedFileOnly(t *testing.T) {
+	directory := t.TempDir()
+	integration := writeOperatorFile(t, directory, "integration-policy", "integration-policy-test-v1\n", 0o600)
+	key := writeOperatorFile(t, directory, "confirmation-key", strings.Repeat("42", 32), 0o600)
+	values := map[string]string{
+		"BT_OPERATOR_ID":                         operatorID,
+		"BT_OPERATOR_INTEGRATION_POLICY_ID_FILE": integration,
+		"BT_OPERATOR_CONFIRMATION_KEY_FILE":      key,
+	}
+	configuration, err := LoadOperator(mapGetter(values))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configuration.IntegrationPolicyID != "integration-policy-test-v1" || configuration.OwnershipPolicyID != "" || configuration.EntitlementPolicyID != "" {
+		t.Fatalf("configuration=%+v", configuration)
+	}
+
+	direct := map[string]string{"BT_OPERATOR_INTEGRATION_POLICY_ID": "integration-policy-test-v1"}
+	for name, value := range values {
+		direct[name] = value
+	}
+	if _, err := LoadOperator(mapGetter(direct)); err == nil || !strings.Contains(err.Error(), "BT_OPERATOR_INTEGRATION_POLICY_ID is forbidden") {
+		t.Fatalf("direct integration policy error=%v", err)
+	}
+
+	for name, path := range map[string]string{
+		"group readable": writeOperatorFile(t, directory, "group-policy", "integration-policy-test-v1", 0o640),
+		"bad policy":     writeOperatorFile(t, directory, "bad-policy", "integration policy", 0o600),
+		"missing":        filepath.Join(directory, "missing"),
+	} {
+		t.Run(name, func(t *testing.T) {
+			unsafe := map[string]string{}
+			for key, value := range values {
+				unsafe[key] = value
+			}
+			unsafe["BT_OPERATOR_INTEGRATION_POLICY_ID_FILE"] = path
+			if _, err := LoadOperator(mapGetter(unsafe)); err == nil || strings.Contains(err.Error(), path) {
+				t.Fatalf("unsafe integration policy error=%v", err)
+			}
+		})
+	}
+	t.Run("symlink", func(t *testing.T) {
+		link := filepath.Join(directory, "policy-link")
+		if err := os.Symlink(integration, link); err != nil {
+			t.Fatal(err)
+		}
+		unsafe := map[string]string{}
+		for key, value := range values {
+			unsafe[key] = value
+		}
+		unsafe["BT_OPERATOR_INTEGRATION_POLICY_ID_FILE"] = link
+		if _, err := LoadOperator(mapGetter(unsafe)); err == nil {
+			t.Fatal("symlinked integration policy was accepted")
+		}
+	})
+	t.Run("operator required", func(t *testing.T) {
+		partial := map[string]string{"BT_OPERATOR_INTEGRATION_POLICY_ID_FILE": integration, "BT_OPERATOR_CONFIRMATION_KEY_FILE": key}
+		if _, err := LoadOperator(mapGetter(partial)); err == nil {
+			t.Fatal("integration policy without operator ID was accepted")
+		}
+	})
+}

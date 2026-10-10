@@ -18,7 +18,6 @@ done
 umask 077
 install -d -m 0700 "$deploy_root" "$deploy_root/secrets" "$deploy_root/tailscale-state" "$deploy_root/tailscale-run"
 install -d -m 0700 -o 70 -g 70 "$deploy_root/database"
-install -d -m 0700 -o 65532 -g 65532 "$deploy_root/security-ledger" "$deploy_root/ledger-head"
 install -d -m 0700 -o 65532 -g 65532 "$deploy_root/keyrings"
 
 create_hex_secret() {
@@ -32,7 +31,7 @@ create_hex_secret() {
   chmod 0444 "$destination"
 }
 
-for name in bootstrap_password migrator_password runtime_password projector_password export_password \
+for name in bootstrap_password migrator_password runtime_password export_password \
   identity_pepper session_token_pepper device_continuity_pepper apple_notification_pepper \
   invitation_pepper page_token_key actor_id_pepper rate_limit_pepper; do
   create_hex_secret "$deploy_root/secrets/$name"
@@ -55,7 +54,8 @@ create_database_url() {
 
 create_database_url "$deploy_root/secrets/migrator_database_url" baby_tracker_migrator "$deploy_root/secrets/migrator_password"
 create_database_url "$deploy_root/secrets/runtime_database_url" baby_tracker_app "$deploy_root/secrets/runtime_password"
-create_database_url "$deploy_root/secrets/projector_database_url" baby_tracker_projector_app "$deploy_root/secrets/projector_password"
+# The maintenance credential compose mounts by default (decision D3).
+create_database_url "$deploy_root/secrets/maintenance_database_url" baby_tracker_export_app "$deploy_root/secrets/export_password"
 
 export_database_url=$deploy_root/keyrings/export-database-url
 if [[ ! -e $export_database_url ]]; then

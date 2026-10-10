@@ -1,0 +1,17 @@
+# Push for the homelab: Live Activity (on) and background wakes (owner's choice at the cutover).
+# One APNs key, the operator's, mounted read-only; no Live Activity worker login (the worker runs on the
+# maintenance credential).
+services:
+  app:
+    environment:
+      BT_LIVE_ACTIVITY_PUSH_ENABLED: "true"
+      BT_APNS_WAKES_ENABLED: ${BT_APNS_WAKES_ENABLED:-false}
+      BT_APNS_TEAM_ID: ${BT_APNS_TEAM_ID:?set BT_APNS_TEAM_ID}
+      BT_APNS_KEY_ID: ${BT_APNS_KEY_ID:?set BT_APNS_KEY_ID}
+      BT_APNS_BUNDLE_ID: ${BT_APNS_BUNDLE_ID:?set BT_APNS_BUNDLE_ID}
+      BT_APNS_KEY_FILE: /run/secrets/apns_key
+    secrets:
+      - apns_key
+secrets:
+  apns_key:
+    file: ${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/secrets/apns_key.p8

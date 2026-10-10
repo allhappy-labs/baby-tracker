@@ -3,96 +3,103 @@ package sync
 import (
 	"context"
 	"errors"
-	"fmt"
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/care"
 	"babytracker/server/internal/diagnostics"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
 	"github.com/jackc/pgx/v5"
 )
 
 var (
-	ErrMutationIDReused       = errors.New("mutation_id_reused")
+	// ErrMutationIDReused is care's: a (device, mutation id) receipt holds
+	// another mutation.
+	ErrMutationIDReused       = care.ErrMutationIDReused
 	ErrFamilyScopeRequired    = errors.New("family_scope_required")
 	ErrSessionRefreshRequired = errors.New("session_refresh_required")
-	// ErrReadOnlyCaregiver is returned for a viewer's mutation. It is raised
-	// inside the authorized transaction so the rollback leaves no journal row
-	// and no advanced cursor: a refused batch must not look like progress.
-	ErrReadOnlyCaregiver  = errors.New("read_only_caregiver")
-	ErrFeatureUnavailable = records.ErrFeatureUnavailable
-	errReceiptCollision   = errors.New("receipt_collision")
+	// ErrReadOnlyCaregiver is returned for a viewer's mutation. The batch's
+	// Policy raises it inside the guarded transaction before anything is
+	// written, so a refused batch never looks like progress.
+	ErrReadOnlyCaregiver  = care.ErrReadOnlyCaregiver
+	ErrFeatureUnavailable = care.ErrFeatureUnavailable
 )
 
-type CommitObserver interface {
-	Schedule(context.Context, pgx.Tx, access.Grant, string, protocol.Cursor) error
-	// Publish is post-commit best effort. Its error is deliberately not returned
-	// as a mutation failure because the durable receipt is already replayable.
-	Publish(context.Context, string, protocol.Cursor) error
-}
-
-type ImportAdmission interface {
-	AdmitRecord(context.Context, pgx.Tx, access.Grant, string, protocol.Mutation) (protocol.Outcome, bool, error)
-}
-
-func (s *Service) SetImportAdmission(admission ImportAdmission) { s.imports = admission }
-
+// Service serves sync and snapshots from care_entities. Each request is one
+// guarded transaction (ServeSync, ServeSnapshot); Exchange and SnapshotPage
+// are that transaction's body.
 type Service struct {
-	guard    records.Guard
-	repo     *records.Repository
-	identity protocol.ServerInfo
-	limits   protocol.Limits
-	now      func() time.Time
-	resolver access.FamilyResolver
-	observer CommitObserver
-	pageKeys identity.DigestKeyring
-	imports  ImportAdmission
+	guard     authority.RequestGuard
+	identity  protocol.ServerInfo
+	limits    protocol.Limits
+	now       func() time.Time
+	publisher care.Publisher
+	pageKeys  identity.DigestKeyring
+	policy    care.Policy
+	imports   care.ImportAdmission
+	progress  Progress
 }
 
-func NewServiceWithPaging(guard records.Guard, repo *records.Repository, server protocol.ServerInfo, limits protocol.Limits,
-	now func() time.Time, resolver access.FamilyResolver, observer CommitObserver, pageKeys identity.DigestKeyring) *Service {
-	service := NewServiceWithResolver(guard, repo, server, limits, now, resolver, observer)
-	service.pageKeys = clonePageKeys(pageKeys)
-	return service
-}
+// SetImportAdmission admits import-tagged mutations (the importer).
+func (s *Service) SetImportAdmission(admission care.ImportAdmission) { s.imports = admission }
 
-func NewService(guard records.Guard, repo *records.Repository, identity protocol.ServerInfo, limits protocol.Limits, now func() time.Time) *Service {
-	return &Service{guard: guard, repo: repo, identity: identity, limits: limits, now: now}
-}
-
-func NewServiceWithResolver(guard records.Guard, repo *records.Repository, identity protocol.ServerInfo, limits protocol.Limits,
-	now func() time.Time, resolver access.FamilyResolver, observer CommitObserver) *Service {
-	service := NewService(guard, repo, identity, limits, now)
-	service.resolver = resolver
-	service.observer = observer
-	return service
-}
-
-func actionFor(m protocol.Mutation) (string, error) {
-	if m.EntityKind == "baby" {
-		switch m.Operation {
-		case "create":
-			return "add_baby", nil
-		case "delete":
-			return "delete_baby", nil
-		case "update":
-			return "mutate_record", nil
+// policyOf is the batch Policy over the family policy allowed, refusing as
+// authority.familyGrant refuses a disallowed action: a viewer where a
+// caregiver would be allowed is read_only_caregiver, another non-owner
+// member owner_required, anyone else membership_revoked.
+func policyOf(allowed func(role, action string) bool) care.Policy {
+	if allowed == nil {
+		return nil
+	}
+	return func(role, action string) error {
+		if allowed(role, action) {
+			return nil
 		}
+		if role != "" && role != "owner" {
+			if role == "viewer" && allowed("caregiver", action) {
+				return care.ErrReadOnlyCaregiver
+			}
+			return authority.ErrOwnerRequired
+		}
+		return authority.ErrMembershipRevoked
 	}
-	if (m.EntityKind == "feed" || m.EntityKind == "sleep" || m.EntityKind == "diaper" || m.EntityKind == "supplement" || m.EntityKind == "growth_profile" || m.EntityKind == "measurement") && (m.Operation == "create" || m.Operation == "update" || m.Operation == "delete") {
-		return "mutate_record", nil
-	}
-	if m.EntityKind == "timer" {
-		return "mutate_record", nil
-	}
-	return "", protocol.ErrInvalidMutation
 }
 
+// ready reports whether the service was composed completely.
+func (s *Service) ready() bool {
+	return s != nil && s.guard != nil && s.now != nil && s.policy != nil && validPageKeys(s.pageKeys) &&
+		s.identity.Validate() == nil && s.limits.Validate() == nil
+}
+
+// withFamily runs run in one guarded transaction for familyID, the
+// principal's session family. The guard takes the family and role from the
+// session row (never from the principal), so a grant for any other family or
+// account is refused as membership_revoked, the code the legacy guard gave a
+// family mismatch. The guard is asked for "read", which every role holds
+// (and which the family_sync entitlement covers like every write); the
+// batch Policy then decides each mutation's own action.
+//
+// The whole guarded transaction is recorded as one database phase, after it
+// ended, so an opt-in recorder never runs inside it.
+func (s *Service) withFamily(ctx context.Context, p access.Principal, familyID string, run func(pgx.Tx, access.Grant) error) error {
+	start := time.Now()
+	err := s.guard.WithFamilyTx(ctx, p, "read", func(tx pgx.Tx, g access.Grant) error {
+		if g.AccountID != p.AccountID || g.FamilyID != familyID {
+			return authority.ErrMembershipRevoked
+		}
+		return run(tx, g)
+	})
+	diagnostics.Record(ctx, nil, diagnostics.Database, time.Since(start))
+	return err
+}
+
+// Apply applies one mutation, a batch of one with no pull, in its own
+// guarded transaction, and publishes the new high water after the commit.
 func (s *Service) Apply(ctx context.Context, p access.Principal, familyID string, m protocol.Mutation) (protocol.Outcome, error) {
-	if s == nil || s.guard == nil || s.repo == nil || s.now == nil {
-		return protocol.Outcome{}, fmt.Errorf("sync service unavailable")
+	if !s.ready() {
+		return protocol.Outcome{}, errUnavailable
 	}
 	if p.Scope != "family" {
 		return protocol.Outcome{}, ErrFamilyScopeRequired
@@ -103,133 +110,42 @@ func (s *Service) Apply(ctx context.Context, p access.Principal, familyID string
 	if !protocol.ValidUUID(familyID) || familyID == "" {
 		return protocol.Outcome{}, ErrFamilyScopeRequired
 	}
-	if s.resolver != nil {
-		resolved, err := s.resolver.Current(ctx, p)
-		if err != nil {
-			return protocol.Outcome{}, err
-		}
-		if resolved != familyID {
-			return protocol.Outcome{}, ErrFamilyScopeRequired
-		}
-	}
-	if err := s.identity.Validate(); err != nil {
-		return protocol.Outcome{}, err
-	}
-	if err := s.limits.Validate(); err != nil {
-		return protocol.Outcome{}, err
-	}
-	action, err := actionFor(m)
-	if err != nil {
-		return protocol.Outcome{}, err
-	}
-	hash, err := protocol.CanonicalMutationHash(m)
-	if err != nil {
-		return protocol.Outcome{}, err
-	}
-	var acceptedAt time.Time
-	var result protocol.Outcome
-	var publish *protocol.Cursor
-	var journalAdvanced bool
-	var repositoryElapsed, observerElapsed time.Duration
-	var measuredRepository, measuredObserver bool
-	err = s.guard.WithAuthorizedTransaction(ctx, p, familyID, action, func(tx pgx.Tx, g access.Grant) error {
-		if g.AccountID != p.AccountID || g.FamilyID != familyID {
-			return ErrFamilyScopeRequired
-		}
-		// A read-only caregiver reads everything and originates nothing. This
-		// is the gate; the client hiding its log buttons is only a courtesy,
-		// and an older build, a widget or a replayed frozen mutation would
-		// walk straight past it.
-		if !access.RoleMayWrite(g.Role) {
-			return ErrReadOnlyCaregiver
-		}
-		// The family lock serializes every write to a family: the receipt
-		// lookup, the journal sequence and the commit order all happen under
-		// it, so two copies of one mutation cannot both miss the receipt.
-		if err := records.LockFamilyForUpdate(ctx, tx, g.FamilyID); err != nil {
-			return err
-		}
-		var journalBefore uint64
-		if err := tx.QueryRow(ctx, `SELECT next_sequence FROM families WHERE id=$1`, g.FamilyID).Scan(&journalBefore); err != nil {
-			return err
-		}
-		acceptedAt = s.now().UTC()
-		receipt, found, err := readReceipt(ctx, tx, p.DeviceID, m.MutationID)
-		if err != nil {
-			return err
-		}
-		if found {
-			if receipt.Hash != hash {
-				return errReceiptCollision
-			}
-			original := receipt.Outcome.Status
-			result = receipt.Outcome
-			result.Status = "already_applied"
-			result.OriginalStatus = &original
-			return nil
-		}
-		handled := false
-		if m.ImportID != nil {
-			if s.imports == nil {
-				return ErrFeatureUnavailable
-			}
-			result, handled, err = s.imports.AdmitRecord(ctx, tx, g, p.DeviceID, m)
-			if err != nil {
-				return err
-			}
-		}
-		if !handled {
-			databaseStart := time.Now()
-			result, err = s.repo.Apply(ctx, tx, records.ApplyCommand{Grant: g, DeviceID: p.DeviceID, Mutation: m, AcceptedAt: acceptedAt,
-				ServerInstanceID: s.identity.InstanceID, RecoveryEpoch: s.identity.RecoveryEpoch, Limits: s.limits})
-			repositoryElapsed = time.Since(databaseStart)
-			measuredRepository = true
-		}
-		if err != nil {
-			return err
-		}
-		deletionReleasedReserve := m.Operation == "delete" && result.Status == "applied" && result.Cursor != nil &&
-			result.CanonicalEntity != nil && result.CanonicalEntity.Meta.TombstonedAt != nil
-		if err = s.repo.ChargeReceipt(ctx, tx, g.FamilyID, result, s.limits, deletionReleasedReserve); err != nil {
-			return err
-		}
-		if err = saveReceipt(ctx, tx, g, p.DeviceID, m, hash, result, acceptedAt); err != nil {
-			return err
-		}
-		var journalAfter uint64
-		if err = tx.QueryRow(ctx, `SELECT next_sequence FROM families WHERE id=$1`, g.FamilyID).Scan(&journalAfter); err != nil {
-			return err
-		}
-		journalAdvanced = journalAfter > journalBefore
-		if journalAdvanced && result.Cursor != nil && s.observer != nil {
-			observerStart := time.Now()
-			err = s.observer.Schedule(ctx, tx, g, p.DeviceID, *result.Cursor)
-			observerElapsed = time.Since(observerStart)
-			measuredObserver = true
-			if err != nil {
-				return err
-			}
-			cursor := *result.Cursor
-			publish = &cursor
-		}
-		return nil
+	var result care.BatchResult
+	txCtx, cancel := context.WithTimeout(ctx, time.Duration(s.limits.SyncTransactionSeconds)*time.Second)
+	err := s.withFamily(txCtx, p, familyID, func(tx pgx.Tx, g access.Grant) error {
+		var err error
+		result, err = care.ApplyBatch(txCtx, tx, s.batch(p, g, []protocol.Mutation{m}), nil)
+		return err
 	})
-	// The transaction guard has invalidated its lease and released the fence.
-	// An opt-in recorder may reenter authority without prolonging that boundary.
-	if measuredRepository {
-		diagnostics.Record(ctx, nil, diagnostics.Database, repositoryElapsed)
-	}
-	if measuredObserver {
-		diagnostics.Record(ctx, nil, diagnostics.Observer, observerElapsed)
-	}
-	if errors.Is(err, errReceiptCollision) {
-		return protocol.Outcome{}, ErrMutationIDReused
-	}
+	cancel()
 	if err != nil {
 		return protocol.Outcome{}, err
 	}
-	if publish != nil && s.observer != nil {
-		_ = s.observer.Publish(ctx, familyID, *publish)
+	s.publish(ctx, familyID, result)
+	if result.Fatal != nil {
+		return protocol.Outcome{}, result.Fatal
 	}
-	return result, nil
+	return result.Outcomes[0], nil
+}
+
+// batch is p's mutations as a care batch under g, with the family policy.
+func (s *Service) batch(p access.Principal, g access.Grant, mutations []protocol.Mutation) care.BatchCommand {
+	return care.BatchCommand{Grant: g, DeviceID: p.DeviceID, Mutations: mutations, AcceptedAt: s.now().UTC(), Server: s.identity,
+		Limits: s.limits, Policy: s.policy, Imports: s.imports}
+}
+
+// publish announces the batch's high water after the commit, best effort:
+// the committed receipts are already replayable.
+func (s *Service) publish(ctx context.Context, familyID string, result care.BatchResult) {
+	if cursor := s.publishCursor(familyID, result); cursor != nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, familyID, *cursor)
+	}
+}
+
+func (s *Service) publishCursor(familyID string, result care.BatchResult) *protocol.Cursor {
+	if result.HighWater <= result.Base {
+		return nil
+	}
+	return &protocol.Cursor{ServerInstanceID: s.identity.InstanceID, RecoveryEpoch: s.identity.RecoveryEpoch, FamilyID: familyID,
+		Sequence: result.HighWater}
 }

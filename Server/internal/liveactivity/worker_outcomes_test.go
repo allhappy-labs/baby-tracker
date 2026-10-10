@@ -15,8 +15,8 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 	"babytracker/server/internal/testkit"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -56,15 +56,13 @@ func applyMutation(t *testing.T, h *testkit.Harness, p access.Principal, m proto
 // lifecycle at all. The card must be adopted on that same pass, not at the next
 // family change, and never answered with a push-to-start.
 func TestLiveActivityOwnTimerCardAdoptedWhenClaimedWithItsStart(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Owner, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("owner"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 	var sent []PushRequest
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 		sent = append(sent, r)
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	}))
@@ -76,7 +74,7 @@ func TestLiveActivityOwnTimerCardAdoptedWhenClaimedWithItsStart(t *testing.T) {
 		t.Helper()
 		req := activityRequest(h, baby, id)
 		req.Scope.KindRaw, req.Token, req.TimerID = "sleep", token, &timer
-		if _, err := service.RegisterActivity(t.Context(), h.Owner, req); err != nil {
+		if _, err := reg.activity(t, t.Context(), h.AccessToken("owner"), req); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -123,15 +121,13 @@ func TestLiveActivityOwnTimerCardAdoptedWhenClaimedWithItsStart(t *testing.T) {
 // deferred when the re-read disagreed, and neither card would move on that
 // pass. Instead the previous card is ended and the new one adopted promptly.
 func TestLiveActivityOwnNextCardIsNotEndedWithThePreviousLifecycle(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Owner, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("owner"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 	var sent []PushRequest
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 		sent = append(sent, r)
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	}))
@@ -139,7 +135,7 @@ func TestLiveActivityOwnNextCardIsNotEndedWithThePreviousLifecycle(t *testing.T)
 		t.Helper()
 		req := activityRequest(h, baby, id)
 		req.Scope.KindRaw, req.Token, req.TimerID = "sleep", token, &timer
-		if _, err := service.RegisterActivity(t.Context(), h.Owner, req); err != nil {
+		if _, err := reg.activity(t, t.Context(), h.AccessToken("owner"), req); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -179,16 +175,14 @@ func TestLiveActivityOwnNextCardIsNotEndedWithThePreviousLifecycle(t *testing.T)
 func TestLiveActivityServerRetiredDuplicateReportKeepsTheSurvivor(t *testing.T) {
 	for _, reported := range []string{"ended", "dismissed"} {
 		t.Run(reported, func(t *testing.T) {
-			h := testkit.New(t)
-			baby := seedBaby(t, h)
-			service := NewService(h.Security, familyResolver{h.Family}, topic)
-			if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+			h, dirty, reg := workerHarness(t)
+			baby := workerBaby(t, h)
+			if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 				t.Fatal(err)
 			}
 			h.StartFeed(t, h.Owner, testkit.TimerA)
-			guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 			var sent []PushRequest
-			w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+			w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 				sent = append(sent, r)
 				return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 			}))
@@ -201,7 +195,7 @@ func TestLiveActivityServerRetiredDuplicateReportKeepsTheSurvivor(t *testing.T) 
 			loser.KnownGenerationID = &generation
 			for _, req := range []protocol.LiveActivityTokenRegistration{activityRequest(h, baby, "a-card"), loser} {
 				req.KnownGenerationID = &generation
-				if _, err := service.RegisterActivity(t.Context(), h.Caregiver, req); err != nil {
+				if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -214,7 +208,7 @@ func TestLiveActivityServerRetiredDuplicateReportKeepsTheSurvivor(t *testing.T) 
 			}
 			// ActivityKit ends the loser; the phone reports it.
 			loser.TokenVersion, loser.State = 2, reported
-			if _, err := service.RegisterActivity(t.Context(), h.Caregiver, loser); err != nil {
+			if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), loser); err != nil {
 				t.Fatal(err)
 			}
 			if workerTokenCount(t, h, `SELECT count(*) FROM live_activity_tokens WHERE activity_id='b-card' AND server_retired`) != 1 {
@@ -296,22 +290,20 @@ func captureDefaultLog(t *testing.T) *logCapture {
 // with its history row — never a token or payload — and every result other
 // than accepted leaves one bounded log line.
 func TestLiveActivityHistoryRecordsResponseClasses(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
 	h.StartFeed(t, h.Owner, testkit.TimerA)
 	logs := captureDefaultLog(t)
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 	results := []PushResult{
 		{HTTPStatus: 200, Classification: Accepted},
 		{HTTPStatus: 503, Reason: "ServiceUnavailable", Classification: Retryable},
 		{HTTPStatus: 410, Reason: "Unregistered", Classification: InvalidToken},
 	}
 	var sent []PushRequest
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
 		sent = append(sent, r)
 		result := results[0]
 		results = results[1:]
@@ -320,14 +312,14 @@ func TestLiveActivityHistoryRecordsResponseClasses(t *testing.T) {
 	// The shortest retry delay, so the retried attempt is due one clock second
 	// later; the worker's clock is advanced, never slept on.
 	w.Jitter = func(time.Duration) time.Duration { return time.Second }
-	clock := newWorkerClock()
+	clock := newWorkerClock(h)
 	w.Now = clock.Now
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatal(err)
 	}
 	req := activityRequest(h, baby, "card")
 	req.KnownGenerationID = &sent[0].Content.Remote.GenerationID
-	if _, err := service.RegisterActivity(t.Context(), h.Caregiver, req); err != nil {
+	if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
 		t.Fatal(err)
 	}
 	clock.Advance(time.Second)
@@ -362,14 +354,12 @@ func TestLiveActivityHistoryRecordsResponseClasses(t *testing.T) {
 // A wrong bundle ID (topic) is the operator's configuration, not a dead
 // device: it must not wipe start or update tokens, or fence the generation.
 func TestLiveActivityTopicMismatchKeepsTokens(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
 	h.StartFeed(t, h.Owner, testkit.TimerA)
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
 	var mu sync.Mutex
 	reasons := []string{"", "DeviceTokenNotForTopic"}
 	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -389,8 +379,8 @@ func TestLiveActivityTopicMismatchKeepsTokens(t *testing.T) {
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	defer server.Close()
-	transport := newAPNSTransport("TEAM123456", "KEY1234567", "com.example.baby", testAPNSKey(t), server.Client(), server.URL, server.URL)
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transport)
+	transport := testAPNSTransport(t, server, nil)
+	w := newTestWorker(t, h, dirty, h.Authority, transport)
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +390,7 @@ func TestLiveActivityTopicMismatchKeepsTokens(t *testing.T) {
 	}
 	req := activityRequest(h, baby, "card")
 	req.KnownGenerationID = &generation
-	if _, err := service.RegisterActivity(t.Context(), h.Caregiver, req); err != nil {
+	if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
 		t.Fatal(err)
 	}
 	nextWorkerSecond()
@@ -429,46 +419,26 @@ type failingGuard struct {
 	err          error
 }
 
-func (g failingGuard) WithLiveActivitySnapshot(ctx context.Context, s security.LiveActivitySubject, run func(pgx.Tx, access.Grant) error) error {
+func (g failingGuard) WithLiveActivitySnapshot(ctx context.Context, s authority.LiveActivitySubject, run func(pgx.Tx, access.Grant) error) error {
 	if s.RegistrationID == g.registration {
 		return g.err
 	}
 	return g.SnapshotGuard.WithLiveActivitySnapshot(ctx, s, run)
 }
 
-func registerCaregiverDevices(t *testing.T, h *testkit.Harness, service *Service, count int) {
-	t.Helper()
-	for i := 1; i <= count; i++ {
-		p, err := h.NewDevice("caregiver")
-		if err != nil {
-			t.Fatal(err)
-		}
-		r := deviceRequest()
-		r.InstallationID = fmt.Sprintf("70000000-0000-4000-8000-%012d", i)
-		r.PushToStartToken = fmt.Sprintf("%04x", i)
-		if _, err = service.RegisterDevice(t.Context(), p, r); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if _, err := h.Migrator.Exec(t.Context(), `UPDATE live_activity_delivery SET completed_version=dirty_version WHERE kind='sleep'`); err != nil {
-		t.Fatal(err)
-	}
-}
-
 // One job that fails deterministically is parked with a recorded reason and
 // backs off; it must not stop the worker, and every other job still delivers.
 // Infrastructure failures still stop the worker for its supervisor.
 func TestLiveActivityPerJobFailureIsParked(t *testing.T) {
-	h := testkit.New(t)
-	seedBaby(t, h)
+	h, dirty, reg := workerHarness(t)
+	workerBaby(t, h)
 	h.StartFeed(t, h.Owner, testkit.TimerA)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	registerCaregiverDevices(t, h, service, 2)
+	registerCaregiverDevices(t, h, reg, 2)
 	var failing string
 	if err := h.Migrator.QueryRow(t.Context(), `SELECT registration_id::text FROM live_activity_registration_index WHERE installation_id='70000000-0000-4000-8000-000000000001'`).Scan(&failing); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
+	snapshot := h.Authority
 	var mu sync.Mutex
 	var sent []PushRequest
 	transport := transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
@@ -478,7 +448,7 @@ func TestLiveActivityPerJobFailureIsParked(t *testing.T) {
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	})
 	logs := captureDefaultLog(t)
-	w := NewWorker(NewQueue(h.LiveActivity), failingGuard{snapshot, failing, errors.New("invalid stored projection input")}, transport)
+	w := newTestWorker(t, h, dirty, failingGuard{snapshot, failing, errors.New("invalid stored projection input")}, transport)
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatalf("a per-job failure stopped the worker: %v", err)
 	}
@@ -502,8 +472,8 @@ func TestLiveActivityPerJobFailureIsParked(t *testing.T) {
 	if _, err := h.Migrator.Exec(t.Context(), `UPDATE live_activity_delivery SET not_before=clock_timestamp() WHERE registration_id=$1`, failing); err != nil {
 		t.Fatal(err)
 	}
-	w = NewWorker(NewQueue(h.LiveActivity), failingGuard{snapshot, failing, security.ErrUnavailable}, transport)
-	if err := w.RunOnce(t.Context(), 32); !errors.Is(err, security.ErrUnavailable) {
+	w = newTestWorker(t, h, dirty, failingGuard{snapshot, failing, authority.ErrUnavailable}, transport)
+	if err := w.RunOnce(t.Context(), 32); !errors.Is(err, authority.ErrUnavailable) {
 		t.Fatalf("infrastructure failure=%v", err)
 	}
 }
@@ -522,16 +492,15 @@ func TestLiveActivityTransientConflictIsRetriedPromptlyNotParked(t *testing.T) {
 	if IsTransientConflict(&pgconn.PgError{Code: "42P01"}) || IsTransientConflict(errors.New("x")) {
 		t.Fatal("a non-conflict classified as transient")
 	}
-	h := testkit.New(t)
-	seedBaby(t, h)
+	h, dirty, reg := workerHarness(t)
+	workerBaby(t, h)
 	h.StartFeed(t, h.Owner, testkit.TimerA)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	registerCaregiverDevices(t, h, service, 2)
+	registerCaregiverDevices(t, h, reg, 2)
 	var racing string
 	if err := h.Migrator.QueryRow(t.Context(), `SELECT registration_id::text FROM live_activity_registration_index WHERE installation_id='70000000-0000-4000-8000-000000000001'`).Scan(&racing); err != nil {
 		t.Fatal(err)
 	}
-	snapshot, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
+	snapshot := h.Authority
 	var mu sync.Mutex
 	var sent []PushRequest
 	transport := transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
@@ -542,7 +511,7 @@ func TestLiveActivityTransientConflictIsRetriedPromptlyNotParked(t *testing.T) {
 	})
 	logs := captureDefaultLog(t)
 	conflict := &pgconn.PgError{Code: "40001", Message: "could not serialize access due to concurrent update"}
-	w := NewWorker(NewQueue(h.LiveActivity), failingGuard{snapshot, racing, conflict}, transport)
+	w := newTestWorker(t, h, dirty, failingGuard{snapshot, racing, conflict}, transport)
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatalf("a transient conflict stopped the worker: %v", err)
 	}
@@ -572,7 +541,7 @@ func TestLiveActivityTransientConflictIsRetriedPromptlyNotParked(t *testing.T) {
 	if _, err := h.Migrator.Exec(t.Context(), `UPDATE live_activity_delivery SET not_before=clock_timestamp() WHERE registration_id=$1`, racing); err != nil {
 		t.Fatal(err)
 	}
-	w = NewWorker(NewQueue(h.LiveActivity), snapshot, transport)
+	w = newTestWorker(t, h, dirty, snapshot, transport)
 	if err := w.RunOnce(t.Context(), 32); err != nil {
 		t.Fatal(err)
 	}
@@ -585,15 +554,13 @@ func TestLiveActivityTransientConflictIsRetriedPromptlyNotParked(t *testing.T) {
 // per one-second poll. The runners' tickers are replaced by ones that never
 // fire, so every send observed can only come from the first pass.
 func TestLiveActivityRunDrainsABacklogWithinOnePoll(t *testing.T) {
-	h := testkit.New(t)
-	seedBaby(t, h)
+	h, dirty, reg := workerHarness(t)
+	workerBaby(t, h)
 	h.StartFeed(t, h.Owner, testkit.TimerA)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
 	const backlog = 4
-	registerCaregiverDevices(t, h, service, backlog)
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
+	registerCaregiverDevices(t, h, reg, backlog)
 	arrived := make(chan struct{}, backlog)
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(context.Context, PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(context.Context, PushRequest) (PushResult, error) {
 		arrived <- struct{}{}
 		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
 	}))
@@ -604,7 +571,7 @@ func TestLiveActivityRunDrainsABacklogWithinOnePoll(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
-	go func() { done <- w.Run(ctx) }()
+	go func() { done <- w.Run(ctx, nil) }()
 	defer func() {
 		cancel()
 		<-done
@@ -625,10 +592,9 @@ func TestLiveActivityRunDrainsABacklogWithinOnePoll(t *testing.T) {
 // Start, end and every control-changing update go at priority 10; a cosmetic
 // edit in the same phase goes at 5, on the wire.
 func TestLiveActivityPriorityFollowsControlChanges(t *testing.T) {
-	h := testkit.New(t)
-	baby := seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
 	var mu sync.Mutex
@@ -642,10 +608,9 @@ func TestLiveActivityPriorityFollowsControlChanges(t *testing.T) {
 	server.EnableHTTP2 = true
 	server.StartTLS()
 	defer server.Close()
-	transport := newAPNSTransport("TEAM123456", "KEY1234567", "com.example.baby", testAPNSKey(t), server.Client(), server.URL, server.URL)
+	transport := testAPNSTransport(t, server, nil)
 	var events []string
-	guard, _ := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
-	w := NewWorker(NewQueue(h.LiveActivity), guard, transportFunc(func(ctx context.Context, r PushRequest) (PushResult, error) {
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(ctx context.Context, r PushRequest) (PushResult, error) {
 		events = append(events, r.Event+"/"+r.Content.Phase)
 		return transport.Send(ctx, r)
 	}))
@@ -664,14 +629,15 @@ func TestLiveActivityPriorityFollowsControlChanges(t *testing.T) {
 	}
 	req := activityRequest(h, baby, "card")
 	req.KnownGenerationID = &generation
-	if _, err := service.RegisterActivity(t.Context(), h.Caregiver, req); err != nil {
+	if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
 		t.Fatal(err)
 	}
 	step() // confirmation of the pushed card
 	h.RenameBaby(t, baby, "renamed")
 	step() // cosmetic: same phase and kind
 	workerStopFeed(t, h, baby, testkit.TimerA)
-	h.ExecFamily(t, `UPDATE feed_entries SET started_at=clock_timestamp()-interval '20 minutes',ended_at=clock_timestamp()-interval '10 minutes' WHERE id='88888888-8888-4888-8888-888888888888'`)
+	now := h.DatabaseNow()
+	retimeFeed(t, h, dirty, stoppedFeedRecord, now.Add(-20*time.Minute), now.Add(-10*time.Minute))
 	step() // running -> feed break
 	mu.Lock()
 	got := strings.Join(wire, ",")

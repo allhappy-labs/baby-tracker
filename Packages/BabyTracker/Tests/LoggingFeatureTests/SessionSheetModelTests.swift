@@ -53,14 +53,14 @@ private func feedSessions(_ store: BabyStore, _ baby: UUID) throws -> [FeedingSe
         #expect(l.target == .breast(feedID: left.id, componentID: left.components[0].id))
         #expect(l.icon == .breastLeft)
         #expect(l.label == "Left")
-        #expect(l.detail == "\(clockText(base, zone: zone)) · 12m")
+        #expect(l.detail == "\(clockText(base, zone: zone))–\(clockText(base.addingTimeInterval(12 * 60), zone: zone))")
         #expect(l.gapBefore == nil)
         #expect(!l.canSplitBefore)
 
         #expect(r.target == .breast(feedID: right.id, componentID: right.components[0].id))
         #expect(r.icon == .breastRight)
         #expect(r.label == "Right")
-        #expect(r.detail == "\(clockText(base.addingTimeInterval(15 * 60), zone: zone)) · 15m")
+        #expect(r.detail == "\(clockText(base.addingTimeInterval(15 * 60), zone: zone))–\(clockText(base.addingTimeInterval(30 * 60), zone: zone))")
         #expect(r.gapBefore == "3m later")
         #expect(r.canSplitBefore)
 
@@ -374,7 +374,8 @@ private func feedSessions(_ store: BabyStore, _ baby: UUID) throws -> [FeedingSe
         #expect(added.startedAt == first.endedAt)
         #expect(added.endedAt == clock.now)
         #expect(added.components.first?.durationSeconds == 30)
-        #expect(model.parts.last?.detail == "\(clockText(added.startedAt, zone: added.timeZoneID)) · 30s")
+        #expect(model.parts.last?.detail
+            == "\(clockText(added.startedAt, zone: added.timeZoneID))–\(clockText(added.endedAt!, zone: added.timeZoneID))")
     }
 
     /// Final review M6: a part running on from the session started after

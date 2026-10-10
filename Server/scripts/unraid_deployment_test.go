@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"testing"
 
@@ -73,10 +74,14 @@ func TestUnraidDeploymentIsIsolatedAndPinned(t *testing.T) {
 		t.Fatalf("app publishes host ports: %v", app.Ports)
 	}
 
-	for _, volume := range []string{"database", "security_ledger", "ledger_head"} {
-		device := compose.Volumes[volume].DriverOpts["device"]
-		if !strings.HasPrefix(device, "${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/") {
-			t.Errorf("%s is not rooted below BT_DEPLOY_ROOT: %q", volume, device)
+	if device := compose.Volumes["database"].DriverOpts["device"]; !strings.HasPrefix(device, "${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/") {
+		t.Errorf("database is not rooted below BT_DEPLOY_ROOT: %q", device)
+	}
+	// The legacy file ledger's volumes went with the importer (Phase 4
+	// Task 29): the cutover deleted the homelab's directories (R7).
+	for volume := range compose.Volumes {
+		if volume != "database" {
+			t.Errorf("compose declares volume %q: only database remains", volume)
 		}
 	}
 
@@ -90,6 +95,78 @@ func TestUnraidDeploymentIsIsolatedAndPinned(t *testing.T) {
 			t.Errorf("compose omits %q", required)
 		}
 	}
+}
+
+// TestUnraidPushOverlayCarriesNoLiveActivityWorkerLogin pins push.yaml, the
+// overlay that replaces main's live-activity-push.yaml at the cutover: the
+// new server refuses BT_LIVE_ACTIVITY_DATABASE_URL and
+// BT_LIVE_ACTIVITY_DATABASE_URL_FILE at startup (config.LoadLiveActivity,
+// Task 7), its worker runs on the maintenance credential, so the overlay
+// mounts the one APNs key and nothing else, and names no live_activity_*
+// secret.
+func TestUnraidPushOverlayCarriesNoLiveActivityWorkerLogin(t *testing.T) {
+	encoded, err := os.ReadFile("../deploy/unraid/push.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var overlay struct {
+		Services map[string]struct {
+			Environment map[string]string `yaml:"environment"`
+			Secrets     []string          `yaml:"secrets"`
+		} `yaml:"services"`
+		Secrets map[string]struct {
+			File string `yaml:"file"`
+		} `yaml:"secrets"`
+	}
+	if err := yaml.Unmarshal(encoded, &overlay); err != nil {
+		t.Fatal(err)
+	}
+	if len(overlay.Services) != 1 {
+		t.Fatalf("push.yaml configures services %v; only app", unraidSortedKeys(overlay.Services))
+	}
+	app, ok := overlay.Services["app"]
+	if !ok {
+		t.Fatal("push.yaml does not configure app")
+	}
+	for _, refused := range []string{"BT_LIVE_ACTIVITY_DATABASE_URL", "BT_LIVE_ACTIVITY_DATABASE_URL_FILE"} {
+		if _, set := app.Environment[refused]; set {
+			t.Errorf("push.yaml sets %s, which the new server refuses at startup", refused)
+		}
+	}
+	for key, want := range map[string]string{
+		"BT_LIVE_ACTIVITY_PUSH_ENABLED": "true",
+		"BT_APNS_WAKES_ENABLED":         "${BT_APNS_WAKES_ENABLED:-false}",
+		"BT_APNS_TEAM_ID":               "${BT_APNS_TEAM_ID:?set BT_APNS_TEAM_ID}",
+		"BT_APNS_KEY_ID":                "${BT_APNS_KEY_ID:?set BT_APNS_KEY_ID}",
+		"BT_APNS_BUNDLE_ID":             "${BT_APNS_BUNDLE_ID:?set BT_APNS_BUNDLE_ID}",
+		"BT_APNS_KEY_FILE":              "/run/secrets/apns_key",
+	} {
+		if got := app.Environment[key]; got != want {
+			t.Errorf("push.yaml app %s=%q, want %q", key, got, want)
+		}
+	}
+	if len(app.Environment) != 6 {
+		t.Errorf("push.yaml app environment has %d keys, want 6: %v", len(app.Environment), unraidSortedKeys(app.Environment))
+	}
+	if len(app.Secrets) != 1 || app.Secrets[0] != "apns_key" {
+		t.Errorf("push.yaml app mounts secrets %v; only apns_key", app.Secrets)
+	}
+	if len(overlay.Secrets) != 1 || overlay.Secrets["apns_key"].File != "${BT_DEPLOY_ROOT:?set BT_DEPLOY_ROOT}/secrets/apns_key.p8" {
+		t.Errorf("push.yaml declares secrets %+v; only apns_key from the deploy root's secrets/apns_key.p8", overlay.Secrets)
+	}
+	text := string(encoded)
+	if strings.Contains(text, "live_activity_") || strings.Contains(text, "DATABASE_URL") {
+		t.Error("push.yaml names a Live Activity worker secret or a database URL")
+	}
+}
+
+func unraidSortedKeys[V any](m map[string]V) []string {
+	out := make([]string, 0, len(m))
+	for key := range m {
+		out = append(out, key)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func TestUnraidServeConfigTerminatesHTTPSOnlyForBabySync(t *testing.T) {
@@ -118,7 +195,7 @@ func TestUnraidServeConfigTerminatesHTTPSOnlyForBabySync(t *testing.T) {
 }
 
 func TestUnraidScriptsRefuseBroadOrForeignTargets(t *testing.T) {
-	for _, name := range []string{"provision-unraid-secrets.sh", "provision-live-activity-secrets.sh", "verify-unraid-deployment.sh"} {
+	for _, name := range []string{"provision-unraid-secrets.sh", "verify-unraid-deployment.sh"} {
 		path := filepath.Join(".", name)
 		encoded, err := os.ReadFile(path)
 		if err != nil {
@@ -151,6 +228,20 @@ func TestProvisionerRequiresExplicitReviewedSourceUpgrade(t *testing.T) {
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("source upgrade guard omits %q", required)
+		}
+	}
+}
+
+// The provisioner creates no legacy file-ledger directory: nothing reads
+// one since the cutover, which deleted the homelab's (R7).
+func TestProvisionerCreatesNoLedgerDirectories(t *testing.T) {
+	encoded, err := os.ReadFile("provision-unraid-secrets.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, retired := range []string{"security-ledger", "ledger-head"} {
+		if strings.Contains(string(encoded), retired) {
+			t.Errorf("provision-unraid-secrets.sh still creates %s", retired)
 		}
 	}
 }

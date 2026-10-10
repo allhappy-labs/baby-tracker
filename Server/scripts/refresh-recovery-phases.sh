@@ -8,18 +8,19 @@ expected_authorization=identity_token_only
 [[ $BT_MODE != hosted ]] || expected_authorization=code_exchange_required
 actual_authorization=$(jq -r '.apple_authorization_mode' <<< "$info")
 [[ $actual_authorization == "$expected_authorization" ]] || { echo "unexpected mode: $actual_authorization expected $expected_authorization" >&2; exit 1; }
-maintenance=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_function_privilege('baby_tracker_export_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE') AND NOT has_function_privilege('baby_tracker_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE') AND NOT has_function_privilege('baby_tracker_projector_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE')")
-[[ $maintenance == t ]] || { echo "maintenance separation failed: $maintenance" >&2; exit 1; }
-# Its initial iteration can precede readiness. Wait for the next real
-# production-cadence iteration; never bypass its gate or invoke cleanup here.
-worker_deadline=$((SECONDS + 330))
-while true; do
-  compose logs --no-color app > "$BT_SECRETS_DIR/recovery-server.log"
-  if grep -q 'identitytest recovery cleanup completed' "$BT_SECRETS_DIR/recovery-server.log"; then break; fi
-  [[ $SECONDS -lt $worker_deadline ]] || { echo "cleanup worker admission missing after bounded wait" >&2; exit 1; }
-  sleep 1
-done
-echo "recovery readiness proof: mode=$BT_MODE capability=present maintenance=isolated cleanup_worker=admitted"
+# Schema 29: receipts live in refresh_receipts, written and pruned inside the
+# authority's own refresh/acknowledgement/revocation transactions. There is no
+# cleanup function or worker left to admit; the maintenance credential only
+# opts the capability in and must hold nothing on the session tables.
+maintenance=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT to_regprocedure('app.cleanup_refresh_recovery_receipts(timestamptz)') IS NULL
+  AND to_regclass('public.refresh_recovery_receipts') IS NULL
+  AND (SELECT relrowsecurity AND relforcerowsecurity FROM pg_class WHERE oid='public.refresh_receipts'::regclass)
+  AND has_table_privilege('baby_tracker_app','public.refresh_receipts','SELECT') AND has_table_privilege('baby_tracker_app','public.refresh_receipts','INSERT')
+  AND has_table_privilege('baby_tracker_app','public.refresh_receipts','DELETE') AND NOT has_table_privilege('baby_tracker_app','public.refresh_receipts','UPDATE,TRUNCATE')
+  AND NOT has_table_privilege('baby_tracker_export_app','public.refresh_receipts','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')
+  AND NOT has_table_privilege('baby_tracker_export_app','public.sessions','SELECT,INSERT,UPDATE,DELETE,TRUNCATE')")
+[[ $maintenance == t ]] || { echo "receipt table separation failed: $maintenance" >&2; exit 1; }
+echo "recovery readiness proof: mode=$BT_MODE capability=present receipts=refresh_receipts(runtime select/insert/delete only, forced RLS) maintenance=no_session_access cleanup=in_transaction"
 
 recovery_restart() {
   local before after
@@ -38,23 +39,53 @@ recovery_restart() {
   # nginx resolves the recreated app endpoint on its own restart.
   compose restart tls >/dev/null
 }
+# The child, its receipt and the session_rotated audit row commit together:
+# a fault before the commit leaves nothing, one after it (or a reply lost on
+# the wire) leaves exactly the committed child and its receipt. No boundary
+# makes the node unready: there is no projection to fall behind.
+receipt_proof_sql() {
+  printf '%s' "SELECT count(*)::text||':'||count(DISTINCT r.child_id)::text||':'||COALESCE(bool_and(
+      (SELECT count(*) FROM sessions c WHERE c.parent_id=r.parent_id)=1
+      AND p.status='consumed' AND p.consumed_attempt_id=r.attempt_id AND p.child_id=r.child_id
+      AND s.status='active' AND s.parent_id=r.parent_id AND s.lineage_root_id=p.lineage_root_id
+      AND r.effective_deadline<=s.deadline_at AND r.refresh_expires_at=s.refresh_expires_at
+      AND EXISTS (SELECT 1 FROM security_audit_events a WHERE a.scope='account' AND a.scope_id=r.account_id AND a.kind='session_rotated'
+        AND a.payload->>'session_id'=r.child_id::text AND a.payload->>'parent_session_id'=r.parent_id::text
+        AND a.payload->>'refresh_attempt_id'=r.attempt_id::text AND a.payload->>'material_digest'=encode(r.material_digest,'hex'))),false)::text
+    FROM refresh_receipts r JOIN sessions s ON s.id=r.child_id JOIN sessions p ON p.id=r.parent_id WHERE r.attempt_id='$1'"
+}
 for server_boundary in before_authority_commit after_authority_commit after_projection lost_response; do
   (cd Server && go run -tags identitytest ./cmd/protocol-e2e-client --base "$base" --state "$state" --phase recovery-bootstrap --recovery-fault "$server_boundary")
   go_attempt=$(jq -r '.Recovery.AttemptID' "$state")
   [[ $go_attempt =~ ^[0-9a-f-]{36}$ ]]
-  before_count=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM refresh_recovery_receipts WHERE attempt_id='$go_attempt'")
+  before_count=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM refresh_receipts WHERE attempt_id='$go_attempt'")
   expected_count=1
-  [[ $server_boundary != before_authority_commit && $server_boundary != after_authority_commit ]] || expected_count=0
-  [[ $before_count == "$expected_count" ]]
+  [[ $server_boundary != before_authority_commit ]] || expected_count=0
+  [[ $before_count == "$expected_count" ]] || { echo "boundary=$server_boundary receipts=$before_count want $expected_count" >&2; exit 1; }
   readiness_status=$(curl --silent --max-time 5 -o /dev/null -w '%{http_code}' "$base/readyz")
-  expected_status=200
-  [[ $server_boundary != after_authority_commit ]] || expected_status=503
-  [[ $readiness_status == "$expected_status" ]]
+  [[ $readiness_status == 200 ]] || { echo "boundary=$server_boundary readiness=$readiness_status" >&2; exit 1; }
   recovery_restart
+  # Lost-acknowledgement retry: the restarted server returns the committed
+  # child, byte for byte, twice, without minting another.
   (cd Server && go run -tags identitytest ./cmd/protocol-e2e-client --base "$base" --state "$state" --phase recovery-verify)
-  go_receipts=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*)::text||':'||count(DISTINCT r.child_session_id)::text||':'||bool_and((SELECT count(*) FROM sessions s WHERE s.parent_session_id=r.parent_session_id)=1 AND sha256(r.material_bytes)=r.projection_material_digest AND EXISTS (SELECT 1 FROM security_audit_events a, jsonb_array_elements(a.event_data->'effects') e WHERE e->>'session_id'=r.child_session_id::text AND e->>'projection_material_digest'=encode(r.projection_material_digest,'hex')))::text FROM refresh_recovery_receipts r WHERE attempt_id='$go_attempt'")
-  [[ $go_receipts == 1:1:true ]]
-  echo "recovery SQL proof: boundary=$server_boundary before_receipts=$before_count before_readiness=$readiness_status after_receipts=$go_receipts"
+  go_receipts=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "$(receipt_proof_sql "$go_attempt")")
+  [[ $go_receipts == 1:1:true ]] || { echo "boundary=$server_boundary receipt proof=$go_receipts" >&2; exit 1; }
+  lineage=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT p.lineage_root_id::text||' '||r.parent_id::text||' '||r.child_id::text||' '||r.account_id::text FROM refresh_receipts r JOIN sessions p ON p.id=r.parent_id WHERE r.attempt_id='$go_attempt'")
+  read -r lineage_root parent_session child_session recovery_account <<< "$lineage"
+  [[ $recovery_account =~ ^[0-9a-f-]{36}$ ]] || { echo "boundary=$server_boundary receipt lineage missing" >&2; exit 1; }
+  # Acknowledgement retires the receipt; then the consumed parent replayed
+  # under another attempt revokes the whole lineage, child included.
+  (cd Server && go run -tags identitytest ./cmd/protocol-e2e-client --base "$base" --state "$state" --phase recovery-reuse)
+  reuse=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT
+      (SELECT count(*) FROM refresh_receipts WHERE attempt_id='$go_attempt' OR parent_id='$parent_session' OR child_id='$child_session')::text||':'||
+      (SELECT count(*) FROM sessions WHERE lineage_root_id='$lineage_root' AND status='active')::text||':'||
+      (SELECT count(*) FROM sessions WHERE parent_id='$parent_session')::text||':'||
+      (SELECT status::text||'/'||COALESCE(revoke_reason::text,'-') FROM sessions WHERE id='$child_session')||':'||
+      (SELECT status::text FROM sessions WHERE id='$parent_session')||':'||
+      (SELECT count(*) FROM security_audit_events WHERE scope='account' AND scope_id='$recovery_account' AND kind='session_revoked'
+        AND payload->>'lineage_root_session_id'='$lineage_root')::text")
+  [[ $reuse == 0:0:1:revoked/refresh_reused:consumed:1 ]] || { echo "boundary=$server_boundary reuse proof=$reuse" >&2; exit 1; }
+  echo "recovery SQL proof: boundary=$server_boundary before_receipts=$before_count before_readiness=$readiness_status after_receipts=$go_receipts after_ack_and_reuse=$reuse"
 done
 
 export BABY_TRACKER_E2E_BASE="$BT_PUBLIC_ORIGIN"
@@ -78,13 +109,13 @@ for boundary in after_decode before_keychain after_keychain after_completion aft
   cat "$bootstrap_log"
   attempt=$(jq -r '.attemptID | ascii_downcase' "$BABY_TRACKER_RECOVERY_DIRECTORY/decoded.json")
   [[ $attempt =~ ^[0-9a-f-]{36}$ ]]
-  receipt_count=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM refresh_recovery_receipts WHERE attempt_id='$attempt'")
+  receipt_count=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM refresh_receipts WHERE attempt_id='$attempt'")
   expected_receipts=1
   [[ $boundary != after_ack ]] || expected_receipts=0
   [[ $receipt_count == "$expected_receipts" ]]
   if [[ $boundary != after_ack ]]; then
-    commitment=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*)::text||':'||bool_and(sha256(r.material_bytes)=r.projection_material_digest AND EXISTS (SELECT 1 FROM security_audit_events a, jsonb_array_elements(a.event_data->'effects') e WHERE e->>'session_id'=r.child_session_id::text AND e->>'projection_material_digest'=encode(r.projection_material_digest,'hex')) AND (SELECT count(*) FROM sessions child WHERE child.parent_session_id=r.parent_session_id)=1 AND r.effective_deadline<=s.absolute_expires_at AND r.refresh_expires_at=s.refresh_expires_at AND s.revoked_at IS NULL)::text FROM refresh_recovery_receipts r JOIN sessions s ON s.session_id=r.child_session_id WHERE r.attempt_id='$attempt'")
-    [[ $commitment == 1:true ]]
+    commitment=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "$(receipt_proof_sql "$attempt")")
+    [[ $commitment == 1:1:true ]] || { echo "boundary=$boundary receipt proof=$commitment" >&2; exit 1; }
   fi
   recovery_restart
   # Wait out the dead process's real persisted 30-second account lease. No
@@ -92,7 +123,7 @@ for boundary in after_decode before_keychain after_keychain after_completion aft
   sleep 31
   (cd Packages/BabyTracker && BABY_TRACKER_RECOVERY_PHASE=verify swift test --filter RefreshRecoveryE2ETests) 2>&1 | tee "$verify_log"
   grep -q "^refresh-recovery proof: completed boundary=$boundary " "$verify_log"
-  remaining=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM refresh_recovery_receipts WHERE attempt_id='$attempt'")
+  remaining=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM refresh_receipts WHERE attempt_id='$attempt'")
   [[ $remaining == 0 ]]
   echo "recovery SQL proof: boundary=$boundary child_receipts_before=$receipt_count receipts_after_ack=$remaining"
 done

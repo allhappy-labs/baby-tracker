@@ -1,0 +1,2080 @@
+{
+  "section_order": [
+    "version",
+    "server_instance_id",
+    "recovery_epoch",
+    "family_id",
+    "captured_at",
+    "high_water",
+    "security_revision",
+    "members",
+    "babies",
+    "feeds",
+    "sleeps",
+    "diapers",
+    "supplements",
+    "growth_profiles",
+    "measurements",
+    "active_timers",
+    "journal",
+    "audit",
+    "attachments"
+  ],
+  "sections": {
+    "active_timers": [
+      {
+        "entity_kind": "timer",
+        "meta": {
+          "id": "50000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 4,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T15:10:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      },
+      {
+        "entity_kind": "timer",
+        "meta": {
+          "id": "50000000-0000-4000-8000-000000000002",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "client_mutation_time": "2026-09-20T16:45:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      },
+      {
+        "entity_kind": "timer",
+        "meta": {
+          "id": "50000000-0000-4000-8000-000000000003",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T19:07:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "completed_components": [
+            {
+              "id": "31000000-0000-4000-8000-0000000000d1",
+              "kind": "breast",
+              "side": "left",
+              "seconds": 300,
+              "started_at": "2026-09-20T19:00:00.000000Z",
+              "ended_at": "2026-09-20T19:05:00.000000Z"
+            },
+            {
+              "id": "31000000-0000-4000-8000-0000000000d2",
+              "kind": "bottle",
+              "seconds": 120,
+              "volume_ml": 40,
+              "contents": "breast_milk",
+              "started_at": "2026-09-20T19:05:00.000000Z",
+              "ended_at": "2026-09-20T19:07:00.000000Z"
+            }
+          ],
+          "current_bottle_started_at": null,
+          "current_side": "right",
+          "current_side_started_at": "2026-09-20T19:07:00.000000Z",
+          "session_id": null,
+          "started_at": "2026-09-20T19:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich",
+          "timer_kind": "feed"
+        }
+      },
+      {
+        "entity_kind": "timer",
+        "meta": {
+          "id": "50000000-0000-4000-8000-000000000004",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "client_mutation_time": "2026-09-20T20:00:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "completed_components": [],
+          "current_bottle_started_at": null,
+          "current_side": null,
+          "current_side_started_at": null,
+          "session_id": null,
+          "started_at": "2026-09-20T20:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich",
+          "timer_kind": "sleep"
+        }
+      },
+      {
+        "entity_kind": "timer",
+        "meta": {
+          "id": "50000000-0000-4000-8000-0000000000b2",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      }
+    ],
+    "attachments": {
+      "version": "v1",
+      "attachments": []
+    },
+    "audit": [
+      {
+        "revision": 1,
+        "kind": "family_created",
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "at": "2026-09-21T12:00:00.000000Z"
+      },
+      {
+        "revision": 2,
+        "kind": "invitation_created",
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "at": "2026-09-21T12:00:00.000000Z"
+      },
+      {
+        "revision": 3,
+        "kind": "invitation_redeemed",
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "at": "2026-09-21T12:00:00.000000Z"
+      }
+    ],
+    "babies": [
+      {
+        "entity_kind": "baby",
+        "meta": {
+          "id": "10000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T12:34:56.123456Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "name": "Élie",
+          "birth_date": "2026-01-12",
+          "sort_order": 0
+        }
+      },
+      {
+        "entity_kind": "baby",
+        "meta": {
+          "id": "10000000-0000-4000-8000-0000000000b2",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      }
+    ],
+    "captured_at": "2026-09-21T12:00:00.000000Z",
+    "diapers": [
+      {
+        "entity_kind": "diaper",
+        "meta": {
+          "id": "40000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "client_mutation_time": "2026-09-20T15:06:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      }
+    ],
+    "family_id": "f0000000-0000-4000-8000-0000000000f1",
+    "feeds": [
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 3,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T12:45:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "components": [
+            {
+              "id": "31000000-0000-4000-8000-000000000001",
+              "kind": "bottle",
+              "volume_ml": 1,
+              "contents": "formula"
+            }
+          ],
+          "ended_at": null,
+          "feeding_session_id": null,
+          "kind": "bottle",
+          "note": "owner's stale edit",
+          "started_at": "2026-09-20T12:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich"
+        }
+      },
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-000000000002",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T12:34:56.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "components": [
+            {
+              "id": "31000000-0000-4000-8000-000000000002",
+              "kind": "breast",
+              "side": "left",
+              "seconds": 300
+            },
+            {
+              "id": "31000000-0000-4000-8000-000000000003",
+              "kind": "breast",
+              "side": "right",
+              "seconds": 300
+            }
+          ],
+          "ended_at": "2026-09-20T12:10:00.000000Z",
+          "feeding_session_id": null,
+          "kind": "breast",
+          "note": null,
+          "started_at": "2026-09-20T12:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich"
+        }
+      },
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-000000000003",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T13:00:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "components": [
+            {
+              "id": "31000000-0000-4000-8000-000000000006",
+              "kind": "solids",
+              "foods": [
+                "banana",
+                "yogurt"
+              ],
+              "amount": "some"
+            }
+          ],
+          "ended_at": null,
+          "feeding_session_id": null,
+          "kind": "solids",
+          "note": "Lunch 🍌 \u0026 yogurt",
+          "started_at": "2026-09-20T13:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich"
+        }
+      },
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-000000000004",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T13:10:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "components": [
+            {
+              "id": "31000000-0000-4000-8000-000000000004",
+              "kind": "breast",
+              "side": "left",
+              "seconds": 300
+            },
+            {
+              "id": "31000000-0000-4000-8000-000000000005",
+              "kind": "bottle",
+              "volume_ml": 60,
+              "contents": "breast_milk"
+            }
+          ],
+          "ended_at": "2026-09-20T13:10:00.000000Z",
+          "feeding_session_id": null,
+          "kind": "breast",
+          "note": "Top-up",
+          "started_at": "2026-09-20T13:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich"
+        }
+      },
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-000000000060",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T15:10:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "components": [
+            {
+              "id": "31000000-0000-4000-8000-000000000060",
+              "kind": "bottle",
+              "seconds": 300,
+              "volume_ml": 95,
+              "contents": "breast_milk",
+              "started_at": "2026-09-20T15:00:00.000000Z",
+              "ended_at": "2026-09-20T15:05:00.000000Z"
+            }
+          ],
+          "ended_at": "2026-09-20T15:10:00.000000Z",
+          "feeding_session_id": null,
+          "kind": "bottle",
+          "note": null,
+          "started_at": "2026-09-20T14:58:00.000000Z",
+          "time_zone_id": "Europe/Zurich"
+        }
+      },
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-0000000000b2",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      },
+      {
+        "entity_kind": "feed",
+        "meta": {
+          "id": "20000000-0000-4000-8000-0000000000c1",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T12:34:56.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "components": [
+            {
+              "id": "31000000-0000-4000-8000-0000000000c1",
+              "kind": "breast",
+              "side": "right",
+              "seconds": 300
+            },
+            {
+              "id": "31000000-0000-4000-8000-0000000000c2",
+              "kind": "breast",
+              "side": "left",
+              "seconds": 300
+            }
+          ],
+          "ended_at": "2026-09-20T18:10:00.000000Z",
+          "feeding_session_id": null,
+          "kind": "breast",
+          "note": "imported ✅",
+          "started_at": "2026-09-20T18:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich"
+        }
+      }
+    ],
+    "growth_profiles": [
+      {
+        "entity_kind": "growth_profile",
+        "meta": {
+          "id": "2742cf11-d3ad-51bb-bbfa-24147f4b0aae",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "reference_sex": "girls",
+          "expected_due_date": null
+        }
+      },
+      {
+        "entity_kind": "growth_profile",
+        "meta": {
+          "id": "a7312a58-62d2-5d11-9cbb-ab7ed7c33c51",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      }
+    ],
+    "high_water": {
+      "server_instance_id": "50000000-0000-4000-8000-000000000001",
+      "recovery_epoch": 1,
+      "family_id": "f0000000-0000-4000-8000-0000000000f1",
+      "sequence": 37
+    },
+    "journal": [
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 1
+        },
+        "entity_kind": "baby",
+        "entity_id": "10000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "baby",
+          "meta": {
+            "id": "10000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.123456Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "name": "Élie",
+            "birth_date": "2026-01-12",
+            "sort_order": 0
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 2
+        },
+        "entity_kind": "baby",
+        "entity_id": "10000000-0000-4000-8000-0000000000b2",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "baby",
+          "meta": {
+            "id": "10000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:35:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "name": "Zoë \u003cb\u003e\u0026\u003c/b\u003e",
+            "birth_date": "2026-02-01",
+            "sort_order": 1
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 3
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000002",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000002",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000002",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300
+              },
+              {
+                "id": "31000000-0000-4000-8000-000000000003",
+                "kind": "breast",
+                "side": "right",
+                "seconds": 300
+              }
+            ],
+            "ended_at": "2026-09-20T12:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "breast",
+            "note": null,
+            "started_at": "2026-09-20T12:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 4
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.123456Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000001",
+                "kind": "bottle",
+                "volume_ml": 1,
+                "contents": "formula"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": null,
+            "started_at": "2026-09-20T12:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 5
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000004",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000004",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T13:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000004",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300
+              },
+              {
+                "id": "31000000-0000-4000-8000-000000000005",
+                "kind": "bottle",
+                "volume_ml": 60,
+                "contents": "breast_milk"
+              }
+            ],
+            "ended_at": "2026-09-20T13:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "breast",
+            "note": "Top-up",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 6
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000003",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000003",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T13:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000006",
+                "kind": "solids",
+                "foods": [
+                  "banana",
+                  "yogurt"
+                ],
+                "amount": "some"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "solids",
+            "note": "Lunch 🍌 \u0026 yogurt",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 7
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000001",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "update",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T12:40:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000001",
+                "kind": "bottle",
+                "volume_ml": 1,
+                "contents": "formula"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": "line\u2028sep \u003cscript\u003e\u0026",
+            "started_at": "2026-09-20T12:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 8
+        },
+        "entity_kind": "sleep",
+        "entity_id": "30000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "sleep",
+          "meta": {
+            "id": "30000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "ended_at": "2026-09-20T14:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "note": null,
+            "kind_override": "nap",
+            "sleep_session_id": null
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 9
+        },
+        "entity_kind": "diaper",
+        "entity_id": "40000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "diaper",
+          "meta": {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T14:10:00.000000Z",
+            "ended_at": null,
+            "time_zone_id": "Europe/Zurich",
+            "note": null,
+            "contents": "mixed",
+            "consistency": "soft",
+            "color": "mustard"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 10
+        },
+        "entity_kind": "supplement",
+        "entity_id": "60000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "supplement",
+          "meta": {
+            "id": "60000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T14:10:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "name": "Vitamin D",
+            "note": null,
+            "logged_at": "2026-09-20T15:00:00.000000Z"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 11
+        },
+        "entity_kind": "growth_profile",
+        "entity_id": "2742cf11-d3ad-51bb-bbfa-24147f4b0aae",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "growth_profile",
+          "meta": {
+            "id": "2742cf11-d3ad-51bb-bbfa-24147f4b0aae",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "reference_sex": "girls",
+            "expected_due_date": null
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 12
+        },
+        "entity_kind": "measurement",
+        "entity_id": "70000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "measurement",
+          "meta": {
+            "id": "70000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "measured_at": "2026-09-20T14:10:00.000000Z",
+            "logged_at": "2026-09-20T15:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "weight_kg": 7.125,
+            "length_cm": 65.5,
+            "head_circumference_cm": null,
+            "length_position": "lying"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 13
+        },
+        "entity_kind": "supplement",
+        "entity_id": "60000000-0000-4000-8000-000000000001",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "update",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "supplement",
+          "meta": {
+            "id": "60000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T15:05:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T14:10:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "name": "Vitamin D",
+            "note": "dose\u2029given 💊 \u003e half",
+            "logged_at": "2026-09-20T15:00:00.000000Z"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 14
+        },
+        "entity_kind": "diaper",
+        "entity_id": "40000000-0000-4000-8000-000000000001",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "diaper",
+          "meta": {
+            "id": "40000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T15:06:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 15
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000001",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "timer_start",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [],
+            "current_bottle_started_at": "2026-09-20T15:00:00.000000Z",
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T15:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 16
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000001",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "timer_finish_bottle",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:05:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000060",
+                "kind": "bottle",
+                "seconds": 300,
+                "volume_ml": 90,
+                "contents": "formula",
+                "started_at": "2026-09-20T15:00:00.000000Z",
+                "ended_at": "2026-09-20T15:05:00.000000Z"
+              }
+            ],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T15:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 17
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000001",
+        "entity_version": 3,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "update",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 3,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:07:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000060",
+                "kind": "bottle",
+                "seconds": 300,
+                "volume_ml": 95,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T15:00:00.000000Z",
+                "ended_at": "2026-09-20T15:05:00.000000Z"
+              }
+            ],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T14:58:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 18
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000001",
+        "entity_version": 4,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "timer_stop",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 4,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 19
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000060",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "timer_stop",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000060",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000060",
+                "kind": "bottle",
+                "seconds": 300,
+                "volume_ml": 95,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T15:00:00.000000Z",
+                "ended_at": "2026-09-20T15:05:00.000000Z"
+              }
+            ],
+            "ended_at": "2026-09-20T15:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": null,
+            "started_at": "2026-09-20T14:58:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 20
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000002",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "timer_start",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000002",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T16:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T16:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "sleep"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 21
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000002",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "timer_stop",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000002",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T16:45:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 22
+        },
+        "entity_kind": "sleep",
+        "entity_id": "30000000-0000-4000-8000-000000000070",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "timer_stop",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "sleep",
+          "meta": {
+            "id": "30000000-0000-4000-8000-000000000070",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T16:45:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "started_at": "2026-09-20T16:00:00.000000Z",
+            "ended_at": "2026-09-20T16:45:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "note": "Woke up happy 😴 \"quiet\"",
+            "kind_override": "nap",
+            "sleep_session_id": null
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 23
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-000000000001",
+        "entity_version": 3,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "update",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-000000000001",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 3,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:45:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-000000000001",
+                "kind": "bottle",
+                "volume_ml": 1,
+                "contents": "formula"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": "owner's stale edit",
+            "started_at": "2026-09-20T12:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 24
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-0000000000b2",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.123456Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-0000000000b2",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000b2",
+                "kind": "bottle",
+                "volume_ml": 120,
+                "contents": "formula"
+              }
+            ],
+            "ended_at": null,
+            "feeding_session_id": null,
+            "kind": "bottle",
+            "note": null,
+            "started_at": "2026-09-20T17:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 25
+        },
+        "entity_kind": "sleep",
+        "entity_id": "30000000-0000-4000-8000-0000000000b2",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "sleep",
+          "meta": {
+            "id": "30000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-0000000000b2",
+            "started_at": "2026-09-20T13:00:00.000000Z",
+            "ended_at": "2026-09-20T14:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "note": null,
+            "kind_override": "nap",
+            "sleep_session_id": null
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 26
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-0000000000b2",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "timer_start",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T15:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-0000000000b2",
+            "completed_components": [],
+            "current_bottle_started_at": null,
+            "current_side": "left",
+            "current_side_started_at": "2026-09-20T15:00:00.000000Z",
+            "session_id": null,
+            "started_at": "2026-09-20T15:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 27
+        },
+        "entity_kind": "growth_profile",
+        "entity_id": "a7312a58-62d2-5d11-9cbb-ab7ed7c33c51",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "growth_profile",
+          "meta": {
+            "id": "a7312a58-62d2-5d11-9cbb-ab7ed7c33c51",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-0000000000b2",
+            "reference_sex": "boys",
+            "expected_due_date": "2026-02-08"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 28
+        },
+        "entity_kind": "measurement",
+        "entity_id": "70000000-0000-4000-8000-0000000000b2",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "measurement",
+          "meta": {
+            "id": "70000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-0000000000b2",
+            "measured_at": "2026-09-20T14:10:00.000000Z",
+            "logged_at": "2026-09-20T15:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "weight_kg": 7.125,
+            "length_cm": 65.5,
+            "head_circumference_cm": null,
+            "length_position": "lying"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 29
+        },
+        "entity_kind": "baby",
+        "entity_id": "10000000-0000-4000-8000-0000000000b2",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "baby",
+          "meta": {
+            "id": "10000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 30
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-0000000000b2",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 31
+        },
+        "entity_kind": "sleep",
+        "entity_id": "30000000-0000-4000-8000-0000000000b2",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "sleep",
+          "meta": {
+            "id": "30000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 32
+        },
+        "entity_kind": "growth_profile",
+        "entity_id": "a7312a58-62d2-5d11-9cbb-ab7ed7c33c51",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "growth_profile",
+          "meta": {
+            "id": "a7312a58-62d2-5d11-9cbb-ab7ed7c33c51",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 33
+        },
+        "entity_kind": "measurement",
+        "entity_id": "70000000-0000-4000-8000-0000000000b2",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "measurement",
+          "meta": {
+            "id": "70000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 34
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-0000000000b2",
+        "entity_version": 2,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "delete",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-0000000000b2",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 2,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+          },
+          "payload": null
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 35
+        },
+        "entity_kind": "feed",
+        "entity_id": "20000000-0000-4000-8000-0000000000c1",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "create",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "feed",
+          "meta": {
+            "id": "20000000-0000-4000-8000-0000000000c1",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T12:34:56.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000c1",
+                "kind": "breast",
+                "side": "right",
+                "seconds": 300
+              },
+              {
+                "id": "31000000-0000-4000-8000-0000000000c2",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300
+              }
+            ],
+            "ended_at": "2026-09-20T18:10:00.000000Z",
+            "feeding_session_id": null,
+            "kind": "breast",
+            "note": "imported ✅",
+            "started_at": "2026-09-20T18:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 36
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000003",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "device_id": "d0000000-0000-4000-8000-0000000000d1",
+        "operation": "timer_start",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000003",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+            "client_mutation_time": "2026-09-20T19:07:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [
+              {
+                "id": "31000000-0000-4000-8000-0000000000d1",
+                "kind": "breast",
+                "side": "left",
+                "seconds": 300,
+                "started_at": "2026-09-20T19:00:00.000000Z",
+                "ended_at": "2026-09-20T19:05:00.000000Z"
+              },
+              {
+                "id": "31000000-0000-4000-8000-0000000000d2",
+                "kind": "bottle",
+                "seconds": 120,
+                "volume_ml": 40,
+                "contents": "breast_milk",
+                "started_at": "2026-09-20T19:05:00.000000Z",
+                "ended_at": "2026-09-20T19:07:00.000000Z"
+              }
+            ],
+            "current_bottle_started_at": null,
+            "current_side": "right",
+            "current_side_started_at": "2026-09-20T19:07:00.000000Z",
+            "session_id": null,
+            "started_at": "2026-09-20T19:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "feed"
+          }
+        }
+      },
+      {
+        "cursor": {
+          "server_instance_id": "50000000-0000-4000-8000-000000000001",
+          "recovery_epoch": 1,
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "sequence": 37
+        },
+        "entity_kind": "timer",
+        "entity_id": "50000000-0000-4000-8000-000000000004",
+        "entity_version": 1,
+        "actor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "device_id": "d0000000-0000-4000-8000-0000000000d2",
+        "operation": "timer_start",
+        "accepted_at": "2026-09-21T12:00:00.000000Z",
+        "optional": false,
+        "snapshot_or_tombstone": {
+          "entity_kind": "timer",
+          "meta": {
+            "id": "50000000-0000-4000-8000-000000000004",
+            "family_id": "f0000000-0000-4000-8000-0000000000f1",
+            "entity_version": 1,
+            "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+            "client_mutation_time": "2026-09-20T20:00:00.000000Z",
+            "accepted_at": "2026-09-21T12:00:00.000000Z",
+            "tombstoned_at": null
+          },
+          "payload": {
+            "baby_id": "10000000-0000-4000-8000-000000000001",
+            "completed_components": [],
+            "current_bottle_started_at": null,
+            "current_side": null,
+            "current_side_started_at": null,
+            "session_id": null,
+            "started_at": "2026-09-20T20:00:00.000000Z",
+            "time_zone_id": "Europe/Zurich",
+            "timer_kind": "sleep"
+          }
+        }
+      }
+    ],
+    "measurements": [
+      {
+        "entity_kind": "measurement",
+        "meta": {
+          "id": "70000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T14:10:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "measured_at": "2026-09-20T14:10:00.000000Z",
+          "logged_at": "2026-09-20T15:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich",
+          "weight_kg": 7.125,
+          "length_cm": 65.5,
+          "head_circumference_cm": null,
+          "length_position": "lying"
+        }
+      },
+      {
+        "entity_kind": "measurement",
+        "meta": {
+          "id": "70000000-0000-4000-8000-0000000000b2",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      }
+    ],
+    "members": [
+      {
+        "account_id": "a0000000-0000-4000-8000-0000000000a2",
+        "display_name": "Caregiver",
+        "role": "caregiver",
+        "status": "active"
+      },
+      {
+        "account_id": "a0000000-0000-4000-8000-0000000000a1",
+        "display_name": "Owner",
+        "role": "owner",
+        "status": "active"
+      }
+    ],
+    "recovery_epoch": 1,
+    "security_revision": 3,
+    "server_instance_id": "50000000-0000-4000-8000-000000000001",
+    "sleeps": [
+      {
+        "entity_kind": "sleep",
+        "meta": {
+          "id": "30000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T14:00:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "started_at": "2026-09-20T13:00:00.000000Z",
+          "ended_at": "2026-09-20T14:00:00.000000Z",
+          "time_zone_id": "Europe/Zurich",
+          "note": null,
+          "kind_override": "nap",
+          "sleep_session_id": null
+        }
+      },
+      {
+        "entity_kind": "sleep",
+        "meta": {
+          "id": "30000000-0000-4000-8000-000000000070",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 1,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "client_mutation_time": "2026-09-20T16:45:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "started_at": "2026-09-20T16:00:00.000000Z",
+          "ended_at": "2026-09-20T16:45:00.000000Z",
+          "time_zone_id": "Europe/Zurich",
+          "note": "Woke up happy 😴 \"quiet\"",
+          "kind_override": "nap",
+          "sleep_session_id": null
+        }
+      },
+      {
+        "entity_kind": "sleep",
+        "meta": {
+          "id": "30000000-0000-4000-8000-0000000000b2",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "client_mutation_time": "2026-09-20T17:30:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": "2026-09-21T12:00:00.000000Z"
+        },
+        "payload": null
+      }
+    ],
+    "supplements": [
+      {
+        "entity_kind": "supplement",
+        "meta": {
+          "id": "60000000-0000-4000-8000-000000000001",
+          "family_id": "f0000000-0000-4000-8000-0000000000f1",
+          "entity_version": 2,
+          "creator_account_id": "a0000000-0000-4000-8000-0000000000a1",
+          "last_editor_account_id": "a0000000-0000-4000-8000-0000000000a2",
+          "client_mutation_time": "2026-09-20T15:05:00.000000Z",
+          "accepted_at": "2026-09-21T12:00:00.000000Z",
+          "tombstoned_at": null
+        },
+        "payload": {
+          "baby_id": "10000000-0000-4000-8000-000000000001",
+          "started_at": "2026-09-20T14:10:00.000000Z",
+          "time_zone_id": "Europe/Zurich",
+          "name": "Vitamin D",
+          "note": "dose\u2029given 💊 \u003e half",
+          "logged_at": "2026-09-20T15:00:00.000000Z"
+        }
+      }
+    ],
+    "version": "v1"
+  }
+}

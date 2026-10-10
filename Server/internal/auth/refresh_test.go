@@ -1,15 +1,16 @@
 package auth
 
 import (
-	"bytes"
 	"context"
 	"errors"
-	"fmt"
-	"io/fs"
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"go/types"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -46,43 +47,28 @@ func TestRefreshCanonicalizesSubMicrosecondClockForPostgresRoundTrip(t *testing.
 	}
 }
 
-func TestExpiredConsumedRefreshStillRevokesLineageAndRecordsReceipt(t *testing.T) {
+func TestExpiredConsumedRefreshStillRevokesLineageAndAuditsTheRevocation(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
 	successor, err := h.Service.Refresh(t.Context(), original.RefreshToken)
 	if err != nil {
 		t.Fatal(err)
 	}
-	matched, found, err := h.Service.lookupRefreshAcrossKeys(t.Context(), original.RefreshToken)
-	if err != nil || !found {
-		t.Fatalf("consumed parent found=%t err=%v", found, err)
-	}
-	reuseCommand, err := DeriveRefreshReuseCommand(RefreshDerivationInput{ServerInstanceID: h.instance, AccountID: matched.row.AccountID,
-		DeviceID: matched.row.DeviceID, ParentSessionID: matched.row.SessionID, LineageRootSessionID: matched.row.LineageRootSessionID,
-		RecoveryEpoch: matched.row.RecoveryEpoch, ParentKey: matched.key, ParentDigest: matched.digest})
-	if err != nil {
-		t.Fatal(err)
-	}
-	successorDigest := tokenDigest(h.tokenKeys.Current, "access", successor.AccessToken)
-	successorRow, found, err := h.Service.repository.LookupAccessSession(t.Context(), successorDigest.KeyID, successorDigest.Sum)
-	if err != nil || !found {
-		t.Fatalf("successor found=%t err=%v", found, err)
-	}
+	parentID := h.sessionByRefreshToken(original.RefreshToken)
+	successorID, _, _, _ := h.sessionByAccessToken(successor.AccessToken)
 	h.Clock.Advance(24 * time.Hour)
 	if _, err := h.Service.Refresh(t.Context(), original.RefreshToken); Code(err) != "refresh_reused" {
 		t.Fatalf("code=%s err=%v", Code(err), err)
 	}
-	state, err := h.Service.security.ReadState(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, ok := state.Receipt(matched.row.AccountID, reuseCommand); !ok {
-		t.Fatal("expired consumed refresh did not record the stable reuse receipt")
+	// The reuse revocation is an audited command of its own.
+	var revocations int
+	h.query(`SELECT count(*) FROM security_audit_events WHERE scope='account' AND scope_id=$1 AND kind='session_revoked' AND payload->>'session_id'=$2`,
+		[]any{original.Account.ID, parentID}, &revocations)
+	if revocations != 1 {
+		t.Fatalf("reuse revocation audit rows=%d", revocations)
 	}
 	var status, reason string
-	if err := h.db.Owner.QueryRow(t.Context(), `SELECT status,revoke_reason FROM sessions WHERE session_id=$1`, successorRow.SessionID).Scan(&status, &reason); err != nil {
-		t.Fatal(err)
-	}
+	h.query(`SELECT status::text, revoke_reason FROM sessions WHERE id=$1`, []any{successorID}, &status, &reason)
 	if status != "revoked" || reason != "refresh_reused" {
 		t.Fatalf("successor status=%q reason=%q", status, reason)
 	}
@@ -130,14 +116,15 @@ func TestSelfHostedAbsoluteDeadlineCannotRefresh(t *testing.T) {
 	}
 }
 
+// A lineage whose deadline_at lies beyond the self-hosted year (sign-ins
+// before the cap) is still capped one year after its original sign-in.
 func TestExistingHundredYearSessionIsCappedFromOriginalSignIn(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
-	h.Service.absoluteAge = 100 * 365 * 24 * time.Hour
-	h.Service.refreshTTL = h.Service.absoluteAge
 	issuedAt := h.Clock.Now()
 	bundle := h.Issue()
-	h.Service.absoluteAge = defaultSelfHostedAge
-	h.Service.refreshTTL = defaultSelfHostedAge
+	if n := h.exec(`UPDATE sessions SET refresh_expires_at=$2, deadline_at=$2 WHERE account_id=$1`, bundle.Account.ID, issuedAt.Add(100*365*24*time.Hour)); n != 1 {
+		t.Fatalf("updated %d sessions", n)
+	}
 	h.Clock.Advance(364 * 24 * time.Hour)
 	refreshed, err := h.Service.Refresh(t.Context(), bundle.RefreshToken)
 	if err != nil {
@@ -211,66 +198,19 @@ func TestRefreshRace(t *testing.T) {
 	}
 }
 
-func TestRefreshCASLossRepreparesAtNewRevision(t *testing.T) {
-	h := newSessionFixture(t, config.ModeSelfHosted)
-	original := h.Issue()
-	competitor := h.newCompetingService()
-	challenge, err := h.Identity.Challenge(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	request := identity.ExchangeRequest{CommandID: h.nextID(3), Challenge: challenge.Challenge, IdentityToken: "subject-one",
-		InstallationID: "installation-subject-one", DeviceContinuity: &identity.DeviceContinuityClaim{DeviceID: original.DeviceID, Credential: original.DeviceCredential}}
-	h.FailHeadCASOnce(func() error {
-		if _, exchangeErr := competitor.Exchange(t.Context(), request); exchangeErr != nil {
-			return exchangeErr
-		}
-		h.Clock.Advance(time.Second)
-		return nil
-	})
-	successor, err := h.Service.Refresh(t.Context(), original.RefreshToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if head, err := h.store.Heads.Load(t.Context()); err != nil || head.Revision != 3 {
-		t.Fatalf("head=%+v err=%v", head, err)
-	}
-	var total, commands, projected, inert, finalDigestInInert int
-	var minimumRevision, maximumRevision uint64
-	var firstAccessExpiry, finalAccessExpiry time.Time
-	finalDigest := tokenDigest(h.tokenKeys.Current, "access", successor.AccessToken)
-	if err := h.db.Owner.QueryRow(t.Context(), `SELECT count(*),count(DISTINCT command_id),count(*) FILTER (WHERE projected_at IS NOT NULL),
-		count(*) FILTER (WHERE projected_at IS NULL),count(*) FILTER (WHERE projected_at IS NULL AND access_digest=$1),
-		min(security_revision),max(security_revision),min(access_expires_at),max(access_expires_at)
-		FROM auth_exchange_material WHERE material_kind='refresh'`, finalDigest.Sum[:]).Scan(&total, &commands, &projected, &inert,
-		&finalDigestInInert, &minimumRevision, &maximumRevision, &firstAccessExpiry, &finalAccessExpiry); err != nil {
-		t.Fatal(err)
-	}
-	if total != 2 || commands != 2 || projected != 1 || inert != 1 || finalDigestInInert != 0 ||
-		minimumRevision != 2 || maximumRevision != 3 || finalAccessExpiry.Sub(firstAccessExpiry) != time.Second {
-		t.Fatalf("refresh stages total=%d commands=%d projected=%d inert=%d final_in_inert=%d revisions=%d..%d access=%s..%s",
-			total, commands, projected, inert, finalDigestInInert, minimumRevision, maximumRevision, firstAccessExpiry, finalAccessExpiry)
-	}
-	row, found, err := h.Service.repository.LookupAccessSession(t.Context(), finalDigest.KeyID, finalDigest.Sum)
-	if err != nil || !found || row.SecurityRevision != 3 {
-		t.Fatalf("successor=%+v found=%t err=%v", row, found, err)
-	}
-}
-
 func TestResolveRefreshSubjectIsReadOnlyAndEpochBound(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
-	headBefore, err := h.store.Heads.Load(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
+	before := h.authMutationSnapshot()
 	subject, err := h.Service.ResolveRefreshSubject(t.Context(), original.RefreshToken)
 	if err != nil || subject.AccountID != original.Account.ID || subject.DeviceID != original.DeviceID {
 		t.Fatalf("subject=%+v err=%v", subject, err)
 	}
-	headAfter, err := h.store.Heads.Load(t.Context())
-	if err != nil || headAfter != headBefore {
-		t.Fatalf("read-only lookup changed head: before=%+v after=%+v err=%v", headBefore, headAfter, err)
+	if after := h.authMutationSnapshot(); after != before {
+		t.Fatalf("read-only lookup changed authority: before=%+v after=%+v", before, after)
+	}
+	if _, err := h.Service.Refresh(t.Context(), original.RefreshToken); err != nil {
+		t.Fatalf("subject lookup consumed the token: %v", err)
 	}
 	h.SetEpoch(2)
 	if _, err := h.Service.ResolveRefreshSubject(t.Context(), original.RefreshToken); Code(err) != "epoch_changed" {
@@ -278,38 +218,11 @@ func TestResolveRefreshSubjectIsReadOnlyAndEpochBound(t *testing.T) {
 	}
 }
 
-func TestRefreshAuthorityDriftRetryIsBounded(t *testing.T) {
-	h := newSessionFixture(t, config.ModeSelfHosted)
-	original := h.Issue()
-	calls := 0
-	var reject func() error
-	reject = func() error {
-		calls++
-		h.FailHeadCASOnce(reject)
-		return nil
-	}
-	h.FailHeadCASOnce(reject)
-	if _, err := h.Service.Refresh(t.Context(), original.RefreshToken); Code(err) != "security_busy" {
-		t.Fatalf("code=%s err=%v", Code(err), err)
-	}
-	if calls != maxRefreshPrepareAttempts {
-		t.Fatalf("CAS attempts=%d want=%d", calls, maxRefreshPrepareAttempts)
-	}
-	if head, err := h.store.Heads.Load(t.Context()); err != nil || head.Revision != 1 {
-		t.Fatalf("head=%+v err=%v", head, err)
-	}
-}
-
 func TestRefreshRotationAcrossCurrentKeyChange(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
-	old := h.tokenKeys.Current
 	next := testKeyring("session.v2", 0x66).Current
-	rotated := h.tokenKeys
-	rotated.Current = next
-	rotated.Previous = []identity.DigestKey{old}
-	h.tokenKeys = rotated
-	h.Service.tokenKeys = cloneKeyring(rotated)
+	h.RotateTokenKeys(next)
 	if _, err := h.Service.Authenticate(t.Context(), original.AccessToken); err != nil {
 		t.Fatalf("retained access key was not read: %v", err)
 	}
@@ -317,25 +230,19 @@ func TestRefreshRotationAcrossCurrentKeyChange(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, found, err := h.Service.repository.LookupAccessSession(t.Context(), next.ID,
-		tokenDigest(next, "access", successor.AccessToken).Sum); err != nil || !found {
-		t.Fatalf("successor was not written with current key: found=%t err=%v", found, err)
+	if _, _, keyID, _ := h.sessionByAccessToken(successor.AccessToken); keyID != next.ID {
+		t.Fatalf("successor was written with key %q, want %q", keyID, next.ID)
+	}
+	if _, err := h.Service.Authenticate(t.Context(), successor.AccessToken); err != nil {
+		t.Fatal(err)
 	}
 }
 
 func TestRefreshReturnsProjectedAccountView(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
-	owner, err := h.db.Owner.Acquire(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer owner.Release()
-	if _, err := owner.Exec(t.Context(), `SELECT set_config('app.account_id',$1,false)`, original.Account.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := owner.Exec(t.Context(), `UPDATE accounts SET display_name='Updated Parent',profile_required=true WHERE id=$1`, original.Account.ID); err != nil {
-		t.Fatal(err)
+	if n := h.exec(`UPDATE accounts SET display_name='Updated Parent',profile_required=true WHERE id=$1`, original.Account.ID); n != 1 {
+		t.Fatalf("updated %d accounts", n)
 	}
 	successor, err := h.Service.Refresh(t.Context(), original.RefreshToken)
 	if err != nil {
@@ -346,27 +253,21 @@ func TestRefreshReturnsProjectedAccountView(t *testing.T) {
 	}
 }
 
+// An account without a live identity binding has no presentation: refresh
+// fails closed without rotating.
 func TestRefreshFailsClosedWhenAccountProjectionIsMissing(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()
+	if n := h.exec(`DELETE FROM account_identities WHERE account_id=$1`, original.Account.ID); n != 1 {
+		t.Fatalf("deleted %d identities", n)
+	}
 	before := h.authMutationSnapshot()
-	owner, err := h.db.Owner.Acquire(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer owner.Release()
-	if _, err := owner.Exec(t.Context(), `SELECT set_config('app.account_id',$1,false)`, original.Account.ID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := owner.Exec(t.Context(), `DELETE FROM account_identities WHERE account_id=$1`, original.Account.ID); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := h.Service.Refresh(t.Context(), original.RefreshToken); Code(err) != "service_unavailable" {
 		t.Fatalf("code=%s err=%v", Code(err), err)
 	}
 	after := h.authMutationSnapshot()
 	if after != before {
-		t.Fatalf("missing account projection mutated auth state: before=%+v after=%+v", before, after)
+		t.Fatalf("missing account identity mutated auth state: before=%+v after=%+v", before, after)
 	}
 }
 
@@ -377,31 +278,23 @@ func TestOnlyDigestsPersist(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, raw := range []string{original.AccessToken, original.RefreshToken, successor.AccessToken, successor.RefreshToken} {
+	recoverable := recoveryRequest(successor)
+	recoverable.DeviceContinuity.Credential = original.DeviceCredential
+	recovered, err := h.Service.RefreshRecoverable(t.Context(), recoverable)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{original.AccessToken, original.RefreshToken, successor.AccessToken, successor.RefreshToken, recovered.AccessToken,
+		recovered.RefreshToken, original.DeviceCredential} {
 		var found bool
-		if err := h.db.Owner.QueryRow(t.Context(), `SELECT EXISTS(
+		h.query(`SELECT EXISTS(
 			SELECT 1 FROM sessions AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%'
-			UNION ALL SELECT 1 FROM session_refresh_history AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%'
-			UNION ALL SELECT 1 FROM auth_exchange_material AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%')`, raw).Scan(&found); err != nil {
-			t.Fatal(err)
-		}
+			UNION ALL SELECT 1 FROM refresh_receipts AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%' OR convert_from(value.material,'UTF8') LIKE '%' || $1 || '%'
+			UNION ALL SELECT 1 FROM devices AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%'
+			UNION ALL SELECT 1 FROM security_audit_events AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%'
+			UNION ALL SELECT 1 FROM command_receipts AS value WHERE to_jsonb(value)::text LIKE '%' || $1 || '%')`, []any{raw}, &found)
 		if found {
-			t.Fatal("raw bearer persisted in PostgreSQL")
-		}
-		if err := filepath.WalkDir(h.root, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil || entry.IsDir() {
-				return walkErr
-			}
-			contents, readErr := os.ReadFile(path)
-			if readErr != nil {
-				return readErr
-			}
-			if bytes.Contains(contents, []byte(raw)) {
-				t.Fatalf("raw bearer persisted in ledger file %s", path)
-			}
-			return nil
-		}); err != nil {
-			t.Fatal(err)
+			t.Fatal("raw bearer or continuity credential persisted in PostgreSQL")
 		}
 	}
 }
@@ -440,28 +333,6 @@ func TestBearerTokenRejectsRequestWithoutURL(t *testing.T) {
 	}
 }
 
-func TestLogoutIsLedgerBacked(t *testing.T) {
-	h := newSessionFixture(t, config.ModeSelfHosted)
-	bundle := h.Issue()
-	principal, err := h.Service.Authenticate(t.Context(), bundle.AccessToken)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h.FailProjectionOnce()
-	commandID := h.nextID(7)
-	if _, err := h.Service.Logout(t.Context(), principal, commandID); Code(err) != "service_unavailable" {
-		t.Fatalf("logout code=%s err=%v", Code(err), err)
-	}
-	h.RestartAndReconcile()
-	result, err := h.Service.Logout(t.Context(), principal, commandID)
-	if err != nil || result.CommandID != commandID || result.Outcome != "committed" {
-		t.Fatalf("logout replay result=%+v err=%v", result, err)
-	}
-	if _, err := h.Service.Authenticate(t.Context(), bundle.AccessToken); Code(err) != "session_revoked" {
-		t.Fatalf("logout did not survive projection replay: code=%s err=%v", Code(err), err)
-	}
-}
-
 func TestLogoutExactRetryReturnsReceiptAndNewCommandIsDenied(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	bundle := h.Issue()
@@ -487,11 +358,80 @@ func TestLogoutExactRetryReturnsReceiptAndNewCommandIsDenied(t *testing.T) {
 	}
 }
 
-// Authenticate's unavailable errors carry their database cause for the log
-// line; to the client they are still service_unavailable.
+// The service's unavailable errors carry their cause for the log line; to
+// the client they are still service_unavailable. proposedActor's is the one
+// such site an input can reach: a service whose actor-ID key is unset
+// cannot derive a new identity's account.
 func TestUnavailableWrappedWithItsCauseKeepsItsCode(t *testing.T) {
-	wrapped := fmt.Errorf("%w: %w", ErrUnavailable, errors.New("conn closed"))
-	if Code(wrapped) != "service_unavailable" || !errors.Is(wrapped, ErrUnavailable) {
-		t.Fatalf("wrapped unavailable lost its code: %v", wrapped)
+	service := &Service{instanceID: "50000000-0000-4000-8000-000000000001"}
+	_, _, err := service.proposedActor(identity.VerifiedExchange{
+		Identity:  identity.VerifiedIdentity{Provider: "apple", Subject: "subject", Audience: "audience"},
+		Authority: identity.IdentityAuthority{Status: "absent", NextActorGeneration: 1},
+	})
+	if Code(err) != "service_unavailable" || !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("proposedActor: %v, want service_unavailable", err)
 	}
+	if !strings.Contains(err.Error(), "invalid actor ID input") {
+		t.Fatalf("proposedActor dropped its cause: %v", err)
+	}
+}
+
+// The other unavailable sites that hold an error (newDevice's and
+// Exchange's crypto/rand reads) cannot be reached from a test: since Go
+// 1.24 crypto/rand.Read never returns an error. Their wrapping is pinned
+// by source instead: no `if err != nil` in the package returns a bare
+// ErrUnavailable, so a cause is never dropped there.
+func TestNoUnavailableSiteDropsItsCause(t *testing.T) {
+	files, err := filepath.Glob("*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	set := token.NewFileSet()
+	wrapped := 0
+	for _, name := range files {
+		if strings.HasSuffix(name, "_test.go") {
+			continue
+		}
+		file, err := parser.ParseFile(set, name, nil, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ast.Inspect(file, func(node ast.Node) bool {
+			guard, ok := node.(*ast.IfStmt)
+			if !ok || !isErrNotNil(guard.Cond) {
+				return true
+			}
+			for _, statement := range guard.Body.List {
+				ret, ok := statement.(*ast.ReturnStmt)
+				if !ok || len(ret.Results) == 0 {
+					continue
+				}
+				switch last := ret.Results[len(ret.Results)-1].(type) {
+				case *ast.Ident:
+					if last.Name == "ErrUnavailable" {
+						t.Errorf("%s: returns a bare ErrUnavailable, dropping err", set.Position(ret.Pos()))
+					}
+				case *ast.CallExpr:
+					if strings.Contains(types.ExprString(last), `"%w: %w", ErrUnavailable, err`) {
+						wrapped++
+					}
+				}
+			}
+			return true
+		})
+	}
+	if wrapped < 6 {
+		t.Fatalf("%d wrapped ErrUnavailable sites, want at least the 6 of sessions.go and devices.go", wrapped)
+	}
+}
+
+// isErrNotNil reports whether cond is `err != nil`.
+func isErrNotNil(cond ast.Expr) bool {
+	binary, ok := cond.(*ast.BinaryExpr)
+	if !ok || binary.Op != token.NEQ {
+		return false
+	}
+	left, lok := binary.X.(*ast.Ident)
+	right, rok := binary.Y.(*ast.Ident)
+	return lok && rok && left.Name == "err" && right.Name == "nil"
 }

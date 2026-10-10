@@ -1,26 +1,24 @@
 package limits
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"fmt"
+	"log/slog"
 	"net/http"
 	"net/netip"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
-
-	"babytracker/server/internal/testpg"
 )
 
 func TestDefaultPoliciesAreExact(t *testing.T) {
 	want := map[string]Policy{
-		ScopeLiveActivityAccount:     {Count: 120, Window: time.Minute},
-		ScopeLiveActivityDevice:      {Count: 30, Window: time.Minute},
 		ScopeAuthChallengeIP:         {Count: 30, Window: 10 * time.Minute},
 		ScopeAuthExchangeIP:          {Count: 30, Window: 10 * time.Minute},
 		ScopeAuthRefreshIP:           {Count: 120, Window: 10 * time.Minute},
@@ -44,6 +42,14 @@ func TestDefaultPoliciesAreExact(t *testing.T) {
 		ScopeExportIP:                {Count: 10, Window: time.Hour},
 		ScopeExportAccount:           {Count: 60, Window: time.Minute},
 		ScopeExportDevice:            {Count: 30, Window: time.Minute},
+		ScopePushTokenDevice:         {Count: 10, Window: time.Hour},
+		ScopePushTokenAccount:        {Count: 30, Window: time.Hour},
+		ScopeBearerFailureIP:         {Count: 60, Window: 10 * time.Minute},
+		ScopeMCPIntegration:          {Count: 30, Window: time.Minute},
+		ScopeMCPAccount:              {Count: 60, Window: time.Minute},
+		ScopeMCPFamily:               {Count: 120, Window: time.Minute},
+		ScopeLiveActivityAccount:     {Count: 120, Window: time.Minute},
+		ScopeLiveActivityDevice:      {Count: 30, Window: time.Minute},
 	}
 	got := DefaultPolicies()
 	if len(got) != len(want) {
@@ -68,27 +74,47 @@ func TestChargePayloadIsKeyedCanonicalAndContainsNoRawKey(t *testing.T) {
 		{Scope: ScopeAuthRefreshIP, Key: "::ffff:192.0.2.9", Cost: 1, Policy: Policy{Count: 120, Window: 10 * time.Minute}},
 		{Scope: ScopeAuthRefreshAccount, Key: "BBBBBBBB-BBBB-4BBB-8BBB-BBBBBBBBBBBB", Cost: 1, Policy: Policy{Count: 60, Window: 10 * time.Minute}},
 	}
-	payload, err := prepareCharges(charges, pepper, now)
+	got, err := prepareCharges(charges, pepper, now)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(payload) == "" || containsAny(string(payload), "192.0.2.9", "AAAAAAAA", "BBBBBBBB") {
-		t.Fatalf("payload leaks raw bucket key: %s", payload)
+	if rendered := fmt.Sprintf("%+v", got); containsAny(strings.ToLower(rendered), "192.0.2.9", "aaaaaaaa", "bbbbbbbb") {
+		t.Fatalf("prepared charges leak a raw bucket key: %s", rendered)
 	}
-	var got []wireCharge
-	if err := json.Unmarshal(payload, &got); err != nil {
-		t.Fatal(err)
-	}
-	if len(got) != 3 || got[0].Scope != ScopeAuthRefreshAccount || got[1].Scope != ScopeAuthRefreshDevice || got[2].Scope != ScopeAuthRefreshIP {
+	if len(got) != 3 || got[0].scope != ScopeAuthRefreshAccount || got[1].scope != ScopeAuthRefreshDevice || got[2].scope != ScopeAuthRefreshIP {
 		t.Fatalf("charges not canonically sorted: %+v", got)
 	}
-	wantDigest := hmac.New(sha256.New, pepper[:])
-	wantDigest.Write([]byte(ScopeAuthRefreshIP + "\x00" + "192.0.2.9"))
-	if got[2].KeyDigest != hex.EncodeToString(wantDigest.Sum(nil)) {
-		t.Fatalf("digest=%q", got[2].KeyDigest)
+	digest := func(scope, normalized string) [32]byte {
+		mac := hmac.New(sha256.New, pepper[:])
+		mac.Write([]byte(scope + "\x00" + normalized))
+		var sum [32]byte
+		copy(sum[:], mac.Sum(nil))
+		return sum
 	}
-	if got[0].WindowStart != "2026-09-20T12:00:00Z" || got[0].WindowEnd != "2026-09-20T12:10:00Z" {
-		t.Fatalf("window=%s..%s", got[0].WindowStart, got[0].WindowEnd)
+	if got[2].digest != digest(ScopeAuthRefreshIP, "192.0.2.9") {
+		t.Fatalf("ip digest=%x", got[2].digest)
+	}
+	if got[1].digest != digest(ScopeAuthRefreshDevice, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa") {
+		t.Fatalf("device digest=%x", got[1].digest)
+	}
+	windowStart, windowEnd := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC), time.Date(2026, 9, 20, 12, 10, 0, 0, time.UTC)
+	for _, charge := range got {
+		if !charge.windowStart.Equal(windowStart) || !charge.windowEnd.Equal(windowEnd) || charge.limit != map[string]int{
+			ScopeAuthRefreshAccount: 60, ScopeAuthRefreshDevice: 30, ScopeAuthRefreshIP: 120}[charge.scope] {
+			t.Fatalf("charge=%+v", charge)
+		}
+	}
+	if got[1].cost != 2 || got[0].cost != 1 || got[2].cost != 1 {
+		t.Fatalf("costs=%d,%d,%d", got[0].cost, got[1].cost, got[2].cost)
+	}
+
+	// Same-scope charges sort by digest.
+	pair, err := prepareCharges([]Charge{
+		{Scope: ScopeAuthRefreshDevice, Key: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", Cost: 1, Policy: Policy{Count: 30, Window: 10 * time.Minute}},
+		{Scope: ScopeAuthRefreshDevice, Key: "dddddddd-dddd-4ddd-8ddd-dddddddddddd", Cost: 1, Policy: Policy{Count: 30, Window: 10 * time.Minute}},
+	}, pepper, now)
+	if err != nil || bytes.Compare(pair[0].digest[:], pair[1].digest[:]) >= 0 {
+		t.Fatalf("same-scope charges not sorted by digest: %x %x err=%v", pair[0].digest, pair[1].digest, err)
 	}
 }
 
@@ -167,10 +193,10 @@ func TestClientIPResolverTrustsOnlyConfiguredRightToLeftChain(t *testing.T) {
 }
 
 func TestDependencyFailureIsSafeRetryableAndNeverBypasses(t *testing.T) {
-	repository := rateRepositoryFunc(func(context.Context, []byte, time.Time) (Decision, error) {
+	store := rateStoreFunc(func(context.Context, []preparedCharge, time.Time) (Decision, error) {
 		return Decision{}, errors.New("postgres at secret-host.example: password=hunter2")
 	})
-	limiter := newLimiter(repository, testPepper(), time.Now)
+	limiter := newLimiter(store, testPepper(), time.Now)
 	decision, err := limiter.Take(t.Context(), ScopeAuthChallengeIP, "192.0.2.1", Policy{Count: 30, Window: 10 * time.Minute})
 	if decision.Allowed {
 		t.Fatal("dependency failure bypassed rate limiting")
@@ -183,68 +209,13 @@ func TestDependencyFailureIsSafeRetryableAndNeverBypasses(t *testing.T) {
 	}
 }
 
-func TestRepositoryEnforcesCapAcrossOneHundredCallers(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
-	policy := Policy{Count: 25, Window: time.Minute}
-	var allowed atomic.Int32
-	var failures atomic.Int32
-	var wait sync.WaitGroup
-	for range 100 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
-			decision, err := limiter.Take(context.Background(), ScopeAuthChallengeIP, "192.0.2.99", policy)
-			if err != nil {
-				failures.Add(1)
-				return
-			}
-			if decision.Allowed {
-				allowed.Add(1)
-			}
-		}()
-	}
-	wait.Wait()
-	if failures.Load() != 0 || allowed.Load() != 25 {
-		t.Fatalf("allowed=%d failures=%d", allowed.Load(), failures.Load())
-	}
-}
+// TestRepositoryEnforcesCapAcrossOneHundredCallers, TestRepositoryWeightedChargesAreAllOrNone,
+// TestRepositoryOversizedWeightedChargeIsDeniedWithoutPartialQuota and the four
+// ...UseIsolatedLegacyStorageNamespaces tests are ported in memory_test.go.
 
-func TestRepositoryWeightedChargesAreAllOrNone(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestMemoryFiveChargesCommitOrRollbackTogether(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
-	policy := Policy{Count: 3, Window: time.Minute}
-	a := Charge{Scope: ScopeAuthRefreshAccount, Key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Cost: 2, Policy: policy}
-	b := Charge{Scope: ScopeAuthRefreshDevice, Key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Cost: 2, Policy: policy}
-	if decision, err := limiter.TakeMany(t.Context(), []Charge{a}); err != nil || !decision.Allowed {
-		t.Fatalf("seed decision=%+v err=%v", decision, err)
-	}
-	if decision, err := limiter.TakeMany(t.Context(), []Charge{a, b}); err != nil || decision.Allowed || decision.RetryAfter <= 0 {
-		t.Fatalf("combined decision=%+v err=%v", decision, err)
-	}
-	if decision, err := limiter.TakeMany(t.Context(), []Charge{b}); err != nil || !decision.Allowed || decision.Remaining != 1 {
-		t.Fatalf("rollback decision=%+v err=%v", decision, err)
-	}
-}
-
-func TestRepositoryFiveChargeChunksCommitOrRollbackAsOneTransaction(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
+	limiter := memoryLimiter(t, &now)
 	policy := Policy{Count: 1, Window: time.Minute}
 	charges := func(suffix string) []Charge {
 		return []Charge{
@@ -259,12 +230,15 @@ func TestRepositoryFiveChargeChunksCommitOrRollbackAsOneTransaction(t *testing.T
 	if decision, err := limiter.TakeMany(t.Context(), []Charge{denied[3]}); err != nil || !decision.Allowed {
 		t.Fatalf("seed decision=%+v err=%v", decision, err)
 	}
-	if decision, err := limiter.TakeMany(t.Context(), denied); err != nil || decision.Allowed || decision.RetryAfter <= 0 {
+	if decision, err := limiter.TakeMany(t.Context(), denied); err != nil || decision.Allowed || decision.Remaining != 0 || decision.RetryAfter != 56*time.Second {
 		t.Fatalf("five-charge denial=%+v err=%v", decision, err)
 	}
-	for index := 0; index < 3; index++ {
-		if decision, err := limiter.TakeMany(t.Context(), []Charge{denied[index]}); err != nil || !decision.Allowed {
-			t.Fatalf("first chunk bucket %d was partially consumed: decision=%+v err=%v", index, decision, err)
+	for index, charge := range denied {
+		if index == 3 {
+			continue
+		}
+		if decision, err := limiter.TakeMany(t.Context(), []Charge{charge}); err != nil || !decision.Allowed {
+			t.Fatalf("bucket %d was partially consumed: decision=%+v err=%v", index, decision, err)
 		}
 	}
 
@@ -279,91 +253,48 @@ func TestRepositoryFiveChargeChunksCommitOrRollbackAsOneTransaction(t *testing.T
 	}
 }
 
-func TestRepositoryLiveScopesUseIsolatedLegacyStorageNamespaces(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	pepper := testPepper()
-	limiter := newLimiter(repository, pepper, func() time.Time { return now })
-	policy := Policy{Count: 1, Window: time.Minute}
-	charges := []Charge{
-		{Scope: ScopeLiveAttemptIP, Key: "192.0.2.99", Cost: 1, Policy: policy},
-		{Scope: ScopeLiveAttemptDevice, Key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Cost: 1, Policy: policy},
-		{Scope: ScopeLiveAttemptAccount, Key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Cost: 1, Policy: policy},
-		{Scope: ScopeLiveAttemptFamily, Key: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", Cost: 1, Policy: policy},
-	}
-	if decision, err := limiter.TakeMany(t.Context(), charges); err != nil || !decision.Allowed {
-		t.Fatalf("live decision=%+v err=%v", decision, err)
-	}
-
-	for _, charge := range charges {
-		mac := hmac.New(sha256.New, pepper[:])
-		_, _ = mac.Write([]byte(charge.Scope + "\x00" + charge.Key))
-		var storedScope string
-		if err := fixture.Owner.QueryRow(t.Context(), `SELECT scope FROM rate_limit_buckets WHERE key_digest=$1`, mac.Sum(nil)).Scan(&storedScope); err != nil {
-			t.Fatalf("scope %q was not stored with its logical digest: %v", charge.Scope, err)
+// MCP quota scopes are fixed one-minute windows whose counts may only be
+// lowered: an operator cannot widen the private read surface by configuration.
+func TestMCPQuotaScopesAreFixedWindowsThatCanOnlyBeLowered(t *testing.T) {
+	for scope, count := range map[string]int{ScopeMCPIntegration: 30, ScopeMCPAccount: 60, ScopeMCPFamily: 120} {
+		if !PolicyWindowIsFixed(scope) || PolicyMaximum(scope) != count {
+			t.Errorf("%s fixed=%v maximum=%d want fixed and %d", scope, PolicyWindowIsFixed(scope), PolicyMaximum(scope), count)
 		}
-		if storedScope == charge.Scope {
-			t.Fatalf("scope %q bypassed the frozen storage registry", charge.Scope)
-		}
-	}
-
-	// The live IP carrier is also a real legacy scope. The logical scope is part
-	// of the HMAC input, so the same raw key must still receive independent quota.
-	if decision, err := limiter.Take(t.Context(), ScopeAuthChallengeIP, charges[0].Key, policy); err != nil || !decision.Allowed {
-		t.Fatalf("legacy carrier collided with live quota: decision=%+v err=%v", decision, err)
-	}
-	var buckets int
-	if err := fixture.Owner.QueryRow(t.Context(), `SELECT count(*) FROM rate_limit_buckets WHERE scope=$1`, ScopeAuthChallengeIP).Scan(&buckets); err != nil {
-		t.Fatal(err)
-	}
-	if buckets != 2 {
-		t.Fatalf("live and legacy isolated buckets=%d want=2", buckets)
 	}
 }
 
-func TestRepositoryExportScopesUseIsolatedLegacyStorageNamespaces(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	now := time.Date(2026, 9, 28, 12, 0, 0, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
+func TestMemoryMCPQuotaRefusalChargesNothing(t *testing.T) {
+	now := time.Date(2026, 10, 4, 12, 0, 0, 0, time.UTC)
+	store := newMemoryStore(0, 0)
+	limiter := newLimiter(store, testPepper(), func() time.Time { return now })
 	policies := DefaultPolicies()
 	charges := []Charge{
-		{Scope: ScopeExportIP, Key: "192.0.2.99", Cost: 1, Policy: policies[ScopeExportIP]},
-		{Scope: ScopeExportAccount, Key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Cost: 1, Policy: policies[ScopeExportAccount]},
-		{Scope: ScopeExportDevice, Key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Cost: 1, Policy: policies[ScopeExportDevice]},
+		{Scope: ScopeMCPIntegration, Key: "60000000-0000-4000-8000-0000000000d1", Cost: 1, Policy: policies[ScopeMCPIntegration]},
+		{Scope: ScopeMCPAccount, Key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Cost: 1, Policy: policies[ScopeMCPAccount]},
+		{Scope: ScopeMCPFamily, Key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Cost: 1, Policy: policies[ScopeMCPFamily]},
 	}
-	if decision, err := limiter.TakeMany(t.Context(), charges); err != nil || !decision.Allowed {
-		t.Fatalf("export admission=%+v err=%v", decision, err)
-	}
-	pepper := testPepper()
-	for _, charge := range charges {
-		mac := hmac.New(sha256.New, pepper[:])
-		_, _ = mac.Write([]byte(charge.Scope + "\x00" + charge.Key))
-		var storedScope string
-		if err := fixture.Owner.QueryRow(t.Context(), `SELECT scope FROM rate_limit_buckets WHERE key_digest=$1`, mac.Sum(nil)).Scan(&storedScope); err != nil {
-			t.Fatalf("scope %q was not stored: %v", charge.Scope, err)
+	for i := 0; i < 30; i++ {
+		if decision, err := limiter.TakeMany(t.Context(), charges); err != nil || !decision.Allowed || decision.Remaining != 29-i {
+			t.Fatalf("mcp charge %d=%+v err=%v", i, decision, err)
 		}
-		if storedScope == charge.Scope {
-			t.Fatalf("scope %q bypassed the frozen storage registry", charge.Scope)
+	}
+	if decision, err := limiter.TakeMany(t.Context(), charges); err != nil || decision.Allowed || decision.Remaining != 0 || decision.RetryAfter != time.Minute {
+		t.Fatalf("31st integration charge=%+v err=%v", decision, err)
+	}
+	prepared, err := prepareCharges(charges, testPepper(), now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, charge := range prepared {
+		if count := store.countOf(charge); count != 30 {
+			t.Fatalf("scope %q count=%d (all-or-none refusal must not charge)", charge.scope, count)
 		}
 	}
 }
 
-func TestRepositoryLiveScopesRollBackTogetherOnDenial(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestMemoryLiveScopesRollBackTogetherOnDenial(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
+	limiter := memoryLimiter(t, &now)
 	policy := Policy{Count: 1, Window: time.Minute}
 	device := Charge{Scope: ScopeLiveAttemptDevice, Key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", Cost: 1, Policy: policy}
 	account := Charge{Scope: ScopeLiveAttemptAccount, Key: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", Cost: 1, Policy: policy}
@@ -381,29 +312,21 @@ func TestRepositoryLiveScopesRollBackTogetherOnDenial(t *testing.T) {
 	}
 }
 
-func TestRepositoryLiveScopeEnforcesConcurrentCapAndResetsAtNextWindow(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestMemoryLiveScopeEnforcesConcurrentCapAndResetsAtNextWindow(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
+	limiter := memoryLimiter(t, &now)
 	policy := Policy{Count: 25, Window: time.Minute}
-	var allowed atomic.Int32
-	var failures atomic.Int32
+	var allowed, failures atomic.Int32
 	var wait sync.WaitGroup
 	for range 100 {
-		wait.Add(1)
-		go func() {
-			defer wait.Done()
+		wait.Go(func() {
 			decision, takeErr := limiter.Take(context.Background(), ScopeLiveAttemptDevice, "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", policy)
 			if takeErr != nil {
 				failures.Add(1)
 			} else if decision.Allowed {
 				allowed.Add(1)
 			}
-		}()
+		})
 	}
 	wait.Wait()
 	if failures.Load() != 0 || allowed.Load() != 25 {
@@ -415,14 +338,9 @@ func TestRepositoryLiveScopeEnforcesConcurrentCapAndResetsAtNextWindow(t *testin
 	}
 }
 
-func TestRepositoryOversizedWeightedChargeIsDeniedWithoutPartialQuota(t *testing.T) {
-	fixture := testpg.New(t)
-	repository, err := NewRepository(fixture.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
+func TestMemoryFiveChargeOversizedWeightedDenialChargesNothing(t *testing.T) {
 	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
-	limiter := newLimiter(repository, testPepper(), func() time.Time { return now })
+	limiter := memoryLimiter(t, &now)
 	policy := Policy{Count: 1, Window: time.Minute}
 	charges := []Charge{
 		{Scope: ScopeSyncMutationAccount, Key: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa3", Cost: 1, Policy: policy},
@@ -432,7 +350,7 @@ func TestRepositoryOversizedWeightedChargeIsDeniedWithoutPartialQuota(t *testing
 		{Scope: ScopeSyncPullDevice, Key: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeee3", Cost: 1, Policy: policy},
 	}
 	decision, err := limiter.TakeMany(t.Context(), charges)
-	if err != nil || decision.Allowed || decision.Remaining != 0 || decision.RetryAfter < time.Second || decision.RetryAfter > time.Minute {
+	if err != nil || decision.Allowed || decision.Remaining != 0 || decision.RetryAfter != 56*time.Second {
 		t.Fatalf("oversized weighted decision=%+v err=%v", decision, err)
 	}
 	for index, charge := range charges {
@@ -440,6 +358,190 @@ func TestRepositoryOversizedWeightedChargeIsDeniedWithoutPartialQuota(t *testing
 		if decision, err := limiter.TakeMany(t.Context(), []Charge{charge}); err != nil || !decision.Allowed {
 			t.Fatalf("bucket %d was charged by denied admission: decision=%+v err=%v", index, decision, err)
 		}
+	}
+}
+
+func TestNewBuildsTheMemoryLimiterAndRefusesUnsafeOptions(t *testing.T) {
+	now := func() time.Time { return time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC) }
+	for name, options := range map[string]Options{
+		"zero pepper":               {Now: now},
+		"nil clock":                 {Pepper: testPepper()},
+		"negative verified entries": {Pepper: testPepper(), Now: now, MaxVerifiedEntries: -1},
+		"negative ip entries":       {Pepper: testPepper(), Now: now, MaxIPEntriesPerScope: -1},
+	} {
+		if limiter, err := New(options); limiter != nil || ErrorCodeOf(err) != CodeInvalidLimit {
+			t.Fatalf("%s: limiter=%v err=%v", name, limiter, err)
+		}
+	}
+	limiter, err := New(Options{Pepper: testPepper(), Now: now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := limiter.(*Service).store.(*memoryStore)
+	if store.caps[0] != DefaultMaxVerifiedEntries/memoryShards || store.caps[1] != DefaultMaxIPEntriesPerScope/memoryShards || store.logger != nil {
+		t.Fatalf("default caps=%v", store.caps)
+	}
+	var buffer lockedLog
+	logger := slog.New(slog.NewTextHandler(&buffer, nil))
+	bounded, err := New(Options{Pepper: testPepper(), Now: now, MaxVerifiedEntries: 128, MaxIPEntriesPerScope: 192, Logger: logger})
+	if err != nil {
+		t.Fatal(err)
+	}
+	store = bounded.(*Service).store.(*memoryStore)
+	if store.caps[0] != 2 || store.caps[len(store.caps)-1] != 3 || store.logger != logger {
+		t.Fatalf("bounded caps=%v", store.caps)
+	}
+	if decision, err := limiter.Take(t.Context(), ScopeAuthChallengeIP, "192.0.2.1", Policy{Count: 2, Window: time.Minute}); err != nil || !decision.Allowed || decision.Remaining != 1 {
+		t.Fatalf("decision=%+v err=%v", decision, err)
+	}
+	if (&Service{}).Stats().IPEvictions == nil {
+		t.Fatal("Stats of a store without counters must still be usable")
+	}
+}
+
+// Every scope is classified once, by who vouches for its key. IP scopes are
+// exactly the "-ip" scopes, whose keys normalizeKey parses as addresses.
+func TestEveryScopeHasExactlyOneKeyClass(t *testing.T) {
+	if len(scopeKeyClasses) != len(defaultPolicies) {
+		t.Fatalf("classified %d scopes, policies %d", len(scopeKeyClasses), len(defaultPolicies))
+	}
+	for scope := range defaultPolicies {
+		class := scopeKeyClasses[scope]
+		if class != keyVerified && class != keyIP {
+			t.Fatalf("scope %q is not classified", scope)
+		}
+		if (class == keyIP) != strings.HasSuffix(scope, "-ip") {
+			t.Fatalf("scope %q classified %d", scope, class)
+		}
+		if _, ok := poolOf[scope]; !ok {
+			t.Fatalf("scope %q has no pool", scope)
+		}
+	}
+	if _, err := normalizeKey("made-up-ip", "192.0.2.1"); ErrorCodeOf(err) != CodeInvalidLimit {
+		t.Fatalf("an unclassified scope was keyed: %v", err)
+	}
+}
+
+// IPv6 client keys are their /64; IPv4 (and IPv4-mapped IPv6) keys are the
+// address itself.
+// The push-token scopes are keyed by the authenticated session's device and
+// account (verified keys) and their window may be configured.
+func TestPushTokenScopesAreVerifiedAndConfigurable(t *testing.T) {
+	for _, scope := range []string{ScopePushTokenDevice, ScopePushTokenAccount} {
+		if scopeKeyClasses[scope] != keyVerified {
+			t.Fatalf("%s is not a verified-key scope", scope)
+		}
+		if PolicyWindowIsFixed(scope) || PolicyMaximum(scope) != maximumValue {
+			t.Fatalf("%s: fixed=%v maximum=%d", scope, PolicyWindowIsFixed(scope), PolicyMaximum(scope))
+		}
+	}
+	if ScopePushTokenDevice != "push-token-device" || ScopePushTokenAccount != "push-token-account" {
+		t.Fatalf("scope names %q %q", ScopePushTokenDevice, ScopePushTokenAccount)
+	}
+}
+
+// The Live Activity registration scopes are keyed by the authenticated
+// session's account and device (verified keys), with main's names.
+func TestLiveActivityScopesAreVerified(t *testing.T) {
+	for _, scope := range []string{ScopeLiveActivityAccount, ScopeLiveActivityDevice} {
+		if scopeKeyClasses[scope] != keyVerified {
+			t.Fatalf("%s is not a verified-key scope", scope)
+		}
+	}
+	if ScopeLiveActivityAccount != "live-activity-account" || ScopeLiveActivityDevice != "live-activity-device" {
+		t.Fatalf("scope names %q %q", ScopeLiveActivityAccount, ScopeLiveActivityDevice)
+	}
+}
+
+// The failed-bearer scope is keyed by client address (an IP pool of its
+// own, evicting within itself) and its policy may be configured.
+func TestBearerFailureScopeIsAnIPScope(t *testing.T) {
+	if ScopeBearerFailureIP != "bearer-failure-ip" || scopeKeyClasses[ScopeBearerFailureIP] != keyIP {
+		t.Fatalf("%q classified %d", ScopeBearerFailureIP, scopeKeyClasses[ScopeBearerFailureIP])
+	}
+	if pool := poolOf[ScopeBearerFailureIP]; pool == verifiedPool || poolScopes[pool] != ScopeBearerFailureIP {
+		t.Fatalf("pool %d", pool)
+	}
+	if PolicyWindowIsFixed(ScopeBearerFailureIP) || PolicyMaximum(ScopeBearerFailureIP) != maximumValue {
+		t.Fatal("the failed-bearer policy is not configurable")
+	}
+	if got := DefaultPolicies()[ScopeBearerFailureIP]; got != (Policy{Count: 60, Window: 10 * time.Minute}) {
+		t.Fatalf("default %+v", got)
+	}
+}
+
+// Peek answers what TakeMany would, and charges, creates and evicts nothing.
+func TestPeekReportsWithoutCharging(t *testing.T) {
+	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
+	store := newMemoryStore(0, memoryShards) // one bucket per IP shard
+	limiter := newLimiter(store, testPepper(), func() time.Time { return now })
+	two := Policy{Count: 2, Window: 10 * time.Minute}
+	charge := []Charge{{Scope: ScopeBearerFailureIP, Key: "192.0.2.7", Cost: 1, Policy: two}}
+	for range 3 {
+		if d, err := limiter.Peek(t.Context(), charge); err != nil || !d.Allowed || d.Remaining != 1 {
+			t.Fatalf("peek of an unspent key: %+v %v", d, err)
+		}
+	}
+	if store.len() != 0 {
+		t.Fatalf("peek created %d buckets", store.len())
+	}
+	if d, err := limiter.TakeMany(t.Context(), charge); err != nil || !d.Allowed {
+		t.Fatalf("first charge %+v %v", d, err)
+	}
+	if d, _ := limiter.Peek(t.Context(), charge); !d.Allowed || d.Remaining != 0 {
+		t.Fatalf("peek after one charge: %+v", d)
+	}
+	if d, _ := limiter.TakeMany(t.Context(), charge); !d.Allowed {
+		t.Fatal("peeks spent the budget")
+	}
+	d, err := limiter.Peek(t.Context(), charge)
+	if err != nil || d.Allowed || d.RetryAfter < time.Second {
+		t.Fatalf("peek of a spent key: %+v %v", d, err)
+	}
+	// A peek at a full IP pool evicts nothing: the spent key keeps its count.
+	for i := range 64 {
+		other := []Charge{{Scope: ScopeBearerFailureIP, Key: fmt.Sprintf("198.51.100.%d", i), Cost: 1, Policy: two}}
+		if _, err := limiter.Peek(t.Context(), other); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if d, _ := limiter.Peek(t.Context(), charge); d.Allowed {
+		t.Fatal("peeks evicted a spent key")
+	}
+	if _, err := limiter.Peek(t.Context(), []Charge{{Scope: ScopeBearerFailureIP, Key: "not-an-address", Cost: 1, Policy: two}}); ErrorCodeOf(err) != CodeInvalidLimit {
+		t.Fatalf("peek accepted an invalid key: %v", err)
+	}
+}
+
+func TestIPKeysAreTheAddressForIPv4AndTheSlash64ForIPv6(t *testing.T) {
+	for input, want := range map[string]string{
+		"192.0.2.9":                     "192.0.2.9",
+		"::ffff:192.0.2.9":              "192.0.2.9",
+		"2001:db8:1:2:aaaa:bbbb:cccc:1": "2001:db8:1:2::",
+		"2001:DB8:1:2::ffff":            "2001:db8:1:2::",
+		"2001:db8:1:3::1":               "2001:db8:1:3::",
+	} {
+		if got, err := normalizeKey(ScopeAuthChallengeIP, input); err != nil || got != want {
+			t.Fatalf("%s keyed %q err=%v, want %q", input, got, err, want)
+		}
+	}
+	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
+	limiter := memoryLimiter(t, &now)
+	one := Policy{Count: 1, Window: time.Minute}
+	if d, err := limiter.Take(t.Context(), ScopeLiveAttemptIP, "2001:db8:1:2::1", one); err != nil || !d.Allowed {
+		t.Fatalf("first address %+v %v", d, err)
+	}
+	if d, _ := limiter.Take(t.Context(), ScopeLiveAttemptIP, "2001:db8:1:2:ffff::9", one); d.Allowed {
+		t.Fatal("another address in the same /64 has its own quota")
+	}
+	if d, _ := limiter.Take(t.Context(), ScopeLiveAttemptIP, "2001:db8:1:3::1", one); !d.Allowed {
+		t.Fatal("the next /64 shares the quota")
+	}
+	if d, _ := limiter.Take(t.Context(), ScopeLiveAttemptIP, "192.0.2.10", one); !d.Allowed {
+		t.Fatal("IPv4 address refused")
+	}
+	if d, _ := limiter.Take(t.Context(), ScopeLiveAttemptIP, "192.0.2.11", one); !d.Allowed {
+		t.Fatal("a neighbouring IPv4 address shares the quota")
 	}
 }
 
@@ -464,8 +566,12 @@ func containsAny(value string, candidates ...string) bool {
 	return false
 }
 
-type rateRepositoryFunc func(context.Context, []byte, time.Time) (Decision, error)
+type rateStoreFunc func(context.Context, []preparedCharge, time.Time) (Decision, error)
 
-func (function rateRepositoryFunc) take(ctx context.Context, payload []byte, now time.Time) (Decision, error) {
-	return function(ctx, payload, now)
+func (function rateStoreFunc) take(ctx context.Context, charges []preparedCharge, now time.Time) (Decision, error) {
+	return function(ctx, charges, now)
+}
+
+func (function rateStoreFunc) peek(ctx context.Context, charges []preparedCharge, now time.Time) (Decision, error) {
+	return function(ctx, charges, now)
 }

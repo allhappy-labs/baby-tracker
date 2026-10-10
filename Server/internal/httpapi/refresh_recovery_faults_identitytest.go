@@ -8,12 +8,12 @@ import (
 	"io"
 	"net/http"
 
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 )
 
 // RecoveryFaultHandler never bypasses the real route's readiness, strict
-// decoder, proof validation, quotas, fences, authority CAS or projection.
+// decoder, proof validation, quotas or the authority's refresh transaction.
 func RecoveryFaultHandler(next http.Handler, fail func(string, string) error) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		point := r.Header.Get("X-Identitytest-Recovery-Fault")
@@ -28,7 +28,7 @@ func RecoveryFaultHandler(next http.Handler, fail func(string, string) error) ht
 		decoder := json.NewDecoder(bytes.NewReader(raw))
 		decoder.DisallowUnknownFields()
 		if err == nil && int64(len(raw)) <= authBodyBytes && decoder.Decode(&input) == nil && decoder.Decode(new(any)) == io.EOF && input.ProtocolVersion == "v1" && protocol.ValidateRefreshRecoveryRequest(input) == nil {
-			r = r.WithContext(security.WithRecoveryFault(r.Context(), func(at string) error {
+			r = r.WithContext(authority.WithRecoveryFault(r.Context(), func(at string) error {
 				if at != string(point) {
 					return nil
 				}

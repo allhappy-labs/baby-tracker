@@ -7,7 +7,6 @@ import (
 	"net/netip"
 	"net/url"
 	"os"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -25,25 +24,24 @@ const (
 )
 
 type Config struct {
-	Mode                 Mode
-	ListenAddress        string
-	DatabaseURL          string
-	ProjectorDatabaseURL string
-	PublicOrigin         *url.URL
-	ServerInstanceID     string
-	RecoveryEpoch        uint64
-	SecurityLedgerDir    string
-	LedgerHeadDir        string
-	AppleAudience        string
-	TrustedProxyCIDRs    []netip.Prefix
-	Auth                 AuthConfig
-	Limits               LimitsConfig
-	Sync                 SyncConfig
-	Lifecycle            LifecycleConfig
-	Export               ExportConfig
-	RecoveryCleanup      RecoveryCleanupConfig
-	Security             SecurityConfig
-	LiveActivity         LiveActivityConfig
+	Admission         AdmissionConfig
+	DatabasePools     DatabasePools
+	Mode              Mode
+	ListenAddress     string
+	DatabaseURL       string
+	PublicOrigin      *url.URL
+	ServerInstanceID  string
+	RecoveryEpoch     uint64
+	AppleAudience     string
+	TrustedProxyCIDRs []netip.Prefix
+	Auth              AuthConfig
+	Limits            LimitsConfig
+	Sync              SyncConfig
+	Export            ExportConfig
+	APNSWakes         APNSWakesConfig
+	LiveActivity      LiveActivityConfig
+	RecoveryCleanup   RecoveryCleanupConfig
+	MCP               MCPConfig
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
@@ -53,6 +51,9 @@ func Load(getenv func(string) string) (Config, error) {
 		return Config{}, errors.New("configuration getter is required")
 	}
 	var errs []error
+	if err := RejectRetiredSecuritySettings(getenv); err != nil {
+		errs = append(errs, err)
+	}
 	mode, modeErr := LoadMode(getenv)
 	if modeErr != nil {
 		errs = append(errs, modeErr)
@@ -64,12 +65,6 @@ func Load(getenv func(string) string) (Config, error) {
 	databaseURL, databaseErr := DatabaseURL(getenv)
 	if databaseErr != nil {
 		errs = append(errs, databaseErr)
-	}
-	projectorDatabaseURL, projectorDatabaseErr := ProjectorDatabaseURL(getenv)
-	if projectorDatabaseErr != nil {
-		errs = append(errs, projectorDatabaseErr)
-	} else if databaseErr == nil && projectorDatabaseURL == databaseURL {
-		errs = append(errs, errors.New("runtime and projector database credentials must differ"))
 	}
 	origin, err := CanonicalOrigin(getenv("BT_PUBLIC_ORIGIN"), mode)
 	if err != nil {
@@ -83,10 +78,6 @@ func Load(getenv func(string) string) (Config, error) {
 	epoch, epochErr := strconv.ParseUint(epochText, 10, 64)
 	if epochErr != nil || !protocol.ValidRecoveryEpoch(epoch) {
 		errs = append(errs, errors.New("BT_RECOVERY_EPOCH must be an integer from 1 through 9007199254740991"))
-	}
-	securityConfig, securityErr := LoadSecurity(getenv, mode)
-	if securityErr != nil {
-		errs = append(errs, securityErr)
 	}
 	audience := getenv("BT_APPLE_AUDIENCE")
 	if audience == "" {
@@ -118,38 +109,57 @@ func Load(getenv func(string) string) (Config, error) {
 		syncConfig.Limits.SocketAttemptAccountPerMinute = limitConfig.Policies[limits.ScopeLiveAttemptAccount].Count
 		syncConfig.Limits.SocketAttemptFamilyPerMinute = limitConfig.Policies[limits.ScopeLiveAttemptFamily].Count
 	}
-	lifecycleConfig, lifecycleErr := LoadLifecycle(getenv, mode)
-	if lifecycleErr != nil {
-		errs = append(errs, lifecycleErr)
-	}
 	exportConfig, exportErr := LoadExport(getenv)
 	if exportErr != nil {
 		errs = append(errs, exportErr)
-	} else if exportConfig.Enabled && (exportConfig.WorkerDatabaseURL == databaseURL || exportConfig.WorkerDatabaseURL == projectorDatabaseURL) {
-		errs = append(errs, errors.New("export worker database credential must differ from runtime and projector credentials"))
+	} else if exportConfig.Enabled && exportConfig.WorkerDatabaseURL == databaseURL {
+		errs = append(errs, errors.New("export worker database credential must differ from the runtime credential"))
+	}
+	apnsWakes, apnsErr := LoadAPNSWakes(getenv)
+	if apnsErr != nil {
+		errs = append(errs, apnsErr)
+	}
+	liveActivity, liveActivityErr := LoadLiveActivity(getenv)
+	// Both switches load the same BT_APNS_* credentials: a credential error
+	// with both on is reported once.
+	if liveActivityErr != nil && (apnsErr == nil || liveActivityErr.Error() != apnsErr.Error()) {
+		errs = append(errs, liveActivityErr)
 	}
 	recoveryCleanup, cleanupErr := LoadRecoveryCleanup(getenv, exportConfig)
 	if cleanupErr != nil {
 		errs = append(errs, cleanupErr)
-	} else if recoveryCleanup.Enabled && (recoveryCleanup.WorkerDatabaseURL == databaseURL || recoveryCleanup.WorkerDatabaseURL == projectorDatabaseURL) {
-		errs = append(errs, errors.New("recovery maintenance credential must differ from runtime and projector credentials"))
+	} else if !recoveryCleanup.Enabled && exportErr == nil {
+		// Decision D3: the maintenance credential is required in every mode.
+		errs = append(errs, errors.New("BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE (or BT_EXPORT_DATABASE_URL_FILE) is required: retention, the family purge and wakes run as the maintenance principal"))
+	} else if recoveryCleanup.Enabled && recoveryCleanup.WorkerDatabaseURL == databaseURL {
+		errs = append(errs, errors.New("recovery maintenance credential must differ from the runtime credential"))
 	}
-	liveActivity, liveActivityErr := LoadLiveActivity(getenv)
-	if liveActivityErr != nil {
-		errs = append(errs, liveActivityErr)
-	} else if liveActivity.Enabled && (liveActivity.WorkerDatabaseURL == databaseURL || liveActivity.WorkerDatabaseURL == projectorDatabaseURL ||
-		(exportConfig.Enabled && liveActivity.WorkerDatabaseURL == exportConfig.WorkerDatabaseURL) ||
-		(recoveryCleanup.Enabled && liveActivity.WorkerDatabaseURL == recoveryCleanup.WorkerDatabaseURL)) {
-		errs = append(errs, errors.New("live activity worker database credential must differ from other server credentials"))
+	admissionConfig, admissionErr := LoadAdmission(getenv)
+	if admissionErr != nil {
+		errs = append(errs, admissionErr)
+	}
+	databasePools, poolsErr := LoadDatabasePools(getenv)
+	if poolsErr != nil {
+		errs = append(errs, poolsErr)
+	} else if databasePools.Explicit() && databasePools.Maintenance < 2 {
+		errs = append(errs, errors.New("BT_DB_MAINTENANCE_MAX_CONNS must be at least 2: one maintenance connection is reserved for the readiness audit beside the workers"))
+	}
+	mcpConfig, mcpErr := LoadMCP(getenv)
+	if mcpErr != nil {
+		errs = append(errs, mcpErr)
+	} else if admissionErr == nil && poolsErr == nil && modeErr == nil {
+		if err := validateMCPComposition(mcpConfig, mode, admissionConfig, databasePools); err != nil {
+			errs = append(errs, err)
+		}
 	}
 	if err := errors.Join(errs...); err != nil {
 		return Config{}, err
 	}
-	return Config{Mode: mode, ListenAddress: listen, DatabaseURL: databaseURL, ProjectorDatabaseURL: projectorDatabaseURL, PublicOrigin: origin, ServerInstanceID: instanceID, RecoveryEpoch: epoch, SecurityLedgerDir: securityConfig.LedgerDir, LedgerHeadDir: securityConfig.HeadDir, AppleAudience: audience, TrustedProxyCIDRs: proxies, Auth: auth, Limits: limitConfig, Sync: syncConfig, Lifecycle: lifecycleConfig, Export: exportConfig, RecoveryCleanup: recoveryCleanup, Security: securityConfig, LiveActivity: liveActivity}, nil
+	return Config{MCP: mcpConfig, Admission: admissionConfig, DatabasePools: databasePools, Mode: mode, ListenAddress: listen, DatabaseURL: databaseURL, PublicOrigin: origin, ServerInstanceID: instanceID, RecoveryEpoch: epoch, AppleAudience: audience, TrustedProxyCIDRs: proxies, Auth: auth, Limits: limitConfig, Sync: syncConfig, Export: exportConfig, APNSWakes: apnsWakes, LiveActivity: liveActivity, RecoveryCleanup: recoveryCleanup}, nil
 }
 
 // LoadMode is shared by server and administrative composition so a dangerous
-// command cannot select a different authority backend than the server.
+// command runs under the same mode (and entitlement policy) as the server.
 func LoadMode(getenv func(string) string) (Mode, error) {
 	if getenv == nil {
 		return "", errors.New("configuration getter is required")
@@ -169,10 +179,6 @@ func LoadMode(getenv func(string) string) (Mode, error) {
 // trailing line ending; reads are bounded even if the file changes after Stat.
 func DatabaseURL(getenv func(string) string) (string, error) {
 	return credentialURL(getenv, "BT_DATABASE_URL", "BT_DATABASE_URL_FILE")
-}
-
-func ProjectorDatabaseURL(getenv func(string) string) (string, error) {
-	return credentialURL(getenv, "BT_PROJECTOR_DATABASE_URL", "BT_PROJECTOR_DATABASE_URL_FILE")
 }
 
 func credentialURL(getenv func(string) string, valueName, fileName string) (string, error) {
@@ -282,16 +288,6 @@ func CanonicalOrigin(raw string, mode Mode) (*url.URL, error) {
 	}
 	u.Path, u.RawPath = "", ""
 	return u, nil
-}
-
-func absoluteDir(name, value string) (string, error) {
-	if value == "" {
-		return "", fmt.Errorf("%s is required", name)
-	}
-	if !filepath.IsAbs(value) {
-		return "", fmt.Errorf("%s must be absolute", name)
-	}
-	return filepath.Clean(value), nil
 }
 
 func parseCIDRs(raw string) ([]netip.Prefix, error) {

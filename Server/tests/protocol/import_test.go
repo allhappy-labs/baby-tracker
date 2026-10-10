@@ -85,7 +85,7 @@ func TestImportsPreserveDistinctAndMatchAcrossCaregivers(t *testing.T) {
 	if err != nil || !matched.MappingComplete || len(matched.Mappings) != 1 || matched.Mappings[0].SharedBabyID != unique.Mappings[0].SharedBabyID {
 		t.Fatalf("matched=%+v unique=%+v err=%v", matched, unique, err)
 	}
-	if fixture.h.Count(t, "babies", fixture.h.FamilyID) != 3 {
+	if fixture.h.CareCount(t, "baby", fixture.h.FamilyID) != 3 {
 		t.Fatal("equal-looking siblings collapsed during import")
 	}
 }

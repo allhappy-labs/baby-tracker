@@ -7,14 +7,16 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/care"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -31,12 +33,18 @@ var (
 
 const pageTokenVersion byte = 1
 
+// pageBinding is a sync_page_bindings row: who a continuation token was
+// issued to and the range it continues. A sync binding resumes after a
+// sequence, up to the high water it was issued at; a snapshot binding
+// resumes after a (kind, id) key of its snapshot. Neither records the next
+// page's size or end: a continuation serves the current rows of its range.
 type pageBinding struct {
 	kind, keyID, familyID, accountID, deviceID, sessionID, instanceID string
-	epoch, securityRevision, highWater, rangeEnd                      uint64
-	resume, pageEnd                                                   uint64
-	pageItems, pageBytes, itemLimit, byteLimit                        int
-	snapshotID                                                        *string
+	epoch, securityRevision, highWater                                uint64
+	resumeSequence                                                    uint64           // sync
+	snapshotID                                                        *string          // snapshot
+	resumeKey                                                         care.SnapshotKey // snapshot
+	itemLimit, byteLimit                                              int
 	createdAt, expiresAt                                              time.Time
 }
 
@@ -118,16 +126,25 @@ func decodePageToken(keys identity.DigestKeyring, token string) (decodedPageToke
 
 func pageDigest(lookup [32]byte) [32]byte { return sha256.Sum256(lookup[:]) }
 
+// successorLookup is the lookup of the token that continues after binding,
+// derived from the presented token: a replayed continuation that ends where
+// it ended before issues the same successor (and finds its binding), one
+// that ends elsewhere issues another.
 func successorLookup(token decodedPageToken, binding pageBinding) [32]byte {
 	mac := hmac.New(sha256.New, token.key.Secret[:])
-	_, _ = mac.Write([]byte("baby-tracker-page-successor-v1\x00"))
+	_, _ = mac.Write([]byte("baby-tracker-page-successor-v2\x00"))
 	_, _ = mac.Write(token.lookup[:])
-	for _, value := range []string{binding.kind, binding.accountID, binding.deviceID, binding.sessionID, binding.familyID, binding.instanceID} {
+	snapshotID := ""
+	if binding.snapshotID != nil {
+		snapshotID = *binding.snapshotID
+	}
+	for _, value := range []string{binding.kind, binding.accountID, binding.deviceID, binding.sessionID, binding.familyID, binding.instanceID,
+		snapshotID, binding.resumeKey.Kind, binding.resumeKey.ID} {
 		_, _ = mac.Write([]byte(value))
 		_, _ = mac.Write([]byte{0})
 	}
 	var encoded [8]byte
-	for _, value := range []uint64{binding.epoch, binding.securityRevision, binding.highWater, binding.rangeEnd, binding.resume, binding.pageEnd} {
+	for _, value := range []uint64{binding.epoch, binding.securityRevision, binding.highWater, binding.resumeSequence} {
 		binary.BigEndian.PutUint64(encoded[:], value)
 		_, _ = mac.Write(encoded[:])
 	}
@@ -136,192 +153,293 @@ func successorLookup(token decodedPageToken, binding pageBinding) [32]byte {
 	return result
 }
 
-func (s *Service) resolveFamily(ctx context.Context, principal access.Principal) (string, error) {
-	if s == nil || s.resolver == nil || principal.Scope != "family" {
+// sessionFamily is the family a principal method (ApplyAndPull,
+// FullSnapshot) serves: the principal's session family, checked in Go
+// before any statement, with the legacy refusals of a principal that is not
+// a family member's refreshed family session. Nothing reads the family
+// first: withFamily's grant comes from the session row, and a grant of any
+// other family is refused.
+func sessionFamily(p access.Principal) (string, error) {
+	if p.Scope != "family" {
 		return "", ErrFamilyScopeRequired
 	}
-	if principal.SessionScope != "family" || !protocol.ValidUUID(principal.SessionFamilyID) {
+	if p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
 		return "", ErrSessionRefreshRequired
 	}
-	familyID, err := s.resolver.Current(ctx, principal)
-	if err != nil {
-		return "", err
-	}
-	if !protocol.ValidUUID(familyID) {
-		return "", ErrFamilyScopeRequired
-	}
-	if principal.SessionFamilyID != familyID {
-		return "", ErrSessionRefreshRequired
-	}
-	return familyID, nil
+	return p.SessionFamilyID, nil
 }
 
-func (s *Service) ApplyAndPull(ctx context.Context, principal access.Principal, request protocol.SyncRequest) (protocol.SyncResponse, error) {
-	if s == nil || s.guard == nil || s.repo == nil || s.now == nil || !validPageKeys(s.pageKeys) || s.identity.Validate() != nil || s.limits.Validate() != nil {
-		return protocol.SyncResponse{}, fmt.Errorf("sync service unavailable")
+// familyReadError is a principal method's guard refusal as the legacy
+// family read (family.Service.Current) reported it: a session whose family
+// moved into recovery since the principal was authenticated is
+// family_unavailable, not recovery_only. (ServeSync and ServeSnapshot never
+// see recovery_only: their caller's Admit refuses every session that is not
+// a family session before family policy runs.)
+func familyReadError(err error) error {
+	if errors.Is(err, authority.ErrRecoveryOnly) {
+		return authority.ErrFamilyUnavailable
 	}
-	familyID, err := s.resolveFamily(ctx, principal)
+	return err
+}
+
+// ApplyAndPull runs one sync request for an authenticated principal in one
+// guarded transaction (Exchange), then publishes the new high water and
+// returns the refusal or the response. It serves tests and the capacity
+// harness; the HTTP route is ServeSync.
+func (s *Service) ApplyAndPull(ctx context.Context, principal access.Principal, request protocol.SyncRequest) (protocol.SyncResponse, error) {
+	if !s.ready() {
+		return protocol.SyncResponse{}, errUnavailable
+	}
+	familyID, err := sessionFamily(principal)
 	if err != nil {
 		return protocol.SyncResponse{}, err
 	}
-	surface := protocol.SurfaceSync
-	for _, mutation := range request.Mutations {
-		if mutation.EntityKind == "timer" {
-			surface = protocol.SurfaceSyncTimer
-			break
-		}
+	if err := s.validateSync(request, familyID); err != nil {
+		return protocol.SyncResponse{}, err
 	}
-	if request.ProtocolVersion != "v1" || protocol.ValidateRouteCapabilities(surface, request.Capabilities, request.Capabilities, s.identity.Capabilities) != nil || request.Mutations == nil {
-		return protocol.SyncResponse{}, ErrInvalidSync
-	}
-	if len(request.Mutations) > s.limits.SyncBatchSize {
-		return protocol.SyncResponse{}, ErrBatchLimit
-	}
-	if request.PageToken != nil && (request.Cursor != nil || len(request.Mutations) != 0) {
-		return protocol.SyncResponse{}, ErrInvalidSync
-	}
-	if request.PageToken == nil && request.Cursor != nil {
-		if request.Cursor.Validate() != nil || request.Cursor.ServerInstanceID != s.identity.InstanceID || request.Cursor.RecoveryEpoch != s.identity.RecoveryEpoch || request.Cursor.FamilyID != familyID {
-			return protocol.SyncResponse{}, ErrSnapshotRequired
-		}
-	}
-	outcomes := make([]protocol.Outcome, 0, len(request.Mutations))
-	for _, mutation := range request.Mutations {
-		itemCtx, cancel := context.WithTimeout(ctx, time.Duration(s.limits.SyncTransactionSeconds)*time.Second)
-		outcome, applyErr := s.Apply(itemCtx, principal, familyID, mutation)
-		cancel()
-		if applyErr != nil {
-			return protocol.SyncResponse{}, applyErr
-		}
-		outcomes = append(outcomes, outcome)
-	}
-	var response protocol.SyncResponse
-	err = s.guard.WithAuthorizedTransaction(ctx, principal, familyID, "read", func(tx pgx.Tx, grant access.Grant) error {
-		if grant.AccountID != principal.AccountID || grant.FamilyID != familyID {
-			return ErrFamilyScopeRequired
-		}
-		// A first page and a continuation both read under the family lock,
-		// so no write commits in the middle of a page.
-		if err := records.LockFamilyForUpdate(ctx, tx, familyID); err != nil {
-			return err
-		}
-		if request.PageToken != nil {
-			return s.readSyncContinuation(ctx, tx, principal, grant, *request.PageToken, &response)
-		}
-		var highWater uint64
-		if err := tx.QueryRow(ctx, `SELECT next_sequence FROM families WHERE id=$1`, familyID).Scan(&highWater); err != nil {
-			return err
-		}
-		after := uint64(0)
-		if request.Cursor != nil {
-			after = request.Cursor.Sequence
-		}
-		if after > highWater {
-			return ErrSnapshotRequired
-		}
-		return s.buildSyncPage(ctx, tx, principal, grant, after, highWater, s.limits.SyncPageSize, s.limits.SyncPageBytes, outcomes, nil, &response)
+	txCtx, cancel := context.WithTimeout(ctx, time.Duration(s.limits.SyncTransactionSeconds)*time.Second)
+	var exchanged Exchanged
+	err = s.withFamily(txCtx, principal, familyID, func(tx pgx.Tx, grant access.Grant) error {
+		var err error
+		// validateSync accepted the request above, once per request.
+		exchanged, err = s.exchange(txCtx, tx, principal, grant, request)
+		return err
 	})
-	return response, err
+	cancel()
+	if err != nil {
+		return protocol.SyncResponse{}, familyReadError(err)
+	}
+	return s.committed(ctx, familyID, exchanged)
 }
 
-func (s *Service) buildSyncPage(ctx context.Context, tx pgx.Tx, principal access.Principal, grant access.Grant, after, highWater uint64,
-	itemLimit, byteLimit int, outcomes []protocol.Outcome, presented *decodedPageToken, response *protocol.SyncResponse) error {
-	candidates, err := ReadJournal(ctx, tx, grant.FamilyID, s.identity.InstanceID, s.identity.RecoveryEpoch, after, highWater, itemLimit+1)
-	if err != nil {
-		return err
+// committed is a sync request after its transaction committed: the new
+// high water is published (best effort), then the refusal (Fatal) or the
+// response is returned.
+func (s *Service) committed(ctx context.Context, familyID string, exchanged Exchanged) (protocol.SyncResponse, error) {
+	if exchanged.Publish != nil && s.publisher != nil {
+		_ = s.publisher.Publish(ctx, familyID, *exchanged.Publish)
 	}
-	pageKeyID := s.pageKeys.Current.ID
-	if presented != nil {
-		pageKeyID = presented.key.ID
+	if exchanged.Fatal != nil {
+		return protocol.SyncResponse{}, exchanged.Fatal
 	}
-	page, end, hasMore, err := chooseSyncChanges(candidates, after, highWater, itemLimit, byteLimit, s.identity, grant.FamilyID, pageTokenPlaceholder(pageKeyID))
-	if err != nil {
-		return err
-	}
-	result := protocol.SyncResponse{ServerInstanceID: s.identity.InstanceID, RecoveryEpoch: s.identity.RecoveryEpoch, Outcomes: outcomes,
-		Changes: page, HighWater: protocol.Cursor{ServerInstanceID: s.identity.InstanceID, RecoveryEpoch: s.identity.RecoveryEpoch, FamilyID: grant.FamilyID, Sequence: highWater}}
-	if hasMore {
-		key, lookup := s.pageKeys.Current, [32]byte{}
-		if presented == nil {
-			if _, err := rand.Read(lookup[:]); err != nil {
-				return err
-			}
-		} else {
-			key = presented.key
-			lookup = successorLookup(*presented, pageBinding{kind: "sync", accountID: principal.AccountID, deviceID: principal.DeviceID,
-				sessionID: principal.SessionID, familyID: grant.FamilyID, instanceID: s.identity.InstanceID, epoch: s.identity.RecoveryEpoch,
-				securityRevision: principal.SecurityRevision, highWater: highWater, rangeEnd: highWater, resume: end})
-		}
-		nextPage, nextEnd, _, nextErr := s.previewSyncPage(ctx, tx, grant.FamilyID, end, highWater, itemLimit, byteLimit, key.ID)
-		if nextErr != nil {
-			return nextErr
-		}
-		token, err := encodePageToken(key, lookup)
+	return exchanged.Response, nil
+}
+
+// syncRange is the range a sync page serves, (resume, highWater], its page
+// limits, and for a continuation the first page's created and expiry times
+// (zero on a first page).
+type syncRange struct {
+	resume, highWater    uint64
+	itemLimit, byteLimit int
+	created, expires     time.Time
+}
+
+// firstRange is a first page's range under the configured page limits.
+func (s *Service) firstRange(after, highWater uint64) syncRange {
+	return syncRange{resume: after, highWater: highWater, itemLimit: s.limits.SyncPageSize, byteLimit: s.limits.SyncPageBytes}
+}
+
+// syncPage serves the changes of r from rows (read with a limit of
+// itemLimit+1, in sequence order): the longest prefix within the item and
+// byte limits, each change encoded once around its stored wire. A row left
+// over after the prefix means more: the page carries a continuation token
+// (counted in its size) bound to (last sequence, high water]. A
+// continuation (presented) derives its successor's lookup and keeps the
+// first page's created and expiry times.
+func (s *Service) syncPage(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, r syncRange, rows []care.ChangeRow,
+	outcomes []protocol.Outcome, presented *decodedPageToken) (protocol.SyncResponse, error) {
+	highWater, itemLimit, byteLimit, created, expires := r.highWater, r.itemLimit, r.byteLimit, r.created, r.expires
+	encoded := make([]json.RawMessage, 0, len(rows))
+	for _, row := range rows {
+		raw, err := row.Encode(s.identity, g.FamilyID)
 		if err != nil {
-			return err
+			return protocol.SyncResponse{}, err
 		}
-		created := s.now().UTC().Truncate(time.Microsecond)
-		expires := created.Add(time.Duration(s.limits.SyncPageTTLSeconds) * time.Second)
-		if presented != nil {
-			binding, loadErr := loadPageBinding(ctx, tx, grant.FamilyID, pageDigest(presented.lookup))
-			if loadErr != nil {
-				return loadErr
-			}
-			created, expires = binding.createdAt, binding.expiresAt
-		}
-		binding := pageBinding{kind: "sync", familyID: grant.FamilyID, accountID: principal.AccountID, deviceID: principal.DeviceID,
-			sessionID: principal.SessionID, instanceID: s.identity.InstanceID, epoch: s.identity.RecoveryEpoch, securityRevision: principal.SecurityRevision,
-			highWater: highWater, rangeEnd: highWater, resume: end, pageEnd: nextEnd, pageItems: len(nextPage), itemLimit: itemLimit,
-			byteLimit: byteLimit, createdAt: created, expiresAt: expires}
-		binding.pageBytes = syncResponseBytes(s.identity, grant.FamilyID, highWater, nextPage, nextEnd < highWater, pageTokenPlaceholder(key.ID))
-		if err := insertPageBinding(ctx, tx, key.ID, lookup, binding); err != nil {
-			return err
-		}
-		result.NextPageToken = &token
+		encoded = append(encoded, raw)
 	}
-	*response = result
+	keyID := s.pageKeys.Current.ID
+	if presented != nil {
+		keyID = presented.key.ID
+	}
+	count, err := pagePrefix(encoded, itemLimit, byteLimit, ErrPageLimit, func(bytes, count int, next *string) int {
+		return protocol.IncrementalPageEncodedBytesRaw(s.identity, g.FamilyID, highWater, bytes, count, next)
+	}, pageTokenPlaceholder(keyID))
+	if err != nil {
+		return protocol.SyncResponse{}, err
+	}
+	response := protocol.SyncResponse{ServerInstanceID: s.identity.InstanceID, RecoveryEpoch: s.identity.RecoveryEpoch, Outcomes: outcomes,
+		EncodedChanges: append(make([]json.RawMessage, 0, count), encoded[:count]...),
+		HighWater:      protocol.Cursor{ServerInstanceID: s.identity.InstanceID, RecoveryEpoch: s.identity.RecoveryEpoch, FamilyID: g.FamilyID, Sequence: highWater}}
+	if count == len(encoded) {
+		return response, nil
+	}
+	if presented == nil {
+		created = s.now().UTC().Truncate(time.Microsecond)
+		expires = created.Add(time.Duration(s.limits.SyncPageTTLSeconds) * time.Second)
+	}
+	binding := s.bindingFor(p, g, "sync", highWater, itemLimit, byteLimit, created, expires)
+	binding.resumeSequence = rows[count-1].Seq
+	token, err := s.issueToken(ctx, tx, presented, binding)
+	if err != nil {
+		return protocol.SyncResponse{}, err
+	}
+	response.NextPageToken = &token
+	return response, nil
+}
+
+// pagePrefix is the length of the longest prefix of items within itemLimit
+// items and byteLimit bytes, sized by size(prefix bytes, prefix count,
+// token): the token placeholder counts iff an item is left after the
+// prefix. A first item that does not fit is tooLarge.
+func pagePrefix(items []json.RawMessage, itemLimit, byteLimit int, tooLarge error, size func(bytes, count int, next *string) int, placeholder string) (int, error) {
+	count, bytes := 0, 0
+	for i, item := range items {
+		if i >= itemLimit {
+			break
+		}
+		var next *string
+		if i+1 < len(items) {
+			next = &placeholder
+		}
+		if size(bytes+len(item), i+1, next) > byteLimit {
+			if i == 0 {
+				return 0, tooLarge
+			}
+			break
+		}
+		count, bytes = i+1, bytes+len(item)
+	}
+	return count, nil
+}
+
+func (s *Service) bindingFor(p access.Principal, g access.Grant, kind string, highWater uint64, itemLimit, byteLimit int, created, expires time.Time) pageBinding {
+	return pageBinding{kind: kind, familyID: g.FamilyID, accountID: p.AccountID, deviceID: p.DeviceID, sessionID: p.SessionID,
+		instanceID: s.identity.InstanceID, epoch: s.identity.RecoveryEpoch, securityRevision: p.SecurityRevision, highWater: highWater,
+		itemLimit: itemLimit, byteLimit: byteLimit, createdAt: created, expiresAt: expires}
+}
+
+// prepareToken encodes the token for binding: a first page's lookup is
+// random, a continuation's is its successor lookup. It returns the
+// binding's digest and the binding with its key id.
+func (s *Service) prepareToken(presented *decodedPageToken, binding pageBinding) (string, [32]byte, pageBinding, error) {
+	key, lookup := s.pageKeys.Current, [32]byte{}
+	if presented == nil {
+		if _, err := rand.Read(lookup[:]); err != nil {
+			return "", [32]byte{}, pageBinding{}, err
+		}
+	} else {
+		key, lookup = presented.key, successorLookup(*presented, binding)
+	}
+	token, err := encodePageToken(key, lookup)
+	binding.keyID = key.ID
+	return token, pageDigest(lookup), binding, err
+}
+
+// issueToken stores binding in one round trip and returns its token. A
+// binding already stored under the digest (a replayed continuation) must
+// equal it.
+func (s *Service) issueToken(ctx context.Context, tx pgx.Tx, presented *decodedPageToken, binding pageBinding) (string, error) {
+	token, digest, binding, err := s.prepareToken(presented, binding)
+	if err != nil {
+		return "", err
+	}
+	batch := &pgx.Batch{}
+	queueBinding(batch, digest, binding)
+	results := tx.SendBatch(ctx, batch)
+	inserted, err := bindingInserted(results)
+	if closeErr := results.Close(); err == nil {
+		err = closeErr
+	}
+	if err == nil && !inserted {
+		err = requireStoredBinding(ctx, tx, digest, binding)
+	}
+	return token, err
+}
+
+const bindingColumns = `b.kind::text, b.token_key_id, b.family_id::text, b.account_id::text, b.device_id::text, b.session_id::text,
+	b.server_instance_id::text, b.recovery_epoch, b.security_revision, b.high_water_sequence, b.resume_sequence, b.snapshot_id::text,
+	b.resume_kind, b.resume_id::text, b.item_limit, b.byte_limit, b.created_at, b.expires_at`
+
+// sqlInsertBinding stores a binding; a stored one under the same digest is
+// kept (sync_page_bindings_pkey).
+const sqlInsertBinding = `INSERT INTO sync_page_bindings(family_id,token_digest,token_key_id,account_id,device_id,session_id,
+	server_instance_id,recovery_epoch,security_revision,kind,high_water_sequence,resume_sequence,snapshot_id,resume_kind,resume_id,
+	item_limit,byte_limit,created_at,expires_at)
+	VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10::text::app.page_kind,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+	ON CONFLICT(family_id,token_digest) DO NOTHING`
+
+func queueBinding(batch *pgx.Batch, digest [32]byte, b pageBinding) {
+	var resumeSequence, resumeKind, resumeID any
+	if b.kind == "sync" {
+		resumeSequence = int64(b.resumeSequence)
+	} else {
+		code, _ := care.KindCode(b.resumeKey.Kind)
+		resumeKind, resumeID = code, b.resumeKey.ID
+	}
+	batch.Queue(sqlInsertBinding, b.familyID, digest[:], b.keyID, b.accountID, b.deviceID, b.sessionID, b.instanceID, int64(b.epoch),
+		int64(b.securityRevision), b.kind, int64(b.highWater), resumeSequence, b.snapshotID, resumeKind, resumeID, b.itemLimit, b.byteLimit,
+		b.createdAt, b.expiresAt)
+}
+
+// bindingInserted reads queueBinding's result from results, which the
+// caller owns and closes: whether the binding was inserted, or a binding
+// was already stored under its digest.
+func bindingInserted(results pgx.BatchResults) (bool, error) {
+	tag, err := results.Exec()
+	return err == nil && tag.RowsAffected() == 1, err
+}
+
+// requireStoredBinding accepts a binding that was not inserted only when
+// the stored one under its digest equals b (a replayed continuation);
+// anything else is an invalid token. The caller has closed the batch
+// results first.
+func requireStoredBinding(ctx context.Context, tx pgx.Tx, digest [32]byte, b pageBinding) error {
+	stored, err := scanBinding(tx.QueryRow(ctx, `SELECT `+bindingColumns+` FROM sync_page_bindings b WHERE b.family_id=$1 AND b.token_digest=$2`,
+		b.familyID, digest[:]))
+	if err != nil || !samePageBinding(stored, b) {
+		return ErrInvalidPageToken
+	}
 	return nil
 }
 
-func (s *Service) previewSyncPage(ctx context.Context, tx pgx.Tx, familyID string, after, highWater uint64, itemLimit, byteLimit int, keyID string) ([]protocol.JournalChange, uint64, bool, error) {
-	candidates, err := ReadJournal(ctx, tx, familyID, s.identity.InstanceID, s.identity.RecoveryEpoch, after, highWater, itemLimit+1)
-	if err != nil {
-		return nil, 0, false, err
+// scanBinding scans bindingColumns followed by dest.
+func scanBinding(row pgx.Row, dest ...any) (pageBinding, error) {
+	var b pageBinding
+	var resumeSequence *int64
+	var resumeKind *int16
+	var resumeID *string
+	if err := row.Scan(append([]any{&b.kind, &b.keyID, &b.familyID, &b.accountID, &b.deviceID, &b.sessionID, &b.instanceID, &b.epoch,
+		&b.securityRevision, &b.highWater, &resumeSequence, &b.snapshotID, &resumeKind, &resumeID, &b.itemLimit, &b.byteLimit,
+		&b.createdAt, &b.expiresAt}, dest...)...); err != nil {
+		return pageBinding{}, err
 	}
-	return chooseSyncChanges(candidates, after, highWater, itemLimit, byteLimit, s.identity, familyID, pageTokenPlaceholder(keyID))
-}
-
-func chooseSyncChanges(candidates []protocol.JournalChange, after, highWater uint64, itemLimit, byteLimit int, identity protocol.ServerInfo, familyID, placeholder string) ([]protocol.JournalChange, uint64, bool, error) {
-	page := make([]protocol.JournalChange, 0, min(itemLimit, len(candidates)))
-	end := after
-	for index, change := range candidates {
-		if index >= itemLimit {
-			break
+	if resumeSequence != nil {
+		b.resumeSequence = uint64(*resumeSequence)
+	}
+	if resumeKind != nil && resumeID != nil {
+		name, ok := care.KindName(*resumeKind)
+		if !ok {
+			return pageBinding{}, fmt.Errorf("sync: binding resume kind %d", *resumeKind)
 		}
-		trial := append(append([]protocol.JournalChange(nil), page...), change)
-		more := change.Cursor.Sequence < highWater
-		if syncResponseBytes(identity, familyID, highWater, trial, more, placeholder) > byteLimit {
-			if len(page) == 0 {
-				return nil, 0, false, ErrPageLimit
-			}
-			break
-		}
-		page, end = trial, change.Cursor.Sequence
+		b.resumeKey = care.SnapshotKey{Kind: name, ID: *resumeID}
 	}
-	return page, end, end < highWater, nil
+	return b, nil
 }
 
-func syncResponseBytes(identity protocol.ServerInfo, familyID string, highWater uint64, changes []protocol.JournalChange, hasMore bool, placeholder string) int {
-	var next *string
-	if hasMore {
-		next = &placeholder
+func samePageBinding(left, right pageBinding) bool {
+	leftSnapshot, rightSnapshot := "", ""
+	if left.snapshotID != nil {
+		leftSnapshot = *left.snapshotID
 	}
-	return protocol.IncrementalPageEncodedBytes(identity, familyID, highWater, changes, next)
-}
-
-func encodedSyncPageBytes(response protocol.SyncResponse) int {
-	return protocol.IncrementalPageEncodedBytes(protocol.ServerInfo{InstanceID: response.ServerInstanceID, RecoveryEpoch: response.RecoveryEpoch},
-		response.HighWater.FamilyID, response.HighWater.Sequence, response.Changes, response.NextPageToken)
+	if right.snapshotID != nil {
+		rightSnapshot = *right.snapshotID
+	}
+	return hmac.Equal([]byte(left.keyID), []byte(right.keyID)) && left.kind == right.kind && left.familyID == right.familyID &&
+		left.accountID == right.accountID && left.deviceID == right.deviceID && left.sessionID == right.sessionID &&
+		left.instanceID == right.instanceID && left.epoch == right.epoch && left.securityRevision == right.securityRevision &&
+		left.highWater == right.highWater && left.resumeSequence == right.resumeSequence && leftSnapshot == rightSnapshot &&
+		left.resumeKey == right.resumeKey && left.itemLimit == right.itemLimit && left.byteLimit == right.byteLimit &&
+		left.createdAt.Equal(right.createdAt) && left.expiresAt.Equal(right.expiresAt)
 }
 
 func pageTokenPlaceholder(keyID string) string {
@@ -330,35 +448,69 @@ func pageTokenPlaceholder(keyID string) string {
 	return token
 }
 
-func (s *Service) readSyncContinuation(ctx context.Context, tx pgx.Tx, principal access.Principal, grant access.Grant, raw string, response *protocol.SyncResponse) error {
+// sqlSyncContinuation reads a sync binding by digest and, in the same
+// statement, the current rows of its range (resume, high water], at most
+// item_limit+1 (sync_page_bindings_pkey, then care_entities_seq_key). A
+// row edited since the page was issued has moved past the high water: the
+// range then holds fewer rows, and that row arrives in the next pull.
+const sqlSyncContinuation = `SELECT ` + bindingColumns + `, c.changed_seq, c.kind, c.id::text, c.entity_version, c.actor_account_id::text,
+	c.device_id::text, c.operation::text, c.accepted_at, c.wire
+	FROM sync_page_bindings b LEFT JOIN LATERAL (
+		SELECT changed_seq, kind, id, entity_version, actor_account_id, device_id, operation, accepted_at, wire FROM care_entities
+		WHERE family_id = $1 AND changed_seq > b.resume_sequence AND changed_seq <= b.high_water_sequence
+		ORDER BY changed_seq LIMIT b.item_limit + 1) c ON true
+	WHERE b.family_id = $1 AND b.token_digest = $2`
+
+// syncContinuation serves a continuation: the binding and its range's
+// current rows in one statement, then the page.
+func (s *Service) syncContinuation(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, raw string) (protocol.SyncResponse, error) {
 	token, err := decodePageToken(s.pageKeys, raw)
 	if err != nil {
-		return err
+		return protocol.SyncResponse{}, err
 	}
-	binding, err := loadPageBinding(ctx, tx, grant.FamilyID, pageDigest(token.lookup))
-	if errors.Is(err, pgx.ErrNoRows) {
-		return ErrInvalidPageToken
-	}
+	digest := pageDigest(token.lookup)
+	rows, err := tx.Query(ctx, sqlSyncContinuation, g.FamilyID, digest[:])
 	if err != nil {
-		return err
+		return protocol.SyncResponse{}, err
 	}
-	if err := validatePageBinding(binding, token, principal, grant, s.identity, "sync", s.now()); err != nil {
-		return err
+	var binding pageBinding
+	found := false
+	changes := []care.ChangeRow{}
+	for rows.Next() {
+		var seq, version *int64
+		var kind *int16
+		var id, actor, device, operation *string
+		var accepted *time.Time
+		var wire []byte
+		b, err := scanBinding(rows, &seq, &kind, &id, &version, &actor, &device, &operation, &accepted, &wire)
+		if err != nil {
+			rows.Close()
+			return protocol.SyncResponse{}, err
+		}
+		binding, found = b, true
+		if seq == nil {
+			continue
+		}
+		name, ok := care.KindName(*kind)
+		if !ok {
+			rows.Close()
+			return protocol.SyncResponse{}, fmt.Errorf("sync: change %d has kind code %d", *seq, *kind)
+		}
+		changes = append(changes, care.ChangeRow{Seq: uint64(*seq), Kind: name, ID: *id, Version: uint64(*version), ActorAccountID: *actor,
+			DeviceID: *device, Operation: *operation, AcceptedAt: accepted.UTC(), Wire: wire})
 	}
-	if err := s.buildSyncPage(ctx, tx, principal, grant, binding.resume, binding.highWater, binding.itemLimit, binding.byteLimit, []protocol.Outcome{}, &token, response); err != nil {
-		return err
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return protocol.SyncResponse{}, err
 	}
-	if response.HighWater.Sequence != binding.highWater || len(response.Changes) != binding.pageItems || encodedSyncPageBytes(*response) != binding.pageBytes {
-		return ErrInvalidPageToken
+	if !found {
+		return protocol.SyncResponse{}, ErrInvalidPageToken
 	}
-	end := binding.resume
-	if len(response.Changes) != 0 {
-		end = response.Changes[len(response.Changes)-1].Cursor.Sequence
+	if err := validatePageBinding(binding, token, p, g, s.identity, "sync", s.now()); err != nil {
+		return protocol.SyncResponse{}, err
 	}
-	if end != binding.pageEnd {
-		return ErrInvalidPageToken
-	}
-	return nil
+	return s.syncPage(ctx, tx, p, g, syncRange{resume: binding.resumeSequence, highWater: binding.highWater, itemLimit: binding.itemLimit,
+		byteLimit: binding.byteLimit, created: binding.createdAt, expires: binding.expiresAt}, changes, []protocol.Outcome{}, &token)
 }
 
 func validatePageBinding(binding pageBinding, token decodedPageToken, principal access.Principal, grant access.Grant, identity protocol.ServerInfo, kind string, now time.Time) error {
@@ -373,54 +525,4 @@ func validatePageBinding(binding pageBinding, token decodedPageToken, principal 
 		return ErrPageExpired
 	}
 	return nil
-}
-
-func loadPageBinding(ctx context.Context, tx pgx.Tx, familyID string, digest [32]byte) (pageBinding, error) {
-	var b pageBinding
-	var snapshotID *string
-	err := tx.QueryRow(ctx, `SELECT kind,token_key_id,family_id::text,account_id::text,device_id::text,session_id::text,server_instance_id::text,
-		recovery_epoch,security_revision,high_water_sequence,range_end_position,resume_position,page_end_position,page_item_count,
-		page_encoded_bytes,snapshot_id::text,item_limit,byte_limit,created_at,expires_at FROM sync_page_sessions
-		WHERE family_id=$1 AND token_digest=$2`, familyID, digest[:]).Scan(&b.kind, &b.keyID, &b.familyID, &b.accountID, &b.deviceID, &b.sessionID,
-		&b.instanceID, &b.epoch, &b.securityRevision, &b.highWater, &b.rangeEnd, &b.resume, &b.pageEnd, &b.pageItems,
-		&b.pageBytes, &snapshotID, &b.itemLimit, &b.byteLimit, &b.createdAt, &b.expiresAt)
-	b.snapshotID = snapshotID
-	return b, err
-}
-
-func insertPageBinding(ctx context.Context, tx pgx.Tx, keyID string, lookup [32]byte, b pageBinding) error {
-	digest := pageDigest(lookup)
-	b.keyID = keyID
-	result, err := tx.Exec(ctx, `INSERT INTO sync_page_sessions(family_id,token_digest,token_key_id,account_id,device_id,session_id,
-		server_instance_id,recovery_epoch,security_revision,kind,high_water_sequence,range_end_position,resume_position,page_end_position,
-		page_item_count,page_encoded_bytes,snapshot_id,item_limit,byte_limit,created_at,expires_at)
-		VALUES($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
-		ON CONFLICT(family_id,token_digest) DO NOTHING`, b.familyID, digest[:], keyID, b.accountID, b.deviceID, b.sessionID, b.instanceID,
-		b.epoch, b.securityRevision, b.kind, b.highWater, b.rangeEnd, b.resume, b.pageEnd, b.pageItems, b.pageBytes, b.snapshotID,
-		b.itemLimit, b.byteLimit, b.createdAt, b.expiresAt)
-	if err != nil || result.RowsAffected() == 1 {
-		return err
-	}
-	existing, err := loadPageBinding(ctx, tx, b.familyID, digest)
-	if err != nil || !samePageBinding(existing, b) {
-		return ErrInvalidPageToken
-	}
-	return nil
-}
-
-func samePageBinding(left, right pageBinding) bool {
-	leftSnapshot, rightSnapshot := "", ""
-	if left.snapshotID != nil {
-		leftSnapshot = *left.snapshotID
-	}
-	if right.snapshotID != nil {
-		rightSnapshot = *right.snapshotID
-	}
-	return hmac.Equal([]byte(left.keyID), []byte(right.keyID)) && left.kind == right.kind && left.familyID == right.familyID &&
-		left.accountID == right.accountID && left.deviceID == right.deviceID && left.sessionID == right.sessionID &&
-		left.instanceID == right.instanceID && left.epoch == right.epoch && left.securityRevision == right.securityRevision &&
-		left.highWater == right.highWater && left.rangeEnd == right.rangeEnd && left.resume == right.resume &&
-		left.pageEnd == right.pageEnd && left.pageItems == right.pageItems && left.pageBytes == right.pageBytes &&
-		leftSnapshot == rightSnapshot && left.itemLimit == right.itemLimit && left.byteLimit == right.byteLimit &&
-		left.createdAt.Equal(right.createdAt) && left.expiresAt.Equal(right.expiresAt)
 }

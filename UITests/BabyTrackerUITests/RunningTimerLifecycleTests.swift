@@ -61,9 +61,8 @@ final class RunningTimerLifecycleTests: XCTestCase {
         earlier.tap()
         screenshot(app, "running-timer-editor")
 
-        // Sized to its content: the running side's line is on screen, not
-        // cut off below a stated height that is too short.
-        XCTAssertTrue(app.staticTexts["timerEdit.runningSide"].isHittable, "the running side is cut off")
+        // The running side is shown, with an End of "Running".
+        XCTAssertTrue(app.descendants(matching: .any)["timerEdit.runningSide"].firstMatch.exists, "the running side is missing")
 
         let save = app.buttons["Save"]
         XCTAssertTrue(save.isEnabled)

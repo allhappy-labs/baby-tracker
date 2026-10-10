@@ -16,8 +16,6 @@ import (
 	"time"
 	"unicode"
 	"unicode/utf8"
-
-	"babytracker/server/internal/security"
 )
 
 const (
@@ -32,28 +30,15 @@ type NotificationService struct {
 	keys                           *JWKSCache
 	audience, instanceID           string
 	identityKeys, notificationKeys DigestKeyring
-	repository                     NotificationRepository
-	security                       *security.Service
+	authority                      Authority
 	now                            func() time.Time
-}
-
-type AuthIdentityLookup struct {
-	AccountID                    string
-	AuthorityStatus, DisplayName string
-	ProfileRequired              bool
-}
-
-type NotificationRepository interface {
-	LookupAuthIdentity(context.Context, string, string, [32]byte) (AuthIdentityLookup, error)
-	ReserveAppleNotification(context.Context, []KeyedDigest, string, time.Time) (string, bool, error)
 }
 
 type NotificationOptions struct {
 	Audience, InstanceID           string
 	HTTP                           *http.Client
 	IdentityKeys, NotificationKeys DigestKeyring
-	Repository                     NotificationRepository
-	Security                       *security.Service
+	Authority                      Authority
 	Now                            func() time.Time
 }
 
@@ -72,13 +57,12 @@ type appleNotificationEvent struct {
 
 func NewNotificationService(options NotificationOptions) (*NotificationService, error) {
 	if !validBoundedText(options.Audience, maxAppleNotificationTextBytes) || !validNonzeroUUID(options.InstanceID) ||
-		!validateKeyring(options.IdentityKeys) || !validateKeyring(options.NotificationKeys) || options.Repository == nil || options.Security == nil || options.Now == nil {
+		!validateKeyring(options.IdentityKeys) || !validateKeyring(options.NotificationKeys) || options.Authority == nil || options.Now == nil {
 		return nil, errors.New("complete Apple notification options are required")
 	}
 	return &NotificationService{
 		keys: newJWKSCache(options.HTTP, options.Now), audience: options.Audience, instanceID: options.InstanceID,
-		identityKeys: options.IdentityKeys, notificationKeys: options.NotificationKeys, repository: options.Repository,
-		security: options.Security, now: options.Now,
+		identityKeys: options.IdentityKeys, notificationKeys: options.NotificationKeys, authority: options.Authority, now: options.Now,
 	}, nil
 }
 
@@ -247,44 +231,30 @@ func decodeAppleNotificationEvent(object map[string]json.RawMessage, now time.Ti
 	return event, nil
 }
 
+// handleDestructive marks the notified identity's account unavailable
+// (consent-revoked, account-deleted). Order: resolve the identity (an absent
+// or deleted one needs nothing); an exact retry's receipt under any
+// notification key's command ID settles it before any reservation (a
+// receipt for different content under the same JTI is command_id_reused);
+// an already unavailable identity needs nothing; otherwise reserve the
+// notification's command ID and mark the identity unavailable under it. A
+// concurrent notification that marked it first settles the loser.
 func (service *NotificationService) handleDestructive(ctx context.Context, claims appleNotificationClaims) error {
-	if service.repository == nil || service.security == nil {
+	if service.authority == nil {
 		return ErrUnavailable
 	}
-	authorityCandidates := make([]string, 0, 1+len(service.identityKeys.Previous))
-	var lookup AuthIdentityLookup
-	matches := 0
+	candidates := make([]string, 0, 1+len(service.identityKeys.Previous))
 	for _, key := range append([]DigestKey{service.identityKeys.Current}, service.identityKeys.Previous...) {
-		candidate := identityDigest(key, "apple", claims.Audience, claims.Event.Subject)
-		authorityCandidates = append(authorityCandidates, authorityDigest(candidate))
-		row, err := service.repository.LookupAuthIdentity(ctx, "apple", candidate.KeyID, candidate.Sum)
-		if err != nil {
-			return ErrUnavailable
-		}
-		if row.AccountID == "" {
-			if row.AuthorityStatus != "" || row.DisplayName != "" || row.ProfileRequired {
-				return ErrUnavailable
-			}
-			continue
-		}
-		if !validNonzeroUUID(row.AccountID) || (row.AuthorityStatus != "active" && row.AuthorityStatus != "identity_unavailable" && row.AuthorityStatus != "deleted") {
-			return ErrUnavailable
-		}
-		matches++
-		if matches == 1 {
-			lookup = row
-		}
+		candidates = append(candidates, authorityDigest(identityDigest(key, "apple", claims.Audience, claims.Event.Subject)))
 	}
-	if matches > 1 {
-		return ErrUnavailable
-	}
-	accountID, found, err := service.authoritativeNotificationAccount(ctx, authorityCandidates, lookup.AccountID)
+	resolution, err := service.authority.ResolveIdentity(ctx, candidates)
 	if err != nil {
-		return err
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
-	if !found {
+	if !resolution.Live() {
 		return nil
 	}
+	accountID := resolution.AccountID
 
 	keys := append([]DigestKey{service.notificationKeys.Current}, service.notificationKeys.Previous...)
 	commandIDs := make([]string, 0, len(keys))
@@ -295,126 +265,30 @@ func (service *NotificationService) handleDestructive(ctx context.Context, claim
 		digests = append(digests, digest)
 	}
 	semanticDigest := notificationSemanticDigest(claims)
-	receipted, err := service.checkNotificationReceipts(ctx, accountID, authorityCandidates, commandIDs, semanticDigest)
-	if err != nil {
+	receipted, err := service.authority.NotificationReceipt(ctx, accountID, commandIDs, semanticDigest)
+	if err != nil || receipted {
 		return err
 	}
-	if receipted {
+	if resolution.Status == "identity_unavailable" {
 		return nil
 	}
-
-	storedCommandID, _, err := service.repository.ReserveAppleNotification(ctx, digests, commandIDs[0], service.now().UTC())
-	if err != nil || !slices.Contains(commandIDs, storedCommandID) {
+	storedCommandID, _, err := service.authority.ReserveAppleNotification(ctx, digests, commandIDs[0], service.now().UTC())
+	if err != nil {
+		return fmt.Errorf("%w: %w", ErrUnavailable, err)
+	}
+	if !slices.Contains(commandIDs, storedCommandID) {
 		return ErrUnavailable
 	}
-	receipted, err = service.checkNotificationReceipts(ctx, accountID, authorityCandidates, []string{storedCommandID}, semanticDigest)
-	if err != nil {
-		return err
-	}
-	if receipted {
-		return nil
-	}
-	_, err = service.security.ExecutePrepared(ctx, service.prepareIdentityUnavailable(accountID, authorityCandidates, storedCommandID, semanticDigest))
+	err = service.authority.MarkIdentityUnavailable(ctx, IdentityUnavailableCommand{CommandID: storedCommandID, AccountID: accountID,
+		Candidates: candidates, NotificationDigest: semanticDigest, At: service.now().UTC()})
 	if err == nil {
 		return nil
 	}
-	settled, reconcileErr := service.checkNotificationReceipts(ctx, accountID, authorityCandidates, []string{storedCommandID}, semanticDigest)
-	if reconcileErr != nil {
-		return reconcileErr
-	}
-	if settled {
+	settled, settleErr := service.authority.ResolveIdentity(ctx, candidates)
+	if settleErr == nil && settled.AccountID == accountID && settled.Status == "identity_unavailable" {
 		return nil
 	}
 	return err
-}
-
-func (service *NotificationService) authoritativeNotificationAccount(ctx context.Context, identityCandidates []string, projectedAccountID string) (string, bool, error) {
-	var accountID string
-	err := service.security.WithAuthoritySnapshot(ctx, func(snapshot security.AuthoritySnapshot) error {
-		resolution, err := snapshot.View.ResolveIdentityAuthority(identityCandidates)
-		if err != nil {
-			return err
-		}
-		switch resolution.Status {
-		case "absent":
-			if projectedAccountID != "" {
-				return ErrUnavailable
-			}
-			return nil
-		case "deleted":
-			if projectedAccountID != "" {
-				return ErrUnavailable
-			}
-			return nil
-		case "active", "identity_unavailable":
-			if projectedAccountID != "" && projectedAccountID != resolution.AccountID {
-				return ErrUnavailable
-			}
-			accountID = resolution.AccountID
-			return nil
-		default:
-			return ErrUnavailable
-		}
-	})
-	return accountID, accountID != "", err
-}
-
-func (service *NotificationService) checkNotificationReceipts(ctx context.Context, accountID string, identityCandidates, commandIDs []string, semanticDigest string) (bool, error) {
-	receipted := false
-	err := service.security.WithAuthoritySnapshot(ctx, func(snapshot security.AuthoritySnapshot) error {
-		resolution, err := snapshot.View.ResolveIdentityAuthority(identityCandidates)
-		if err != nil || resolution.AccountID != accountID || resolution.Status == "absent" || resolution.Status == "deleted" {
-			return ErrUnavailable
-		}
-		actor, err := snapshot.ResolveIdentityActor(identityCandidates, accountID, resolution.LifecycleGeneration)
-		if err != nil {
-			return err
-		}
-		for _, commandID := range commandIDs {
-			if _, exists := snapshot.View.Receipt(accountID, commandID); !exists {
-				continue
-			}
-			prepared, err := snapshot.PrepareIdentityUnavailable(actor, security.IdentityUnavailableCommandInput{
-				Meta: security.CommandMeta{CommandID: commandID, At: service.now().UTC()},
-				Payload: security.IdentityAuthorityPayload{
-					Version: "v1", AccountID: accountID, IdentityKey: resolution.IdentityKey, NotificationDigest: semanticDigest,
-				},
-			})
-			if err != nil {
-				return err
-			}
-			if _, err := snapshot.CommandHash(prepared); err != nil {
-				return err
-			}
-			receipted = true
-		}
-		if !receipted && resolution.Status == "identity_unavailable" {
-			receipted = true
-		} else if !receipted && resolution.Status != "active" {
-			return ErrUnavailable
-		}
-		return nil
-	})
-	return receipted, err
-}
-
-func (service *NotificationService) prepareIdentityUnavailable(accountID string, identityCandidates []string, commandID, semanticDigest string) security.PrepareCommand {
-	return func(_ context.Context, snapshot security.AuthoritySnapshot) (security.PreparedCommand, error) {
-		resolution, err := snapshot.View.ResolveIdentityAuthority(identityCandidates)
-		if err != nil || resolution.Status == "absent" || resolution.Status == "deleted" || resolution.AccountID != accountID {
-			return security.PreparedCommand{}, ErrUnavailable
-		}
-		actor, err := snapshot.ResolveIdentityActor(identityCandidates, accountID, resolution.LifecycleGeneration)
-		if err != nil {
-			return security.PreparedCommand{}, err
-		}
-		return snapshot.PrepareIdentityUnavailable(actor, security.IdentityUnavailableCommandInput{
-			Meta: security.CommandMeta{CommandID: commandID, At: service.now().UTC()},
-			Payload: security.IdentityAuthorityPayload{
-				Version: "v1", AccountID: accountID, IdentityKey: resolution.IdentityKey, NotificationDigest: semanticDigest,
-			},
-		})
-	}
 }
 
 func notificationTimeAccepted(seconds int64, now time.Time) bool {

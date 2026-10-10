@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"babytracker/server/internal/apns"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -101,7 +102,7 @@ func outcomeOf(result PushResult) *PushOutcome {
 		status := result.HTTPStatus
 		outcome.HTTPStatus = &status
 	}
-	if apnsReasons[result.Reason] {
+	if apns.KnownReason(result.Reason) {
 		outcome.Reason = result.Reason
 	}
 	return outcome
@@ -186,4 +187,48 @@ func (q *Queue) AbandonStart(ctx context.Context, c Claim, intent, previous Targ
 		return ErrStaleClaim
 	}
 	return err
+}
+
+// The maintenance calls below replace main's journal trigger, the claim's
+// own sweep and the security guard's registration sweep: the worker runs
+// them on the maintenance pool.
+
+// SweepRegistrationsLimit is one registration sweep's page: a sweep that
+// returns this many may have left more.
+const SweepRegistrationsLimit = 100
+
+// SweepRegistrations revokes up to SweepRegistrationsLimit registrations
+// app.live_activity_authorized no longer admits (requireEntitlement is the
+// hosted family_sync rule) and returns how many it found; their delivery
+// rows go with them.
+func (q *Queue) SweepRegistrations(ctx context.Context, requireEntitlement bool) (int, error) {
+	var n int
+	err := q.pool.QueryRow(ctx, `SELECT app.sweep_live_activity_registrations($1,$2)`, requireEntitlement, SweepRegistrationsLimit).Scan(&n)
+	return n, err
+}
+
+// SweepWork dirties every registered family whose sequence moved past its
+// last flush, or whose authority was last checked over a minute ago: the
+// backstop for a change the post-commit feed lost (main's claim ran it).
+func (q *Queue) SweepWork(ctx context.Context) error {
+	_, err := q.pool.Exec(ctx, `SELECT app.sweep_live_activity_work()`)
+	return err
+}
+
+// MaximumDirtyBatch bounds one FlushDirty call (app.dirty_live_activity_families).
+const MaximumDirtyBatch = 1000
+
+// FlushDirty dirties those of families (each at its sequence) that hold a
+// live registration, and returns how many did.
+func (q *Queue) FlushDirty(ctx context.Context, families []string, sequences []uint64) (int, error) {
+	if len(families) != len(sequences) || len(families) > MaximumDirtyBatch {
+		return 0, errors.New("live_activity_invalid_dirty_batch")
+	}
+	values := make([]int64, len(sequences))
+	for i, sequence := range sequences {
+		values[i] = int64(sequence)
+	}
+	var n int
+	err := q.pool.QueryRow(ctx, `SELECT app.dirty_live_activity_families($1::uuid[],$2::bigint[])`, families, values).Scan(&n)
+	return n, err
 }

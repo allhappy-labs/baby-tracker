@@ -10,10 +10,10 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/family"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 )
 
 const familyBodyBytes int64 = 64 << 10
@@ -326,18 +326,18 @@ func familyRecoveryStatusHandler(options Options) http.HandlerFunc {
 }
 
 func familyRecoverHandler(options Options) http.HandlerFunc {
-	return familyRecoveryMutation(options, func(ctx context.Context, p access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
+	return familyRecoveryMutation(options, func(ctx context.Context, p access.Principal, commandID string, confirmed bool) (authority.Result, error) {
 		return options.FamilyService.Recover(ctx, p, commandID, confirmed)
 	})
 }
 
 func familyForfeitHandler(options Options) http.HandlerFunc {
-	return familyRecoveryMutation(options, func(ctx context.Context, p access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
+	return familyRecoveryMutation(options, func(ctx context.Context, p access.Principal, commandID string, confirmed bool) (authority.Result, error) {
 		return options.FamilyService.Forfeit(ctx, p, commandID, confirmed)
 	})
 }
 
-func familyRecoveryMutation(options Options, mutate func(context.Context, access.Principal, string, bool) (security.CommandResult, error)) http.HandlerFunc {
+func familyRecoveryMutation(options Options, mutate func(context.Context, access.Principal, string, bool) (authority.Result, error)) http.HandlerFunc {
 	return familyMutation(options, "", "", func(w http.ResponseWriter, r *http.Request, p access.Principal) {
 		var input protocol.ConfirmedCommandRequest
 		if !decodeRecoveryRequest(w, r, &input) {
@@ -489,7 +489,7 @@ func pendingInvitationsResponse(views []family.InvitationView) protocol.PendingI
 	return protocol.PendingInvitationsResponse{Invitations: invitations}
 }
 
-func commandResponse(result security.CommandResult) protocol.CommandResponse {
+func commandResponse(result authority.Result) protocol.CommandResponse {
 	return protocol.CommandResponse{ProtocolVersion: "v1", CommandID: result.CommandID, Outcome: result.Outcome, Code: result.Code, Revision: result.Revision}
 }
 

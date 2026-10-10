@@ -33,7 +33,7 @@ func TestSupplementDeleteAndChildCascade(t *testing.T) {
 		if err != nil || out.Status != "applied" {
 			t.Fatalf("delete %+v %v", out, err)
 		}
-		pull, err := h.Service.ApplyAndPull(t.Context(), h.Owner, h.SyncRequest(h.Cursor(before), nil))
+		pull, err := applyAndPull(t, h.Service, h.Owner, h.SyncRequest(h.Cursor(before), nil))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -81,8 +81,8 @@ func TestSupplementLoggedAtSurvivesEditAndFreshSnapshot(t *testing.T) {
 	if edited.CanonicalEntity.Payload.(protocol.SupplementPayload).LoggedAt != original {
 		t.Fatal("edit changed logging order")
 	}
-	h.RebuildSyncService(t)
-	snapshot, err := h.Service.FullSnapshot(t.Context(), h.Caregiver, protocol.SnapshotRequest{})
+	h.RebuildSyncService(t, h.Limits)
+	snapshot, err := fullSnapshot(t, h.Service, h.Caregiver, protocol.SnapshotRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,6 +109,6 @@ func TestSupplementLoggedAtSurvivesEditAndFreshSnapshot(t *testing.T) {
 		t.Fatalf("immutable field %+v %v", rejected, err)
 	}
 	if h.FamilySequence(t) != before {
-		t.Fatal("rejected edit advanced journal")
+		t.Fatal("rejected edit advanced the family sequence")
 	}
 }

@@ -100,7 +100,7 @@ func TestRecoveryStageCanonicalBytes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	common := validExchangeStage().StageCommon
+	common := validRefreshStage().StageCommon
 	common.Kind = "refresh"
 	common.TokenKeyID = input.OutputKeyID
 	common.LineageRootSessionID = input.LineageRootSessionID
@@ -154,7 +154,7 @@ func TestRecoveryFrozenFamilyDoesNotTrackMutableInput(t *testing.T) {
 }
 
 func TestRecoveryStageRejectsLegacyEncoderBypass(t *testing.T) {
-	common := validExchangeStage().StageCommon
+	common := validRefreshStage().StageCommon
 	common.Kind = "refresh"
 	stage := RefreshStage{StageCommon: common, ParentSessionID: "11111111-2222-4333-8444-555555555555",
 		Recovery: &RecoveryMaterial{}}

@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -28,6 +29,36 @@ func TestComposeWiresActorIDPepperAndInvitationKeyring(t *testing.T) {
 	}
 	if err := yaml.Unmarshal(encoded, &compose); err != nil {
 		t.Fatal(err)
+	}
+	// PostgreSQL is the only security authority: no ledger directories, no
+	// projector credential, no state volume.
+	for _, serviceName := range []string{"app", "migrate"} {
+		service := compose.Services[serviceName]
+		for _, retired := range []string{"BT_SECURITY_LEDGER_DIR", "BT_LEDGER_HEAD_DIR", "BT_PROJECTOR_DATABASE_URL_FILE", "BT_DB_PROJECTOR_MAX_CONNS"} {
+			if _, ok := service.Environment[retired]; ok {
+				t.Errorf("%s still sets retired %s", serviceName, retired)
+			}
+		}
+		if containsString(service.Secrets, "projector_database_url") {
+			t.Errorf("%s still mounts the projector credential", serviceName)
+		}
+		for _, volume := range service.Volumes {
+			if strings.Contains(volume, "ledger") || strings.Contains(volume, "/var/lib/babytracker") {
+				t.Errorf("%s still mounts security state %q", serviceName, volume)
+			}
+		}
+	}
+	// Nor any credential of the projector or Apple-revoker roles the baseline
+	// dropped (Phase 4 Task 27), on any service.
+	for _, retired := range retiredRoleSecrets {
+		if _, ok := compose.Secrets[retired]; ok {
+			t.Errorf("compose still declares the retired %s", retired)
+		}
+		for serviceName, service := range compose.Services {
+			if containsString(service.Secrets, retired) {
+				t.Errorf("%s still mounts the retired %s", serviceName, retired)
+			}
+		}
 	}
 	for _, serviceName := range []string{"app", "migrate"} {
 		service, ok := compose.Services[serviceName]
@@ -108,7 +139,7 @@ compose() {
     echo 127.0.0.1:31999
     return 0
   fi
-  if [[ $* == *'security verify'* ]]; then
+  if [[ $* == *'authority verify'* ]]; then
     echo actor_id_key_mismatch
     return 1
   fi
@@ -132,7 +163,7 @@ request() {
 smoke_rejects_actor_id_pepper_replacement
 cmp -s "$BT_SECRETS_DIR/actor_id_pepper" "$BT_SECRETS_DIR/actor_id_pepper.original"
 grep -Fx 'up -d --force-recreate app' "$calls" >/dev/null
-grep -Fx 'run --rm --no-deps migrate security verify' "$calls" >/dev/null
+grep -Fx 'run --rm --no-deps migrate authority verify' "$calls" >/dev/null
 [[ $(grep -Fc 'up -d --force-recreate app' "$calls") == 3 ]]
 [[ $(grep -Fc 'port app 8080' "$calls") == 3 ]]
 [[ $base == http://127.0.0.1:31999 ]]
@@ -158,6 +189,43 @@ func TestReadinessPollingUsesShortPerRequestDeadline(t *testing.T) {
 	}
 }
 
+// Phase 3 Task 19: the smoke runs with push off (no BT_APNS_* in the smoke
+// or its compose file, and no push-token-v1 in the server-info fixture it
+// compares /v1/server against), and pins that the push-token route is then
+// not registered: an unauthenticated PUT is 404 (with push on it would be
+// 401). The check sits after the challenge check.
+func TestSmokePinsThePushTokenRouteAbsentWithPushOff(t *testing.T) {
+	script, err := os.ReadFile("smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(script)
+	const pin = `[[ $(curl --silent --max-time 5 -o /dev/null -w '%{http_code}' -X PUT "$base/v1/devices/push-token") == 404 ]]`
+	if n := strings.Count(text, pin); n != 1 {
+		t.Fatalf("smoke.sh holds %d copies of the push-off route check, want 1", n)
+	}
+	challenge := strings.Index(text, `"$base/v1/auth/challenge")`)
+	if challenge < 0 || strings.Index(text, pin) < challenge {
+		t.Fatal("the push-off route check must follow the challenge check")
+	}
+	compose, err := os.ReadFile("../compose.yaml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	fixture, err := os.ReadFile("../api/fixtures/server-info.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{"smoke.sh": strings.ReplaceAll(text, "(no BT_APNS_*)", ""), "compose.yaml": string(compose)} {
+		if strings.Contains(body, "BT_APNS_") {
+			t.Errorf("%s configures APNs; the smoke must run with push off", name)
+		}
+	}
+	if strings.Contains(string(fixture), "push-token-v1") {
+		t.Error("server-info.json advertises push-token-v1; the push-off smoke compares /v1/server against it")
+	}
+}
+
 func TestSmokeDerivesSchemaInventoryFromCompatibilityManifest(t *testing.T) {
 	script, err := os.ReadFile("smoke.sh")
 	if err != nil {
@@ -167,8 +235,12 @@ func TestSmokeDerivesSchemaInventoryFromCompatibilityManifest(t *testing.T) {
 	for _, required := range []string{
 		`jq -r '.max' Server/internal/migrate/compatibility.json`,
 		"SELECT current_version FROM schema_compatibility WHERE singleton",
-		"SELECT count(*)=current_version AND min(version)=1 AND max(version)=current_version",
+		`jq -r '.known[0].version' Server/internal/migrate/compatibility.json`,
+		`jq -r '.known[0].name' Server/internal/migrate/compatibility.json`,
+		`$baseline_name =~ ^[0-9]{6}_baseline\.sql$`,
+		"SELECT count(*)=current_version-$baseline_version+1 AND min(version)=$baseline_version AND max(version)=current_version AND bool_or(version=$baseline_version AND name='$baseline_name')",
 		"schema_version=$expected_schema_version",
+		"baseline schema $expected_schema_version",
 	} {
 		if !strings.Contains(text, required) {
 			t.Errorf("smoke omits compatibility-derived schema assertion %q", required)
@@ -179,6 +251,8 @@ func TestSmokeDerivesSchemaInventoryFromCompatibilityManifest(t *testing.T) {
 		`SELECT count(*) FROM schema_migrations') == 6`,
 		"schema_version=6",
 		"exact v6",
+		"min(version)=1",
+		"contiguous schema",
 	} {
 		if strings.Contains(text, stale) {
 			t.Errorf("smoke retains brittle schema assertion %q", stale)
@@ -186,19 +260,41 @@ func TestSmokeDerivesSchemaInventoryFromCompatibilityManifest(t *testing.T) {
 	}
 }
 
-func TestSelfHostedSmokeCoversPasswordlessFourthPrincipal(t *testing.T) {
-	script, err := os.ReadFile("smoke.sh")
-	if err != nil {
-		t.Fatal(err)
-	}
-	text := string(script)
-	for _, required := range []string{
-		"baby_tracker_apple_revoker_app",
-		"baby_tracker_apple_revoker",
-		"rolpassword IS NULL",
+// retiredRoles and retiredRoleSecrets are the projector and Apple-revoker
+// roles, logins and credentials the baseline dropped (Phase 4 Task 27).
+var (
+	retiredRoles       = []string{"baby_tracker_projector", "baby_tracker_projector_app", "baby_tracker_apple_revoker", "baby_tracker_apple_revoker_app"}
+	retiredRoleSecrets = []string{"projector_password", "projector_database_url", "apple_revocation_password"}
+)
+
+// The deployment creates exactly five roles: the smoke and both principal
+// probe modes check the exact set, and no deployment script names a retired
+// role or credential.
+func TestDeploymentProvesTheRetiredRolesAbsent(t *testing.T) {
+	const exact = `string_agg(rolname, ',' ORDER BY rolname) FROM pg_roles WHERE rolname LIKE 'baby\_tracker\_%'`
+	const roles = "baby_tracker_app,baby_tracker_export_app,baby_tracker_maintenance,baby_tracker_migrator,baby_tracker_runtime"
+	for name, want := range map[string]string{
+		"smoke.sh":            exact + `") == ` + roles + " ]]",
+		"check-principals.sh": exact + `")" = ` + roles + "\n",
 	} {
-		if !strings.Contains(text, required) {
-			t.Errorf("smoke omits self-hosted revoker contract %q", required)
+		encoded, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(string(encoded), want) {
+			t.Errorf("%s does not prove the exact role set %q", name, want)
+		}
+	}
+	for _, name := range []string{"smoke.sh", "check-principals.sh", "provision-unraid-secrets.sh", "test-db.sh", "lib/disposable-sync.sh",
+		"refresh-recovery-phases.sh", "sync-performance.sh", "../deploy/postgres/init-roles.sql", "../deploy/postgres/init-users.sh", "../compose.yaml"} {
+		encoded, err := os.ReadFile(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, retired := range append(append([]string(nil), retiredRoles...), retiredRoleSecrets...) {
+			if strings.Contains(string(encoded), retired) {
+				t.Errorf("%s still names the retired %s", name, retired)
+			}
 		}
 	}
 }
@@ -227,6 +323,167 @@ func TestSmokeUsesPositivePrincipalProbeAndReadinessForDrift(t *testing.T) {
 	for _, required := range []string{"BT_PRINCIPAL_NEGATIVE_PROBES", "positive role and exact current privilege contract verified"} {
 		if !strings.Contains(string(principalScript), required) {
 			t.Errorf("principal probe omits safe-mode contract %q", required)
+		}
+	}
+}
+
+// Schema 30: both the principal probe (in each mode) and the smoke assert
+// the care grants, and neither expects a legacy care table's grants; the
+// smoke asserts the wake queue and its scheduler are gone.
+func TestPrincipalProbeAndSmokeAssertTheCareGrants(t *testing.T) {
+	principal, err := os.ReadFile("check-principals.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	smoke, err := os.ReadFile("smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(principal), "unnest(ARRAY['public.care_entities','public.care_receipts','public.sync_page_bindings','public.sync_snapshot_sessions'])"); n != 8 {
+		t.Fatalf("principal probe asserts the care tables %d times, want the runtime's table and column checks and the other principals' table and column checks in both modes", n)
+	}
+	// has_table_privilege sees only table-level grants: a column-level
+	// UPDATE on a receipt, binding or session table, any column grant to
+	// PUBLIC, or an UPDATE on a care_entities
+	// column outside the named list must fail both probes. (The maintenance
+	// group's schema-31 grants: TestPrincipalProbeAndSmokeAssertTheMaintenanceGrants.)
+	// Each check is a live (uncommented) line, once per principal-probe mode.
+	allowlist := "baby_id,entity_version,changed_seq,actor_account_id,device_id,operation,accepted_at,tombstoned_at,started_at,ended_at,session_id," +
+		"completed_record_id,sort_order,label,name_hash,breast_seconds,bottle_volume_ml,bottle_observations,bottle_missing,shortest_part_seconds,wire,feed_kind"
+	others := regexp.QuoteMeta("unnest(ARRAY['public']) r")
+	for _, check := range []struct {
+		script, text string
+		pattern      string
+		want         int
+	}{
+		{"check-principals.sh", string(principal), `(?m)^\s+test "\$\(sql "SELECT NOT bool_or\(has_any_column_privilege\('baby_tracker_runtime',t,'UPDATE'\)\) FROM unnest\(ARRAY\['public.care_receipts','public.sync_page_bindings','public.sync_snapshot_sessions'\]\) t"\)" = t$`, 2},
+		{"check-principals.sh", string(principal), `(?m)^\s+test "\$\(sql "SELECT NOT bool_or\(has_any_column_privilege\('baby_tracker_runtime',t,'REFERENCES'\)\) FROM unnest\(ARRAY\['public.care_entities',`, 2},
+		{"check-principals.sh", string(principal), `(?m)^\s+test "\$\(sql "SELECT string_agg\(attname, ',' ORDER BY attnum\) FROM pg_attribute WHERE attrelid='public.care_entities'::regclass AND attnum > 0 AND NOT attisdropped AND has_column_privilege\('baby_tracker_runtime',attrelid,attnum,'UPDATE'\)"\)" = ` + regexp.QuoteMeta(allowlist) + `$`, 2},
+		{"check-principals.sh", string(principal), `(?m)^\s+test "\$\(sql "SELECT NOT bool_or\(has_table_privilege\(r,t,p\)\) FROM ` + others + ` CROSS JOIN unnest\(ARRAY\['public.care_entities',`, 2},
+		{"check-principals.sh", string(principal), `(?m)^\s+test "\$\(sql "SELECT NOT bool_or\(has_any_column_privilege\(r,t,p\)\) FROM ` + others + ` CROSS JOIN unnest\(ARRAY\['public.care_entities',.*CROSS JOIN unnest\(ARRAY\['SELECT','INSERT','UPDATE','REFERENCES'\]\) p"\)" = t$`, 2},
+		{"smoke.sh", string(smoke), `(?m)^\s+\[\[ \$\(docker exec "\$db" psql -XAt -U baby_tracker_app -d babytracker -c "SELECT NOT bool_or\(has_any_column_privilege\(current_user,t,'UPDATE'\)\) FROM unnest\(ARRAY\['care_receipts','sync_page_bindings','sync_snapshot_sessions'\]\) t"\) == t \]\]$`, 1},
+		{"smoke.sh", string(smoke), `(?m)^\s+\[\[ \$\(docker exec "\$db" psql -XAt -U baby_tracker_app -d babytracker -c "SELECT string_agg\(attname, ',' ORDER BY attnum\) FROM pg_attribute WHERE attrelid='care_entities'::regclass .*has_column_privilege\(current_user,attrelid,attnum,'UPDATE'\)"\) == ` + regexp.QuoteMeta(allowlist) + ` \]\]$`, 1},
+		{"smoke.sh", string(smoke), `(?m)^\s+\[\[ \$\(docker exec "\$db" psql -XAt -U postgres -d babytracker -c "SELECT NOT bool_or\(has_table_privilege\(r,t,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER'\) OR has_any_column_privilege\(r,t,'SELECT,INSERT,UPDATE,REFERENCES'\)\) FROM unnest\(ARRAY\['public'\]\) r CROSS JOIN unnest\(ARRAY\['care_entities',`, 1},
+	} {
+		if n := len(regexp.MustCompile(check.pattern).FindAllString(check.text, -1)); n != check.want {
+			t.Fatalf("%s has %d live lines matching %s, want %d", check.script, n, check.pattern, check.want)
+		}
+	}
+	// has_table_privilege with a privilege list is true when any one is held,
+	// so each required grant is checked on its own: a lost INSERT must fail.
+	if n := strings.Count(string(principal), "has_table_privilege('baby_tracker_runtime',t,'SELECT') AND has_table_privilege('baby_tracker_runtime',t,'INSERT') AND NOT"); n != 2 {
+		t.Fatalf("principal probe checks the runtime's SELECT and INSERT separately %d times, want once per mode", n)
+	}
+	if strings.Contains(string(principal), "'SELECT,INSERT') AND NOT has_table_privilege('baby_tracker_runtime',t,'UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public.care_entities'") {
+		t.Fatal("principal probe checks the care tables' SELECT and INSERT as one either-or privilege list")
+	}
+	for _, required := range []string{"expected_schema_version >= 30", "unnest(ARRAY['care_entities','care_receipts','sync_page_bindings','sync_snapshot_sessions'])",
+		"has_table_privilege(current_user,t,'SELECT') AND has_table_privilege(current_user,t,'INSERT') AND NOT",
+		"to_regclass('public.delivery_pending') IS NULL", "p.proname='schedule_family_wakes')"} {
+		if !strings.Contains(string(smoke), required) {
+			t.Fatalf("smoke omits %q", required)
+		}
+	}
+	for _, retired := range []string{"'public.babies'", "'public.mutation_journal'", "'public.sync_snapshot_entities'", "'public.active_timers'", "'babies'", "'mutation_journal'", "'family_record_usage'"} {
+		if strings.Contains(string(principal), retired) || strings.Contains(string(smoke), retired) {
+			t.Fatalf("a schema-30 principal check still expects the legacy %s", retired)
+		}
+	}
+}
+
+// Schema 31: both principal-probe modes and the smoke assert the maintenance
+// group's retention, purge, wake and audit-partition grants (each required
+// privilege on its own; the exact counter, care-key and import-key column
+// lists, so no care payload; nothing on the push-token table; the four
+// definers maintenance-only), and that the database rate limits are gone. No schema-30 check still lists the maintenance group among the
+// principals with no care access.
+func TestPrincipalProbeAndSmokeAssertTheMaintenanceGrants(t *testing.T) {
+	principal, err := os.ReadFile("check-principals.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	smoke, err := os.ReadFile("smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, check := range []struct {
+		script, text, required string
+		want                   int
+	}{
+		{"check-principals.sh", string(principal), `if [ "$(sql "SELECT current_version >= 31 FROM schema_compatibility WHERE singleton")" = t ]; then`, 2},
+		{"check-principals.sh", string(principal), "has_table_privilege('baby_tracker_maintenance',t,'DELETE') AND NOT has_table_privilege('baby_tracker_maintenance',t,'INSERT') AND NOT has_table_privilege('baby_tracker_maintenance',t,'UPDATE') AND NOT has_table_privilege('baby_tracker_maintenance',t,'TRUNCATE')) FROM unnest(ARRAY['public.care_receipts','public.sync_page_bindings','public.sync_snapshot_sessions'])", 2},
+		// Care rows and import staging: no DELETE of the maintenance group's
+		// own, only app.purge_family_step (Task 11, Task 2 re-review m1).
+		{"check-principals.sh", string(principal), "SELECT NOT has_table_privilege('baby_tracker_maintenance','public.care_entities','INSERT,UPDATE,DELETE,TRUNCATE') AND NOT has_table_privilege('baby_tracker_maintenance','public.import_sessions','INSERT,UPDATE,DELETE,TRUNCATE')", 2},
+		{"check-principals.sh", string(principal), "has_table_privilege('baby_tracker_maintenance',t,'DELETE') AND NOT has_table_privilege('baby_tracker_maintenance',t,'INSERT') AND NOT has_table_privilege('baby_tracker_maintenance',t,'UPDATE') AND NOT has_table_privilege('baby_tracker_maintenance',t,'TRUNCATE')) FROM unnest(ARRAY['public.care_entities'", 0},
+		{"check-principals.sh", string(principal), "SELECT NOT has_table_privilege('baby_tracker_maintenance','public.care_entities','SELECT') AND NOT has_table_privilege('baby_tracker_maintenance','public.import_sessions','SELECT')", 2},
+		{"check-principals.sh", string(principal), "attrelid='public.care_entities'::regclass AND attnum > 0 AND NOT attisdropped AND has_column_privilege('baby_tracker_maintenance',attrelid,attnum,'SELECT')\")\" = family_id,id,kind\n", 2},
+		{"check-principals.sh", string(principal), "attrelid='public.import_sessions'::regclass AND attnum > 0 AND NOT attisdropped AND has_column_privilege('baby_tracker_maintenance',attrelid,attnum,'SELECT')\")\" = family_id,import_id\n", 2},
+		{"check-principals.sh", string(principal), "has_table_privilege('baby_tracker_maintenance',t,'SELECT') AND has_table_privilege('baby_tracker_maintenance',t,'DELETE')", 0},
+		{"check-principals.sh", string(principal), "has_column_privilege('baby_tracker_maintenance',attrelid,attnum,'UPDATE')\")\" = care_record_count,care_charged_bytes,care_entity_count,care_wire_bytes\n", 2},
+		{"check-principals.sh", string(principal), "has_column_privilege('baby_tracker_runtime',attrelid,attnum,'UPDATE')\")\" = environment,token,registered_at\n", 2},
+		{"check-principals.sh", string(principal), "SELECT NOT has_table_privilege('baby_tracker_maintenance','public.device_push_tokens','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AND NOT has_any_column_privilege('baby_tracker_maintenance','public.device_push_tokens','SELECT,INSERT,UPDATE,REFERENCES')", 2},
+		{"check-principals.sh", string(principal), "FROM unnest(ARRAY['app.push_targets(uuid[],uuid[])','app.prune_push_tokens(integer)','app.forget_push_token(uuid,bytea)','app.ensure_audit_partitions(timestamp with time zone)','app.purge_family_step(uuid,integer)']) f", 2},
+		{"check-principals.sh", string(principal), "to_regclass('public.rate_limit_buckets') IS NULL", 2},
+		{"check-principals.sh", string(principal), "'baby_tracker_maintenance']) r CROSS JOIN unnest(ARRAY['public.care_entities'", 0},
+		{"smoke.sh", string(smoke), "if (( expected_schema_version >= 31 )); then", 1},
+		{"smoke.sh", string(smoke), "has_table_privilege('baby_tracker_maintenance',t,'DELETE') AND NOT has_table_privilege('baby_tracker_maintenance',t,'INSERT,UPDATE,TRUNCATE')", 1},
+		{"smoke.sh", string(smoke), "has_column_privilege('baby_tracker_maintenance',attrelid,attnum,'SELECT')\") == family_id,id,kind ]]", 1},
+		{"smoke.sh", string(smoke), "has_column_privilege('baby_tracker_maintenance',attrelid,attnum,'UPDATE')\") == care_record_count,care_charged_bytes,care_entity_count,care_wire_bytes ]]", 1},
+		{"smoke.sh", string(smoke), "SELECT NOT has_table_privilege('baby_tracker_maintenance','device_push_tokens','SELECT,INSERT,UPDATE,DELETE,TRUNCATE') AND NOT has_any_column_privilege('baby_tracker_maintenance','device_push_tokens','SELECT,INSERT,UPDATE,REFERENCES')", 1},
+		{"smoke.sh", string(smoke), "app.forget_push_token(uuid,bytea)", 1},
+		{"smoke.sh", string(smoke), "'app.ensure_audit_partitions(timestamp with time zone)','app.purge_family_step(uuid,integer)']) f", 1},
+		{"smoke.sh", string(smoke), "FROM unnest(ARRAY['care_receipts','sync_page_bindings','sync_snapshot_sessions']) t\") == t ]]", 2},
+		{"smoke.sh", string(smoke), "SELECT NOT bool_or(has_table_privilege('baby_tracker_maintenance',t,'INSERT,UPDATE,DELETE,TRUNCATE') OR has_any_column_privilege('baby_tracker_maintenance',t,'INSERT,UPDATE')) FROM unnest(ARRAY['care_entities','import_sessions']) t", 1},
+		{"smoke.sh", string(smoke), "'DELETE') AND NOT has_table_privilege('baby_tracker_maintenance',t,'INSERT,UPDATE,TRUNCATE') AND NOT has_any_column_privilege('baby_tracker_maintenance',t,'INSERT,UPDATE')) FROM unnest(ARRAY['care_entities'", 0},
+		{"smoke.sh", string(smoke), "to_regclass('public.rate_limit_buckets') IS NULL AND to_regprocedure('app.take_rate_limits(jsonb,timestamp with time zone)') IS NULL", 1},
+		{"smoke.sh", string(smoke), "'baby_tracker_maintenance']) r CROSS JOIN unnest(ARRAY['care_entities'", 0},
+	} {
+		if n := strings.Count(check.text, check.required); n != check.want {
+			t.Fatalf("%s holds %d copies of %q, want %d", check.script, n, check.required, check.want)
+		}
+	}
+}
+
+// Schema 32: both principal-probe modes and the smoke assert the Live Activity
+// grants: the runtime's SELECT, INSERT and UPDATE on the two tenant tables
+// (each on its own, never DELETE) and its five registration definers; the
+// maintenance group's nine worker definers and nothing on any Live Activity
+// table; the scheduling tables definer-only.
+func TestPrincipalProbeAndSmokeAssertTheLiveActivityGrants(t *testing.T) {
+	principal, err := os.ReadFile("check-principals.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	smoke, err := os.ReadFile("smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	const runtimeDefiners = "'app.fence_live_activity_installation(uuid,bigint,uuid,uuid,uuid,uuid,bigint,timestamp with time zone,boolean)','app.live_activity_session_binding(uuid,uuid,uuid,bigint)','app.live_activity_claim_live(jsonb)','app.live_activity_registration_state(uuid,jsonb)','app.live_activity_authorized(uuid,bigint,boolean)']) f"
+	const workerDefiners = "'app.claim_live_activity_work(timestamp with time zone,integer)','app.finish_live_activity_work(jsonb,timestamp with time zone,text)','app.retain_live_activity_work()','app.live_activity_target(jsonb,jsonb,boolean,timestamp with time zone,jsonb,jsonb)','app.abandon_live_activity_start(jsonb,text,text,boolean,boolean)','app.release_stale_live_activity_lease(jsonb)','app.dirty_live_activity_families(uuid[],bigint[])','app.sweep_live_activity_work()','app.sweep_live_activity_registrations(boolean,integer)']) f"
+	for _, check := range []struct {
+		script, text, required string
+		want                   int
+	}{
+		{"check-principals.sh", string(principal), `if [ "$(sql "SELECT current_version >= 32 FROM schema_compatibility WHERE singleton")" = t ]; then`, 2},
+		{"check-principals.sh", string(principal), "has_table_privilege('baby_tracker_runtime',t,'SELECT') AND has_table_privilege('baby_tracker_runtime',t,'INSERT') AND has_table_privilege('baby_tracker_runtime',t,'UPDATE') AND NOT has_table_privilege('baby_tracker_runtime',t,'DELETE') AND NOT has_table_privilege('baby_tracker_runtime',t,'TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public.live_activity_devices','public.live_activity_tokens'])", 2},
+		{"check-principals.sh", string(principal), "unnest(ARRAY['public','baby_tracker_maintenance']) r CROSS JOIN unnest(ARRAY['public.live_activity_devices','public.live_activity_tokens']) t", 2},
+		{"check-principals.sh", string(principal), "unnest(ARRAY['public','baby_tracker_runtime','baby_tracker_maintenance']) r CROSS JOIN unnest(ARRAY['public.live_activity_token_owners','public.live_activity_registration_index','public.live_activity_family_dirty','public.live_activity_delivery','public.live_activity_installations','public.live_activity_history']) t", 2},
+		{"check-principals.sh", string(principal), "has_function_privilege('baby_tracker_runtime',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_maintenance',f,'EXECUTE')) FROM unnest(ARRAY[" + runtimeDefiners, 2},
+		{"check-principals.sh", string(principal), "has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE')) FROM unnest(ARRAY[" + workerDefiners, 2},
+		{"check-principals.sh", string(principal), "'app.live_activity_lineage_live(uuid,uuid,uuid,bigint,timestamp with time zone)','app.dirty_live_activity_family(uuid,bigint)','app.retire_stale_live_activity_registrations()','app.live_activity_token_ownership()','app.live_activity_registration_dirty()','app.live_activity_token_fingerprint()']) f", 2},
+		{"check-principals.sh", string(principal), "to_regprocedure('app.live_activity_journal_dirty()') IS NULL AND to_regprocedure('app.live_activity_registration_subjects(uuid,integer)') IS NULL", 2},
+		{"check-principals.sh", string(principal), "baby_tracker_live_activity", 0},
+		{"smoke.sh", string(smoke), "if (( expected_schema_version >= 32 )); then", 1},
+		{"smoke.sh", string(smoke), "has_table_privilege(current_user,t,'SELECT') AND has_table_privilege(current_user,t,'INSERT') AND has_table_privilege(current_user,t,'UPDATE') AND NOT has_table_privilege(current_user,t,'DELETE') AND NOT has_table_privilege(current_user,t,'TRUNCATE')) FROM unnest(ARRAY['live_activity_devices','live_activity_tokens'])", 1},
+		{"smoke.sh", string(smoke), "unnest(ARRAY['public','baby_tracker_maintenance']) r CROSS JOIN unnest(ARRAY['live_activity_devices','live_activity_tokens','live_activity_token_owners','live_activity_registration_index','live_activity_family_dirty','live_activity_delivery','live_activity_installations','live_activity_history']) t", 1},
+		{"smoke.sh", string(smoke), "has_table_privilege('baby_tracker_runtime',t,'SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') OR has_any_column_privilege('baby_tracker_runtime',t,'SELECT,INSERT,UPDATE,REFERENCES')) FROM unnest(ARRAY['live_activity_token_owners','live_activity_registration_index','live_activity_family_dirty','live_activity_delivery','live_activity_installations','live_activity_history']) t", 1},
+		{"smoke.sh", string(smoke), "has_function_privilege('baby_tracker_runtime',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_maintenance',f,'EXECUTE')) FROM unnest(ARRAY[" + runtimeDefiners, 1},
+		{"smoke.sh", string(smoke), "has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE')) FROM unnest(ARRAY[" + workerDefiners, 1},
+		{"smoke.sh", string(smoke), "baby_tracker_live_activity", 0},
+	} {
+		if n := strings.Count(check.text, check.required); n != check.want {
+			t.Fatalf("%s holds %d copies of %q, want %d", check.script, n, check.required, check.want)
 		}
 	}
 }
@@ -331,9 +588,8 @@ func TestREADMETracksComposeRecoveryAndRoleContract(t *testing.T) {
 	}
 	text := string(readme)
 	for _, required := range []string{
-		"projector_password", "projector_database_url", "baby_tracker_projector_app",
-		"baby_tracker_apple_revoker", "baby_tracker_apple_revoker_app", "passwordless",
-		"security init", "security reconcile", "BT_DATABASE_URL_FILE=/run/secrets/runtime_database_url",
+		"authority init", "authority verify", "authority rotate-epoch", "server_state", "actor_id_key_mismatch",
+		"BT_SECURITY_LEDGER_DIR", "BT_PROJECTOR_DATABASE_URL_FILE", "manual_required",
 		"/readyz", "503", "200", "baby_tracker_migrator", "baby_tracker_app",
 		"identity_pepper", "invitation_pepper", "BT_INVITATION_PREVIOUS_KEYS_FILE",
 		"BT_MAX_CAREGIVERS", "BT_MAX_INVITATIONS", "BT_INVITATION_TTL",
@@ -348,8 +604,18 @@ func TestREADMETracksComposeRecoveryAndRoleContract(t *testing.T) {
 			t.Errorf("README missing current deployment contract %q", required)
 		}
 	}
+	for _, retired := range append(append([]string(nil), retiredRoles...), retiredRoleSecrets...) {
+		if strings.Contains(text, retired) {
+			t.Errorf("README still documents the retired %s", retired)
+		}
+	}
 	if strings.Contains(text, "Recovery fencing and the authoritative ledger/head protocol remain later work") {
 		t.Fatal("README still claims implemented recovery fencing is future work")
+	}
+	for _, retired := range []string{"security init", "security reconcile", "security verify", "recovery rotate-epoch"} {
+		if strings.Contains(text, retired) {
+			t.Errorf("README still documents the retired %q", retired)
+		}
 	}
 }
 

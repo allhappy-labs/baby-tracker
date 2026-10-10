@@ -189,7 +189,7 @@ final class AccessibilityAuditTests: XCTestCase {
     /// buttons — `AddBabySheet`, the edit sheets, `BabySwitcherSheet` — and
     /// none of them was audited before these three tests, which is why this is
     /// the first time it has been seen. Not something the screen chooses.
-    /// The sheets are sized to their content (`sheetHeight`), and the
+    /// The sheets are sized to their content (one fixed height for a quick entry, full height for an editor), and the
     /// audit's Dynamic Type probe enlarges their text inside that stated
     /// height without the detent following, so text it pushes across the
     /// bottom edge is reported as clipped. Established, not assumed, twice:

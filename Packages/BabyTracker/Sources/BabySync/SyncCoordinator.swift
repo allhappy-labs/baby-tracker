@@ -253,7 +253,16 @@ public final class SyncCoordinator {
             await onFreshProofRequired()
             currentIssue = issue(for: code)
         case .takeSnapshot:
-            try? await takeSnapshot()
+            // A snapshot pages current rows and is not frozen (server Phase 2
+            // snapshot ruling): a write committed while it paged can be half
+            // visible — a stopped timer gone, its record not yet. One pull
+            // from the snapshot's high water settles the device now rather
+            // than at the next poll. A refusal of that pull is the next
+            // attempt's to handle.
+            do {
+                try await takeSnapshot()
+                try await drainPages()
+            } catch {}
         case .revokeAndPurge:
             let realm = store.activeRealm
             try? store.markAccountSignedOut(accountKey.leaseKey)

@@ -125,4 +125,14 @@ import BabyCore
 
         #expect(model.isGone)
     }
+
+    @Test func newSolidsKeepTheChosenDay() throws {
+        let (store, baby, clock) = try fixture()
+        let yesterday = clock.now.addingTimeInterval(-26 * 3600)
+        let model = SolidsLogModel(store: store, babyID: baby)
+        model.foodsText = "pear"
+        model.when = yesterday
+        try model.log()
+        #expect(try store.lastFeed(for: baby)?.startedAt == yesterday)
+    }
 }

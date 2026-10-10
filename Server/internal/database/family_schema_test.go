@@ -1,12 +1,8 @@
 package database_test
 
 import (
-	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
-	"sort"
-	"strings"
 	"testing"
 	"time"
 
@@ -16,152 +12,58 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
+// familyTables are the schema-29 family authority and presentation tables.
 var familyTables = []string{
-	"account_profile_commands", "family_actor_label_history", "family_actor_labels", "family_command_material", "family_entitlements", "family_slots", "invitations",
+	"account_profile_commands", "accounts", "families", "family_actor_label_history", "family_actor_labels", "family_entitlements",
+	"family_recovery_claims", "family_slots", "invitations", "memberships",
 }
 
-func TestStageFamilyMaterialRequiresCanonicalDigestActorAndImmutableRetry(t *testing.T) {
-	fixture := testpg.New(t)
-	const (
-		accountID = "10000000-0000-4000-8000-000000000001"
-		familyID  = "20000000-0000-4000-8000-000000000001"
-		commandID = "30000000-0000-4000-8000-000000000001"
-	)
-	material := []byte(`{"version":"v1","kind":"family_create","family_id":"` + familyID + `","actor_account_id":"` + accountID + `","display_name":"Household"}`)
-	digest := sha256.Sum256(material)
-	commandHash := sha256.Sum256([]byte("command"))
-	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	call := func(command, actorMaterial string, materialDigest []byte, at time.Time) error {
-		tx, err := fixture.Runtime.Begin(t.Context())
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback(t.Context())
-		if err := tenant.SetAccountLocal(t.Context(), tx, accountID); err != nil {
-			return err
-		}
-		payload := material
-		if actorMaterial != accountID {
-			payload = []byte(`{"version":"v1","kind":"family_create","family_id":"` + familyID + `","actor_account_id":"` + actorMaterial + `","display_name":"Household"}`)
-		}
-		if materialDigest == nil {
-			sum := sha256.Sum256(payload)
-			materialDigest = sum[:]
-		}
-		if _, err := tx.Exec(t.Context(), "SELECT app.stage_family_material($1,$2,$3,$4,$5)", command, commandHash[:], materialDigest, payload, at); err != nil {
-			return err
-		}
-		return tx.Commit(t.Context())
-	}
-	if err := call(commandID, accountID, digest[:], now); err != nil {
-		t.Fatalf("canonical family material rejected: %v", err)
-	}
-	if err := call(commandID, accountID, digest[:], now.Add(time.Minute)); err != nil {
-		t.Fatalf("identical unprojected retry rejected: %v", err)
-	}
-	badDigest := sha256.Sum256([]byte("wrong"))
-	if err := call("30000000-0000-4000-8000-000000000002", accountID, badDigest[:], now); err == nil {
-		t.Fatal("material digest mismatch accepted")
-	}
-	if err := call("30000000-0000-4000-8000-000000000003", "10000000-0000-4000-8000-000000000002", nil, now); err == nil {
-		t.Fatal("cross-account family material accepted")
-	}
-	for index, encodedName := range []string{"   ", `\u0001Hidden`} {
-		payload := []byte(`{"version":"v1","kind":"family_create","family_id":"` + familyID + `","actor_account_id":"` + accountID + `","display_name":"` + encodedName + `"}`)
-		digest := sha256.Sum256(payload)
-		commandHash := sha256.Sum256([]byte(encodedName))
-		tx, err := fixture.Runtime.Begin(t.Context())
-		if err != nil {
-			t.Fatal(err)
-		}
-		if err := tenant.SetAccountLocal(t.Context(), tx, accountID); err != nil {
-			t.Fatal(err)
-		}
-		_, err = tx.Exec(t.Context(), "SELECT app.stage_family_material($1,$2,$3,$4,$5)",
-			fmt.Sprintf("30000000-0000-4000-8000-%012d", index+4), commandHash[:], digest[:], payload, now)
-		tx.Rollback(t.Context())
-		if sqlState(err) != "22023" {
-			t.Fatalf("invalid family display name %q err=%v state=%q", encodedName, err, sqlState(err))
-		}
-	}
-	direct, err := fixture.Runtime.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer direct.Rollback(t.Context())
-	if err := tenant.SetLocal(t.Context(), direct, tenant.Context{AccountID: accountID, FamilyID: familyID}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := direct.Exec(t.Context(), "SELECT count(*) FROM family_command_material"); err == nil || sqlState(err) != "42501" {
-		t.Fatalf("runtime direct material read err=%v", err)
-	}
-	read, err := fixture.Owner.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer read.Rollback(t.Context())
-	if _, err := read.Exec(t.Context(), "SELECT set_config('app.family_id',$1,true)", familyID); err != nil {
-		t.Fatal(err)
-	}
-	var stored []byte
-	var createdAt, expiresAt time.Time
-	if err := read.QueryRow(t.Context(), `SELECT material_bytes,created_at,expires_at
-		FROM family_command_material WHERE command_id=$1`, commandID).Scan(&stored, &createdAt, &expiresAt); err != nil {
-		t.Fatal(err)
-	}
-	if string(stored) != string(material) || !createdAt.Equal(now) || !expiresAt.Equal(now.Add(10*time.Minute)) {
-		t.Fatalf("stored family material contract mismatch")
-	}
+var familyTableColumns = map[string][]string{
+	"accounts": {"id", "display_name", "status", "created_at", "updated_at", "profile_required", "lifecycle_generation", "audit_seq", "audit_hash", "chain_failed"},
+	"families": {"id", "display_name", "status", "created_at", "updated_at", "purge_after", "profile_required", "next_sequence", "owner_account_id",
+		"purge_started_at", "purge_command_id", "purge_receipt", "purged_at", "audit_seq", "audit_hash", "chain_failed", "entitlement_required",
+		"care_record_count", "care_charged_bytes", "care_entity_count", "care_wire_bytes"},
+	"memberships":                {"family_id", "account_id", "role", "status", "created_at", "updated_at"},
+	"account_profile_commands":   {"account_id", "command_id", "input_hash", "created_at"},
+	"family_actor_label_history": {"label_version", "family_id", "account_id", "display_name", "former", "recorded_at"},
+	"family_slots":               {"account_id", "family_id", "state"},
+	"invitations":                {"id", "family_id", "creator_account_id", "token_digest", "role", "status", "expires_at", "redeemed_at", "revoked_at", "created_at", "updated_at"},
+	"family_entitlements":        {"family_id", "entitlement_key", "source", "status", "expires_at", "created_at", "updated_at"},
+	"family_recovery_claims":     {"family_id", "account_id", "status"},
+	"family_actor_labels":        {"family_id", "account_id", "display_name", "former", "created_at", "updated_at"},
 }
 
+// The schema-fourteen read-only caregiver authority. Runtime-only: no other
+// role (the maintenance group included) may ask whether a membership may
+// write.
+const membershipMayWriteSignature = "app.membership_may_write(uuid,uuid)"
+
+// Schema 29 drops app.lookup_family_invitation and the invitation_preview_owner
+// policy: an invitee previews through authority.LookupInvitation (an
+// authority read returning only the family's display name, the invitation's
+// status and expiry; authority TestCreateInviteRedeemReplay). An
+// authenticated outsider's own tenant context still reads none of the
+// inviting family's rows.
 func TestInvitationPreviewAllowsAuthenticatedOutsiderWithoutTenantLeak(t *testing.T) {
 	fixture := testpg.New(t)
-	const (
-		ownerID         = "10000000-0000-4000-8000-000000000001"
-		outsiderID      = "10000000-0000-4000-8000-000000000002"
-		familyID        = "20000000-0000-4000-8000-000000000001"
-		otherFamilyID   = "20000000-0000-4000-8000-000000000002"
-		invitationID    = "60000000-0000-4000-8000-000000000001"
-		invitationToken = "hmac-sha256:invite.v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
-	)
-	setup, err := fixture.Owner.Begin(t.Context())
-	if err != nil {
+	ids := seedAuthorityFamilies(t, fixture)
+	const outsider = "61000000-0000-4000-8000-000000000003"
+	if err := authorityExec(t.Context(), fixture.Owner, "INSERT INTO accounts(id,display_name) VALUES ($1,'Outsider')", outsider); err != nil {
 		t.Fatal(err)
 	}
-	defer setup.Rollback(t.Context())
-	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.account_id',$1,true),set_config('app.family_id',$2,true)", ownerID, familyID); err != nil {
+	var previewFunction bool
+	var previewPolicies int
+	if err := fixture.Owner.QueryRow(t.Context(), `SELECT to_regprocedure('app.lookup_family_invitation(text)') IS NOT NULL,
+		(SELECT count(*) FROM pg_policies WHERE schemaname='public' AND tablename='invitations')`).Scan(&previewFunction, &previewPolicies); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'Owner')", ownerID); err != nil {
-		t.Fatal(err)
+	if previewFunction || previewPolicies != 1 {
+		t.Fatalf("legacy preview function=%t invitation policies=%d", previewFunction, previewPolicies)
 	}
-	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.account_id',$1,true)", outsiderID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'Outsider')", outsiderID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.account_id',$1,true)", ownerID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name) VALUES($1,'Safe household')", familyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO memberships(family_id,account_id,role) VALUES($1,$2,'owner')", familyID, ownerID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), `INSERT INTO invitations(id,family_id,creator_account_id,token_digest,role,status,expires_at,created_at,updated_at)
-		VALUES($1,$2,$3,$4,'caregiver','active','2026-09-27T12:00:00Z','2026-09-20T12:00:00Z','2026-09-20T12:00:00Z')`, invitationID, familyID, ownerID, invitationToken); err != nil {
-		t.Fatal(err)
-	}
-	if err := setup.Commit(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	for _, test := range []struct {
-		name, familyContext string
-	}{
-		{name: "no family"},
-		{name: "different family", familyContext: otherFamilyID},
+	for _, test := range []struct{ name, account, family string }{
+		{"no family", outsider, ""},
+		{"different family", outsider, ids.familyB},
+		{"other family's owner", ids.accountB, ids.familyB},
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			tx, err := fixture.Runtime.Begin(t.Context())
@@ -169,26 +71,14 @@ func TestInvitationPreviewAllowsAuthenticatedOutsiderWithoutTenantLeak(t *testin
 				t.Fatal(err)
 			}
 			defer tx.Rollback(t.Context())
-			if _, err := tx.Exec(t.Context(), "SELECT set_config('app.account_id',$1,true),set_config('app.family_id',$2,true)", outsiderID, test.familyContext); err != nil {
+			if _, err := tx.Exec(t.Context(), "SELECT set_config('app.account_id',$1,true),set_config('app.family_id',$2,true)", test.account, test.family); err != nil {
 				t.Fatal(err)
 			}
-			var gotInvitation, gotFamily, gotName string
-			if err := tx.QueryRow(t.Context(), `SELECT invitation_id::text,family_id::text,family_display_name
-				FROM app.lookup_family_invitation($1)`, invitationToken).Scan(&gotInvitation, &gotFamily, &gotName); err != nil {
-				t.Fatalf("authenticated outsider preview: %v", err)
-			}
-			if gotInvitation != invitationID || gotFamily != familyID || gotName != "Safe household" {
-				t.Fatalf("preview invitation=%q family=%q name=%q", gotInvitation, gotFamily, gotName)
-			}
-			var invites, families int
-			if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM invitations").Scan(&invites); err != nil {
-				t.Fatal(err)
-			}
-			if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM families").Scan(&families); err != nil {
-				t.Fatal(err)
-			}
-			if invites != 0 || families != 0 {
-				t.Fatalf("outsider direct rows invitations=%d families=%d", invites, families)
+			for table, column := range map[string]string{"invitations": "family_id", "families": "id", "memberships": "family_id", "family_entitlements": "family_id"} {
+				var leaked int
+				if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM "+table+" WHERE "+column+"=$1", ids.familyA).Scan(&leaked); err != nil || leaked != 0 {
+					t.Fatalf("outsider reads %d %s rows of the inviting family err=%v", leaked, table, err)
+				}
 			}
 		})
 	}
@@ -210,10 +100,14 @@ func TestUpdateOwnProfileRefreshesOnlyActiveFamilyLabelFromAccountContext(t *tes
 	if err := tenant.SetLocal(t.Context(), setup, tenant.Context{AccountID: accountID, FamilyID: familyID}); err != nil {
 		t.Fatal(err)
 	}
+	// Authority tables admit writes only from authority transactions.
+	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.authority','1',true)"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := setup.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'Before')", accountID); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name) VALUES($1,'Active')", familyID); err != nil {
+	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name,owner_account_id) VALUES($1,'Active',$2)", familyID, accountID); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := setup.Exec(t.Context(), "INSERT INTO memberships(family_id,account_id,role) VALUES($1,$2,'owner')", familyID, accountID); err != nil {
@@ -332,108 +226,6 @@ func TestUpdateOwnProfileRefreshesOnlyActiveFamilyLabelFromAccountContext(t *tes
 	}
 }
 
-func TestFamilyProfileRepairStagingIsSingleFlightAndFailClosed(t *testing.T) {
-	fixture := testpg.New(t)
-	const (
-		accountID      = "10000000-0000-4000-8000-000000000001"
-		familyID       = "20000000-0000-4000-8000-000000000001"
-		otherFamilyID  = "20000000-0000-4000-8000-000000000002"
-		firstCommand   = "30000000-0000-4000-8000-000000000001"
-		secondCommand  = "30000000-0000-4000-8000-000000000002"
-		expiredCommand = "30000000-0000-4000-8000-000000000003"
-	)
-	now := time.Date(2026, 9, 20, 12, 0, 0, 0, time.UTC)
-	setup, err := fixture.Owner.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer setup.Rollback(t.Context())
-	if err := tenant.SetLocal(t.Context(), setup, tenant.Context{AccountID: accountID, FamilyID: familyID}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'Owner')", accountID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name,profile_required) VALUES($1,'',true)", familyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO memberships(family_id,account_id,role) VALUES($1,$2,'owner')", familyID, accountID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.family_id',$1,true)", otherFamilyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name,profile_required) VALUES($1,'Ready',false)", otherFamilyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO memberships(family_id,account_id,role) VALUES($1,$2,'owner')", otherFamilyID, accountID); err != nil {
-		t.Fatal(err)
-	}
-	if err := setup.Commit(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-
-	stage := func(commandID, targetFamily, name string, at time.Time) error {
-		material := []byte(`{"version":"v1","kind":"family_profile_repair","family_id":"` + targetFamily + `","actor_account_id":"` + accountID + `","display_name":"` + name + `"}`)
-		digest := sha256.Sum256(material)
-		commandHash := sha256.Sum256([]byte(commandID))
-		tx, err := fixture.Runtime.Begin(t.Context())
-		if err != nil {
-			return err
-		}
-		defer tx.Rollback(t.Context())
-		if err := tenant.SetAccountLocal(t.Context(), tx, accountID); err != nil {
-			return err
-		}
-		if _, err := tx.Exec(t.Context(), "SELECT app.stage_family_material($1,$2,$3,$4,$5)", commandID, commandHash[:], digest[:], material, at); err != nil {
-			return err
-		}
-		return tx.Commit(t.Context())
-	}
-	if err := stage(firstCommand, familyID, "Recovered", now); err != nil {
-		t.Fatalf("first repair stage: %v", err)
-	}
-	if err := stage(firstCommand, familyID, "Recovered", now.Add(time.Minute)); err != nil {
-		t.Fatalf("exact retry: %v", err)
-	}
-	if err := stage(secondCommand, familyID, "Racing", now.Add(time.Minute)); sqlState(err) != "BT001" {
-		t.Fatalf("second pending repair err=%v state=%q", err, sqlState(err))
-	}
-	if err := stage(secondCommand, otherFamilyID, "Not needed", now.Add(time.Minute)); sqlState(err) != "BT001" {
-		t.Fatalf("unneeded repair err=%v state=%q", err, sqlState(err))
-	}
-	if err := stage(expiredCommand, familyID, "After expiry", now.Add(11*time.Minute)); err != nil {
-		t.Fatalf("expired reservation replacement: %v", err)
-	}
-
-	read, err := fixture.Owner.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer read.Rollback(t.Context())
-	if _, err := read.Exec(t.Context(), "SELECT set_config('app.family_id',$1,true)", familyID); err != nil {
-		t.Fatal(err)
-	}
-	var count int
-	var commandID string
-	if err := read.QueryRow(t.Context(), `SELECT count(*),min(command_id::text) FROM family_command_material
-		WHERE family_id=$1 AND material_kind='family_profile_repair' AND projected_at IS NULL`, familyID).Scan(&count, &commandID); err != nil {
-		t.Fatal(err)
-	}
-	if count != 1 || commandID != expiredCommand {
-		t.Fatalf("pending repairs=%d command=%q", count, commandID)
-	}
-	var indexDefinition string
-	if err := read.QueryRow(t.Context(), `SELECT indexdef FROM pg_indexes WHERE schemaname='public'
-		AND indexname='family_command_material_one_pending_repair_idx'`).Scan(&indexDefinition); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(indexDefinition, "UNIQUE INDEX") ||
-		!strings.Contains(indexDefinition, "WHERE ((material_kind = 'family_profile_repair'::text) AND (projected_at IS NULL))") {
-		t.Fatalf("repair reservation index=%q", indexDefinition)
-	}
-}
-
 func TestFamilyActorLabelPagesUseStableHighWaterAndDenyDirectHistoryReads(t *testing.T) {
 	fixture := testpg.New(t)
 	const (
@@ -451,6 +243,10 @@ func TestFamilyActorLabelPagesUseStableHighWaterAndDenyDirectHistoryReads(t *tes
 	if err := tenant.SetLocal(t.Context(), setup, tenant.Context{AccountID: accountOne, FamilyID: familyID}); err != nil {
 		t.Fatal(err)
 	}
+	// Authority tables admit writes only from authority transactions.
+	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.authority','1',true)"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := setup.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'One')", accountOne); err != nil {
 		t.Fatal(err)
 	}
@@ -463,7 +259,7 @@ func TestFamilyActorLabelPagesUseStableHighWaterAndDenyDirectHistoryReads(t *tes
 	if _, err := setup.Exec(t.Context(), "SELECT set_config('app.account_id',$1,true)", accountOne); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name) VALUES($1,'Family')", familyID); err != nil {
+	if _, err := setup.Exec(t.Context(), "INSERT INTO families(id,display_name,owner_account_id) VALUES($1,'Family',$2)", familyID, accountOne); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := setup.Exec(t.Context(), `INSERT INTO memberships(family_id,account_id,role) VALUES
@@ -568,6 +364,10 @@ func TestFamilyActorLabelPagesUseStableHighWaterAndDenyDirectHistoryReads(t *tes
 	if err := tenant.SetLocal(t.Context(), add, tenant.Context{AccountID: accountTwo, FamilyID: familyID}); err != nil {
 		t.Fatal(err)
 	}
+	// Authority tables admit writes only from authority transactions.
+	if _, err := add.Exec(t.Context(), "SELECT set_config('app.authority','1',true)"); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := add.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'Two')", accountTwo); err != nil {
 		t.Fatal(err)
 	}
@@ -651,28 +451,48 @@ func TestFamilyActorLabelPagesUseStableHighWaterAndDenyDirectHistoryReads(t *tes
 	}
 }
 
+// The exact schema-29 policies on the family and account tables (plus
+// 000031's two maintenance-group policies on families). The
+// authority tables admit app.authority_context() or the tenant; accounts,
+// families and family_slots split their policies so that a tenant may only
+// read (and, for accounts and families, UPDATE the columns the authority
+// column triggers leave it); memberships, invitations, family_entitlements,
+// family_recovery_claims and devices keep one ALL policy whose USING admits a
+// tenant DELETE, so their DELETE is closed only by the missing runtime grant
+// (TestRuntimeHasNoDeleteWhereAPolicyAdmitsTenantDelete).
 func TestFamilyPoliciesAreExactAndCommandMaterialIsIsolated(t *testing.T) {
 	fixture := testpg.New(t)
-	type policy struct{ table, name, using, check string }
+	type policy struct{ table, name, command, using, check string }
+	const authority, tenantAccount, tenantFamily = "app.authority_context()", "(app.authority_context() OR (account_id = app.current_account_id()))", "(app.authority_context() OR (family_id = app.current_family_id()))"
 	want := []policy{
-		{"account_profile_commands", "own_account_profile_command", "(account_id = app.current_account_id())", "(account_id = app.current_account_id())"},
-		{"family_actor_label_history", "actor_label_history_family_context", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
-		{"family_actor_labels", "actor_label_family_context", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
-		{"family_command_material", "family_material_context", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
-		{"family_entitlements", "entitlement_family_context", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
-		{"family_slots", "own_family_slot", "(account_id = app.current_account_id())", "(account_id = app.current_account_id())"},
-		{"invitations", "invitation_family_context", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
+		{"account_profile_commands", "own_account_profile_command", "ALL", "(account_id = app.current_account_id())", "(account_id = app.current_account_id())"},
+		{"accounts", "account_authority", "ALL", authority, authority},
+		{"accounts", "account_context", "SELECT", "(app.authority_context() OR (id = app.current_account_id()))", ""},
+		{"accounts", "account_tenant_update", "UPDATE", "(app.authority_context() OR (id = app.current_account_id()))", "(app.authority_context() OR (id = app.current_account_id()))"},
+		{"devices", "device_context", "ALL", tenantAccount, authority},
+		{"families", "family_authority", "ALL", authority, authority},
+		{"families", "family_context", "SELECT", "(app.authority_context() OR (id = app.current_family_id()))", ""},
+		{"families", "family_tenant_update", "UPDATE", "(app.authority_context() OR (id = app.current_family_id()))", "(app.authority_context() OR (id = app.current_family_id()))"},
+		{"families", "maintenance_counters", "UPDATE", "true", "true"}, // 000031: the maintenance group only (request_path_schema_test.go)
+		{"families", "maintenance_read", "SELECT", "true", ""},
+		{"family_actor_label_history", "actor_label_history_family_context", "ALL", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
+		{"family_actor_labels", "actor_label_family_context", "ALL", "(family_id = app.current_family_id())", "(family_id = app.current_family_id())"},
+		{"family_entitlements", "entitlement_context", "ALL", tenantFamily, authority},
+		{"family_recovery_claims", "claim_context", "ALL", tenantAccount, authority},
+		{"family_slots", "family_slot_authority", "ALL", authority, authority},
+		{"family_slots", "own_family_slot", "SELECT", tenantAccount, ""},
+		{"invitations", "invitation_context", "ALL", tenantFamily, authority},
+		{"memberships", "membership_context", "ALL", tenantFamily, authority},
 	}
-	rows, err := fixture.Owner.Query(t.Context(), `SELECT tablename,policyname,coalesce(qual,''),coalesce(with_check,'')
-		FROM pg_policies WHERE schemaname='public' AND tablename = ANY($1)
-		AND policyname <> 'invitation_preview_owner' ORDER BY tablename,policyname`, familyTables)
+	rows, err := fixture.Owner.Query(t.Context(), `SELECT tablename,policyname,cmd,coalesce(qual,''),coalesce(with_check,'')
+		FROM pg_policies WHERE schemaname='public' AND tablename = ANY($1) ORDER BY tablename,policyname`, append(familyTables, "devices"))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got []policy
 	for rows.Next() {
 		var item policy
-		if err := rows.Scan(&item.table, &item.name, &item.using, &item.check); err != nil {
+		if err := rows.Scan(&item.table, &item.name, &item.command, &item.using, &item.check); err != nil {
 			t.Fatal(err)
 		}
 		got = append(got, item)
@@ -686,19 +506,7 @@ func TestFamilyPoliciesAreExactAndCommandMaterialIsIsolated(t *testing.T) {
 			t.Fatalf("policy[%d]=%v want=%v", index, got[index], want[index])
 		}
 	}
-	var previewUsing, previewCheck string
-	if err := fixture.Owner.QueryRow(t.Context(), `SELECT coalesce(qual,''),coalesce(with_check,'') FROM pg_policies
-		WHERE schemaname='public' AND tablename='invitations' AND policyname='invitation_preview_owner'`).Scan(&previewUsing, &previewCheck); err != nil {
-		t.Fatal(err)
-	}
-	const wantPreviewUsing = "((app.current_account_id() IS NOT NULL) AND (((CURRENT_USER)::regrole)::oid = ( SELECT pg_class.relowner\n   FROM pg_class\n  WHERE (pg_class.oid = ('invitations'::regclass)::oid))))"
-	if previewUsing != wantPreviewUsing || previewCheck != "" {
-		t.Fatalf("preview policy using=%q check=%q", previewUsing, previewCheck)
-	}
-	for _, table := range familyTables {
-		if table == "family_command_material" {
-			continue
-		}
+	for _, table := range append(familyTables, "devices") {
 		var enabled, forced bool
 		if err := fixture.Owner.QueryRow(t.Context(), `SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid=($1::text)::regclass`, "public."+table).Scan(&enabled, &forced); err != nil {
 			t.Fatal(err)
@@ -707,83 +515,26 @@ func TestFamilyPoliciesAreExactAndCommandMaterialIsIsolated(t *testing.T) {
 			t.Fatalf("%s RLS enabled=%t forced=%t", table, enabled, forced)
 		}
 	}
-	var enabled, forced bool
-	if err := fixture.Owner.QueryRow(t.Context(), `SELECT relrowsecurity,relforcerowsecurity FROM pg_class WHERE oid='public.family_command_material'::regclass`).Scan(&enabled, &forced); err != nil {
-		t.Fatal(err)
-	}
-	if !enabled || !forced {
-		t.Fatalf("family_command_material RLS enabled=%t forced=%t", enabled, forced)
+	var material bool
+	if err := fixture.Owner.QueryRow(t.Context(), `SELECT to_regclass('public.family_command_material') IS NOT NULL`).Scan(&material); err != nil || material {
+		t.Fatalf("family_command_material survived=%t err=%v", material, err)
 	}
 }
-
-var familyTableColumns = map[string][]string{
-	"account_profile_commands":   {"account_id", "command_id", "input_hash", "created_at"},
-	"family_actor_label_history": {"label_version", "family_id", "account_id", "display_name", "former", "recorded_at"},
-	"family_slots":               {"account_id", "family_id", "state"},
-	"invitations":                {"id", "family_id", "creator_account_id", "token_digest", "role", "status", "expires_at", "redeemed_by_account_id", "redeemed_at", "revoked_at", "created_at", "updated_at"},
-	"family_entitlements":        {"family_id", "entitlement_key", "source", "status", "expires_at", "created_at", "updated_at"},
-	"family_actor_labels":        {"family_id", "account_id", "display_name", "former", "created_at", "updated_at"},
-	"family_command_material":    {"command_id", "command_hash", "projection_material_digest", "material_kind", "family_id", "account_id", "family_display_name", "material_bytes", "created_at", "expires_at", "projected_at"},
-}
-
-// The schema-fourteen read-only caregiver authority. Runtime-only: the
-// projector and apple-revoker roles must never be able to ask whether a
-// membership may write.
-const membershipMayWriteSignature = "app.membership_may_write(uuid,uuid)"
 
 func TestFamilySchemaHasExactTablesPoliciesAndPrivileges(t *testing.T) {
 	fixture := testpg.New(t)
-	if err := database.VerifyRoleSeparation(t.Context(), fixture.Runtime, fixture.Projector, 29); err != nil {
-		t.Fatalf("schema-twenty exact privilege snapshot rejected: %v", err)
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
+		t.Fatalf("schema-30 exact privilege snapshot rejected: %v", err)
 	}
-	rows, err := fixture.Owner.Query(t.Context(), `SELECT tablename FROM pg_tables
-		WHERE schemaname='public' AND tablename = ANY($1) ORDER BY tablename`, familyTables)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var gotTables []string
-	for rows.Next() {
-		var table string
-		if err := rows.Scan(&table); err != nil {
-			t.Fatal(err)
-		}
-		gotTables = append(gotTables, table)
-	}
-	rows.Close()
-	sort.Strings(familyTables)
-	if !equalStrings(gotTables, familyTables) {
-		t.Fatalf("family tables=%v want=%v", gotTables, familyTables)
+	if got := tableSet(t, fixture, familyTables); !equalStrings(got, sortedCopy(familyTables)) {
+		t.Fatalf("family tables=%v want=%v", got, familyTables)
 	}
 	for table, want := range familyTableColumns {
 		t.Run(table+" columns", func(t *testing.T) {
-			rows, err := fixture.Owner.Query(t.Context(), `SELECT column_name FROM information_schema.columns
-				WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position`, table)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got []string
-			for rows.Next() {
-				var column string
-				if err := rows.Scan(&column); err != nil {
-					t.Fatal(err)
-				}
-				got = append(got, column)
-			}
-			rows.Close()
-			if !equalStrings(got, want) {
+			if got := tableColumns(t, fixture, table); !equalStrings(got, want) {
 				t.Fatalf("columns=%v want=%v", got, want)
 			}
 		})
-	}
-	for _, table := range []string{"account_profile_commands", "family_slots", "invitations", "family_entitlements", "family_actor_labels", "family_actor_label_history"} {
-		var enabled, forced bool
-		if err := fixture.Owner.QueryRow(t.Context(), `SELECT relrowsecurity,relforcerowsecurity
-			FROM pg_class WHERE oid=($1::text)::regclass`, "public."+table).Scan(&enabled, &forced); err != nil {
-			t.Fatal(err)
-		}
-		if !enabled || !forced {
-			t.Fatalf("%s RLS enabled=%t forced=%t", table, enabled, forced)
-		}
 	}
 	var profileRequired string
 	if err := fixture.Owner.QueryRow(t.Context(), `SELECT is_nullable||':'||column_default FROM information_schema.columns
@@ -793,140 +544,96 @@ func TestFamilySchemaHasExactTablesPoliciesAndPrivileges(t *testing.T) {
 	if profileRequired != "NO:false" {
 		t.Fatalf("families.profile_required contract=%q", profileRequired)
 	}
-	for _, signature := range familyRuntimeFunctions {
+	for _, signature := range []string{membershipMayWriteSignature, "app.update_own_profile(uuid,uuid,text,timestamp with time zone)",
+		"app.list_family_actor_labels(uuid,bigint,uuid,integer)", "app.family_actor_labels_high_water()"} {
 		assertFunctionPrivilege(t, fixture.Runtime, signature, true)
-		assertFunctionPrivilege(t, fixture.Projector, signature, false)
+		assertFunctionPrivilege(t, fixture.Maintenance, signature, false)
 		assertPublicCannotExecute(t, fixture, signature)
 	}
-	var projectorDefinition string
-	if err := fixture.Owner.QueryRow(t.Context(), `SELECT pg_get_functiondef(
-		'app.project_security_event_v6(bigint,bigint,bytea,bytea,uuid,uuid,bytea,jsonb,jsonb,bytea)'::regprocedure)`).Scan(&projectorDefinition); err != nil {
-		t.Fatal(err)
-	}
-	for _, familyCase := range []string{"family_bootstrapped", "family_profile_repaired", "invitation_created", "invitation_redeemed", "owner_transferred"} {
-		if !strings.Contains(projectorDefinition, familyCase) {
-			t.Fatalf("schema-six projector omits %s", familyCase)
-		}
-	}
-	rows, err = fixture.Owner.Query(t.Context(), `SELECT object_identity FROM schema_privilege_manifest WHERE schema_version=6
-		AND principal='baby_tracker_runtime' AND object_kind='function'
-		EXCEPT SELECT object_identity FROM schema_privilege_manifest WHERE schema_version=5
-		AND principal='baby_tracker_runtime' AND object_kind='function' ORDER BY 1`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var added []string
-	for rows.Next() {
-		var signature string
-		if err := rows.Scan(&signature); err != nil {
+	// Presentation tables: the runtime reads active labels only; label and
+	// profile-receipt writes go through the definers.
+	for table, want := range map[string]string{"family_actor_labels": "SELECT", "family_actor_label_history": "", "account_profile_commands": ""} {
+		var privileges string
+		if err := fixture.Owner.QueryRow(t.Context(), `SELECT coalesce(string_agg(p,',' ORDER BY p),'') FROM unnest(ARRAY['SELECT','INSERT','UPDATE','DELETE','TRUNCATE']) p
+			WHERE has_table_privilege('baby_tracker_runtime',$1,p)`, "public."+table).Scan(&privileges); err != nil {
 			t.Fatal(err)
 		}
-		added = append(added, signature)
-	}
-	rows.Close()
-	if !equalStrings(added, familyRuntimeFunctions) {
-		t.Fatalf("schema-six runtime function delta=%v want=%v", added, familyRuntimeFunctions)
+		if privileges != want {
+			t.Fatalf("runtime %s privileges=%q want=%q", table, privileges, want)
+		}
 	}
 }
 
+// Structural family rows are written only by authority transactions: a tenant
+// runtime transaction cannot DELETE them (no grant, or an authority-only
+// DELETE policy for family_slots), and a family or account context reads none
+// of another family's or account's rows, devices and recovery claims included
+// (Task 1 deferred minor: TestAuthorityRLSShape seeded neither for account B).
 func TestFamilyStructuralTablesDenyDirectWritesAndCrossFamilyReads(t *testing.T) {
 	fixture := testpg.New(t)
-	for _, table := range []string{"families", "memberships", "account_profile_commands", "family_slots", "invitations", "family_entitlements", "family_actor_labels", "family_actor_label_history", "family_command_material"} {
-		for _, pool := range []struct {
-			name string
-			exec func(context.Context, string, ...any) (pgconn.CommandTag, error)
-		}{{"runtime", fixture.Runtime.Exec}, {"projector", fixture.Projector.Exec}} {
-			t.Run(pool.name+"/"+table, func(t *testing.T) {
-				_, err := pool.exec(t.Context(), "DELETE FROM public."+table)
-				var pgErr *pgconn.PgError
-				if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
-					t.Fatalf("error=%v, want SQLSTATE 42501", err)
+	ids := seedAuthorityFamilies(t, fixture)
+	now := time.Now().UTC().Truncate(time.Second)
+	for _, seed := range []struct {
+		sql  string
+		args []any
+	}{
+		{`INSERT INTO devices(id,account_id,canonical_origin,continuity_key_id,continuity_digest,created_at,updated_at)
+			VALUES ('63000000-0000-4000-8000-000000000002',$1,'https://tracker.example','continuity.v1',$2,$3,$3)`, []any{ids.accountB, authorityDigest(8), now}},
+		{`INSERT INTO family_recovery_claims(family_id,account_id,status) VALUES ($1,$2,'active')`, []any{ids.familyB, ids.accountB}},
+		{`SELECT app.authority_actor_label($1,$2,false,$3)`, []any{ids.familyB, ids.accountB, now}},
+	} {
+		if err := authorityExec(t.Context(), fixture.Owner, seed.sql, seed.args...); err != nil {
+			t.Fatalf("seed %q: %v", seed.sql, err)
+		}
+	}
+	for _, table := range []string{"accounts", "families", "memberships", "invitations", "family_entitlements", "family_recovery_claims", "devices",
+		"account_profile_commands", "family_actor_labels", "family_actor_label_history", "family_slots"} {
+		t.Run("delete/"+table, func(t *testing.T) {
+			for _, account := range []string{ids.accountA, ids.accountB} {
+				family := ids.familyA
+				if account == ids.accountB {
+					family = ids.familyB
 				}
-			})
+				tx := tenantTx(t, fixture.Runtime, account, family)
+				result, err := tx.Exec(t.Context(), "DELETE FROM public."+table)
+				_ = tx.Rollback(t.Context())
+				if table == "family_slots" {
+					if err != nil || result.RowsAffected() != 0 {
+						t.Fatalf("tenant slot delete rows=%d err=%v", result.RowsAffected(), err)
+					}
+					continue
+				}
+				if sqlState(err) != "42501" {
+					t.Fatalf("tenant delete err=%v", err)
+				}
+			}
+		})
+	}
+	tx := tenantTx(t, fixture.Runtime, ids.accountA, ids.familyA)
+	for table, query := range map[string]string{
+		"families":               "SELECT count(*) FROM families WHERE id=$1",
+		"memberships":            "SELECT count(*) FROM memberships WHERE family_id=$1",
+		"invitations":            "SELECT count(*) FROM invitations WHERE family_id=$1",
+		"family_entitlements":    "SELECT count(*) FROM family_entitlements WHERE family_id=$1",
+		"family_actor_labels":    "SELECT count(*) FROM family_actor_labels WHERE family_id=$1",
+		"family_recovery_claims": "SELECT count(*) FROM family_recovery_claims WHERE family_id=$1",
+	} {
+		var foreign int
+		if err := tx.QueryRow(t.Context(), query, ids.familyB).Scan(&foreign); err != nil || foreign != 0 {
+			t.Fatalf("family A context reads %d %s rows of family B err=%v", foreign, table, err)
 		}
 	}
-	const accountID = "10000000-0000-4000-8000-000000000001"
-	const otherFamilyID = "20000000-0000-4000-8000-000000000002"
-	ownerTx, err := fixture.Owner.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ownerTx.Rollback(t.Context())
-	if err := tenant.SetLocal(t.Context(), ownerTx, tenant.Context{AccountID: accountID, FamilyID: otherFamilyID}); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), "INSERT INTO accounts(id,display_name) VALUES($1,'owner')", accountID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), "INSERT INTO families(id,display_name) VALUES($1,'other')", otherFamilyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), "INSERT INTO memberships(family_id,account_id,role) VALUES($1,$2,'owner')", otherFamilyID, accountID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), "INSERT INTO family_slots(account_id,family_id,state) VALUES($1,$2,'active')", accountID, otherFamilyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), `INSERT INTO invitations(id,family_id,creator_account_id,token_digest,role,status,expires_at,created_at,updated_at)
-		VALUES('60000000-0000-4000-8000-000000000001',$1,$2,'hmac-sha256:invite.v1:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
-		'caregiver','active','2026-09-27T12:00:00Z','2026-09-20T12:00:00Z','2026-09-20T12:00:00Z')`, otherFamilyID, accountID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), `INSERT INTO family_entitlements(family_id,entitlement_key,source,status,created_at,updated_at)
-		VALUES($1,'family_sync','hosted_beta','active','2026-09-20T12:00:00Z','2026-09-20T12:00:00Z')`, otherFamilyID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), `INSERT INTO family_actor_labels(family_id,account_id,display_name,created_at,updated_at)
-		VALUES($1,$2,'Owner','2026-09-20T12:00:00Z','2026-09-20T12:00:00Z')`, otherFamilyID, accountID); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := ownerTx.Exec(t.Context(), `INSERT INTO family_command_material(command_id,command_hash,projection_material_digest,material_kind,family_id,account_id,
-		family_display_name,material_bytes,created_at,expires_at)
-		VALUES('30000000-0000-4000-8000-000000000001',decode(repeat('11',32),'hex'),decode(repeat('22',32),'hex'),'family_create',$1,$2,
-		'Other',decode('7b','hex'),'2026-09-20T12:00:00Z','2026-09-20T12:10:00Z')`, otherFamilyID, accountID); err != nil {
-		t.Fatal(err)
-	}
-	if err := ownerTx.Commit(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	tx, err := fixture.Runtime.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer tx.Rollback(t.Context())
-	if err := tenant.SetLocal(t.Context(), tx, tenant.Context{AccountID: accountID, FamilyID: "20000000-0000-4000-8000-000000000001"}); err != nil {
-		t.Fatal(err)
-	}
-	for _, table := range []string{"families", "invitations", "family_entitlements", "family_actor_labels"} {
-		var count int
-		if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM "+table).Scan(&count); err != nil || count != 0 {
-			t.Fatalf("cross-family %s rows=%d err=%v", table, count, err)
+	for table, column := range map[string]string{"accounts": "id", "family_slots": "account_id", "devices": "account_id", "family_recovery_claims": "account_id"} {
+		var foreign int
+		if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM "+table+" WHERE "+column+"=$1", ids.accountB).Scan(&foreign); err != nil || foreign != 0 {
+			t.Fatalf("account A context reads %d %s rows of account B err=%v", foreign, table, err)
 		}
 	}
-	var count int
-	if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM family_slots").Scan(&count); err != nil || count != 1 {
-		t.Fatalf("own slot rows=%d err=%v", count, err)
-	}
-	if _, err := tx.Exec(t.Context(), "SELECT set_config('app.account_id','10000000-0000-4000-8000-000000000002',true)"); err != nil {
-		t.Fatal(err)
-	}
-	if err := tx.QueryRow(t.Context(), "SELECT count(*) FROM family_slots").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("cross-account slot rows=%d err=%v", count, err)
-	}
-	if _, err := tx.Exec(t.Context(), "SELECT count(*) FROM family_command_material"); err == nil || sqlState(err) != "42501" {
-		t.Fatalf("runtime material read err=%v", err)
-	}
-
-	ownerRead, err := fixture.Owner.Begin(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer ownerRead.Rollback(t.Context())
-	if _, err := ownerRead.Exec(t.Context(), "SELECT set_config('app.family_id','20000000-0000-4000-8000-000000000001',true)"); err != nil {
-		t.Fatal(err)
-	}
-	if err := ownerRead.QueryRow(t.Context(), "SELECT count(*) FROM family_command_material").Scan(&count); err != nil || count != 0 {
-		t.Fatalf("cross-family material rows=%d err=%v", count, err)
+	// Positive control: account B's own context sees its device and claim.
+	own := tenantTx(t, fixture.Runtime, ids.accountB, ids.familyB)
+	var devices, claims int
+	if err := own.QueryRow(t.Context(), "SELECT (SELECT count(*) FROM devices), (SELECT count(*) FROM family_recovery_claims)").Scan(&devices, &claims); err != nil || devices != 1 || claims != 1 {
+		t.Fatalf("account B own devices=%d claims=%d err=%v", devices, claims, err)
 	}
 }
 

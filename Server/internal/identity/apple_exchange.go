@@ -21,7 +21,6 @@ import (
 
 const (
 	appleTokenURL             = "https://appleid.apple.com/auth/token"
-	appleRevokeURL            = "https://appleid.apple.com/auth/revoke"
 	appleClientSecretLifetime = 5 * time.Minute
 	maxAppleResponseBytes     = 64 << 10
 	maxAppleAuthorizationCode = 16 << 10
@@ -55,7 +54,7 @@ type HostedApple struct {
 	now         func() time.Time
 }
 
-func NewHostedApple(options HostedAppleOptions) (AppleAuthority, error) {
+func NewHostedApple(options HostedAppleOptions) (AppleCodeExchanger, error) {
 	if !validAppleClientID(options.ClientID) ||
 		!appleDeveloperIDPattern.MatchString(options.TeamID) ||
 		!appleDeveloperIDPattern.MatchString(options.KeyID) ||
@@ -122,34 +121,6 @@ func (apple *HostedApple) ExchangeCode(ctx context.Context, request AppleCodeExc
 		return AppleTokens{}, ErrAppleUnavailable
 	}
 	return tokens, nil
-}
-
-func (apple *HostedApple) Revoke(ctx context.Context, request AppleRevocationRequest) error {
-	if apple == nil || apple.http == nil || apple.signingKey == nil || apple.now == nil ||
-		!validAppleOpaqueBytes(request.RefreshToken, maxAppleCredentialBytes) {
-		return ErrInvalidAppleAuthorization
-	}
-	clientSecret, err := apple.clientSecret()
-	if err != nil {
-		return ErrAppleUnavailable
-	}
-	form := url.Values{
-		"client_id":       []string{apple.clientID},
-		"client_secret":   []string{clientSecret},
-		"token":           []string{string(request.RefreshToken)},
-		"token_type_hint": []string{"refresh_token"},
-	}
-	status, _, err := apple.postForm(ctx, appleRevokeURL, form)
-	if status >= http.StatusBadRequest && status < http.StatusInternalServerError {
-		return ErrInvalidAppleAuthorization
-	}
-	if err != nil {
-		return ErrAppleUnavailable
-	}
-	if status != http.StatusOK {
-		return ErrAppleUnavailable
-	}
-	return nil
 }
 
 func (apple *HostedApple) clientSecret() (string, error) {
@@ -321,10 +292,6 @@ func validAppleClientID(value string) bool {
 
 func validAppleOpaqueString(value string, maximum int) bool {
 	return len(value) > 0 && len(value) <= maximum && utf8.ValidString(value) && !strings.ContainsRune(value, '\x00')
-}
-
-func validAppleOpaqueBytes(value []byte, maximum int) bool {
-	return len(value) > 0 && len(value) <= maximum && bytes.IndexByte(value, 0) < 0 && utf8.Valid(value)
 }
 
 func cloneAppleSigningKey(source *ecdsa.PrivateKey) (*ecdsa.PrivateKey, bool) {

@@ -191,8 +191,27 @@ func TestRecoveryCapabilityReadiness(t *testing.T) {
 				found = true
 			}
 		}
-		if found != ready {
+		// Advertised from configuration alone: a not-ready node keeps it (an
+		// iOS client awaiting a recovery acknowledgement treats its absence
+		// as terminal and signs the parent out); the route itself refuses
+		// with a retryable 503 until the node is ready.
+		if !found {
 			t.Fatalf("ready=%v capabilities=%v", ready, body.Capabilities)
+		}
+		r = httptest.NewRecorder()
+		New(options).ServeHTTP(r, httptest.NewRequest(http.MethodPost, "/v1/auth/refresh-recoverable", strings.NewReader(recoveryBody)))
+		var refusal struct {
+			Error struct {
+				Code      string `json:"code"`
+				Retryable bool   `json:"retryable"`
+			} `json:"error"`
+		}
+		_ = json.Unmarshal(r.Body.Bytes(), &refusal)
+		if !ready && (r.Code != http.StatusServiceUnavailable || refusal.Error.Code != "service_unavailable" || !refusal.Error.Retryable) {
+			t.Fatalf("recovery while not ready: %d %s", r.Code, r.Body.String())
+		}
+		if ready && r.Code == http.StatusServiceUnavailable {
+			t.Fatalf("recovery while ready: %d %s", r.Code, r.Body.String())
 		}
 	}
 	options.RecoveryEnabled = false
@@ -245,8 +264,10 @@ func TestRecoveryCapabilitySuppliedListCannotBypassGate(t *testing.T) {
 					count++
 				}
 			}
+			// The supplied list never adds it; configuration does, once,
+			// whether or not the node is ready now.
 			want := 0
-			if test.enabled && test.service && test.ready {
+			if test.enabled && test.service {
 				want = 1
 			}
 			if count != want {
@@ -268,7 +289,9 @@ func TestRecoveryMaintenanceReadinessDoesNotBlockLegacyRefresh(t *testing.T) {
 		options.RecoveryReadiness = gate
 		r := httptest.NewRecorder()
 		New(options).ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/v1/server", nil))
-		if r.Code != 200 || strings.Contains(r.Body.String(), "refresh-recovery-v1") {
+		// Advertised from configuration: a recovery readiness is composed or
+		// not, whatever it answers now.
+		if r.Code != 200 || strings.Contains(r.Body.String(), "refresh-recovery-v1") != (gate != nil) {
 			t.Fatalf("server status=%d body=%s", r.Code, r.Body.String())
 		}
 		r = httptest.NewRecorder()

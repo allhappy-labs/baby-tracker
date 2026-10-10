@@ -14,12 +14,19 @@ func TestLoadLimitsUsesDocumentedDefaultsAndBoundedOverrides(t *testing.T) {
 		t.Fatal(err)
 	}
 	policy := got.Policies[limits.ScopeAuthChallengeIP]
-	if len(got.Policies) != 25 || policy.Count != 30 || policy.Window != 10*time.Minute {
+	if len(got.Policies) != 31 || policy.Count != 30 || policy.Window != 10*time.Minute {
 		t.Fatalf("policies=%d challenge=%+v", len(got.Policies), policy)
 	}
 	if got.Policies[limits.ScopeLiveActivityAccount] != (limits.Policy{Count: 120, Window: time.Minute}) ||
 		got.Policies[limits.ScopeLiveActivityDevice] != (limits.Policy{Count: 30, Window: time.Minute}) {
-		t.Fatalf("live activity policies=%+v", got.Policies)
+		t.Fatalf("live activity policies=%+v %+v", got.Policies[limits.ScopeLiveActivityAccount], got.Policies[limits.ScopeLiveActivityDevice])
+	}
+	if got.Policies[limits.ScopePushTokenDevice] != (limits.Policy{Count: 10, Window: time.Hour}) ||
+		got.Policies[limits.ScopePushTokenAccount] != (limits.Policy{Count: 30, Window: time.Hour}) {
+		t.Fatalf("push-token policies=%+v %+v", got.Policies[limits.ScopePushTokenDevice], got.Policies[limits.ScopePushTokenAccount])
+	}
+	if got.Policies[limits.ScopeBearerFailureIP] != (limits.Policy{Count: 60, Window: 10 * time.Minute}) {
+		t.Fatalf("failed-bearer policy=%+v", got.Policies[limits.ScopeBearerFailureIP])
 	}
 	if got.Policies[limits.ScopeSyncMutationDevice] != (limits.Policy{Count: 1200, Window: time.Minute}) ||
 		got.Policies[limits.ScopeSyncMutationAccount] != (limits.Policy{Count: 2400, Window: time.Minute}) ||
@@ -111,5 +118,35 @@ func TestLoadLimitsRejectsInvalidFamilyLimits(t *testing.T) {
 				t.Fatal("invalid family limit accepted")
 			}
 		})
+	}
+}
+
+// MCP quota overrides may only lower the documented per-minute defaults.
+func TestLoadLimitsMCPQuotasAreFixedPerMinuteAndOnlyLowerable(t *testing.T) {
+	got, err := LoadLimits(func(string) string { return "" })
+	if err != nil || got.Policies[limits.ScopeMCPIntegration] != (limits.Policy{Count: 30, Window: time.Minute}) ||
+		got.Policies[limits.ScopeMCPAccount] != (limits.Policy{Count: 60, Window: time.Minute}) ||
+		got.Policies[limits.ScopeMCPFamily] != (limits.Policy{Count: 120, Window: time.Minute}) {
+		t.Fatalf("mcp defaults=%+v err=%v", got.Policies, err)
+	}
+	lowered, err := LoadLimits(func(key string) string {
+		if key == "BT_RATE_LIMIT_MCP_FAMILY_COUNT" {
+			return "5"
+		}
+		return ""
+	})
+	if err != nil || lowered.Policies[limits.ScopeMCPFamily].Count != 5 {
+		t.Fatalf("lowered=%+v err=%v", lowered.Policies[limits.ScopeMCPFamily], err)
+	}
+	for name, value := range map[string]string{"BT_RATE_LIMIT_MCP_INTEGRATION_COUNT": "31", "BT_RATE_LIMIT_MCP_ACCOUNT_COUNT": "61",
+		"BT_RATE_LIMIT_MCP_FAMILY_COUNT": "121", "BT_RATE_LIMIT_MCP_INTEGRATION_WINDOW": "2m"} {
+		if _, err := LoadLimits(func(key string) string {
+			if key == name {
+				return value
+			}
+			return ""
+		}); err == nil {
+			t.Fatalf("accepted %s=%s", name, value)
+		}
 	}
 }

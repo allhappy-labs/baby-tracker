@@ -42,18 +42,16 @@ public enum FamilySyncComposition {
         ).model
     }
 
-    /// What the app process owns: the settings model and, at most once per
-    /// process, the Live Activity push driver.
-    public struct AppGraph {
-        public let model: FamilySettingsViewModel
-        /// Nil when another graph in this process already owns ActivityKit
-        /// observation: two owners would race each other's versions.
-        public let liveActivityPush: LiveActivityPushDriver?
-    }
-
-    /// The app's graph: `make`'s, plus the automatic push registration on the
-    /// built-in server. Nothing about it is a setting.
-    public static func makeApp(store: BabyStore, keychainAccessGroup: String? = nil, recoveryDiagnostics: @escaping (RefreshRecoveryEvent) -> Void = { _ in }, syncDiagnostics: (any SyncDiagnosticSink)? = nil) -> AppGraph {
+    /// The production graph, for the app: the model, the two objects the
+    /// UIKit delegate hands APNs callbacks to and, at most once per process,
+    /// the automatic Live Activity push registration on the built-in server.
+    /// Nothing about the last is a setting.
+    public static func makeGraph(
+        store: BabyStore, keychainAccessGroup: String? = nil,
+        recoveryDiagnostics: @escaping (RefreshRecoveryEvent) -> Void = { _ in },
+        syncDiagnostics: (any SyncDiagnosticSink)? = nil,
+        registerForRemoteNotifications: @escaping @MainActor () -> Void = {}
+    ) -> Graph {
         let keychainBackend = SystemKeychainBackend(accessGroup: keychainAccessGroup)
         let claimed = liveActivityPushClaimed
         liveActivityPushClaimed = true
@@ -65,6 +63,7 @@ public enum FamilySyncComposition {
             defaults: nil,
             recoveryDiagnostics: recoveryDiagnostics,
             syncDiagnostics: syncDiagnostics,
+            registerForRemoteNotifications: registerForRemoteNotifications,
             liveActivityPush: claimed ? nil : .system(keychainBackend: keychainBackend)
         )
         #if canImport(UIKit)
@@ -72,7 +71,7 @@ public enum FamilySyncComposition {
         #else
         graph.liveActivityPush?.observe(.default, becameActive: nil, preferencesChanged: UserDefaults.didChangeNotification)
         #endif
-        return AppGraph(model: graph.model, liveActivityPush: graph.liveActivityPush)
+        return graph
     }
 
     /// One ActivityKit observer per process.
@@ -123,14 +122,22 @@ public enum FamilySyncComposition {
 
     /// The pieces of one assembled graph a caller may still need to reach.
     ///
-    /// Only `make` is public: the app gets the model and nothing else. The
-    /// coordinator is exposed internally for the live-server gate, which has
-    /// no Apple to sign in with and hands the coordinator the session the
-    /// server's identity-test adapter minted instead.
-    struct Graph {
-        let model: FamilySettingsViewModel
+    /// The app gets the model, the two push objects and the Live Activity
+    /// push driver. The coordinator is exposed internally for the live-server
+    /// gate, which has no Apple to sign in with and hands the coordinator the
+    /// session the server's identity-test adapter minted instead.
+    public struct Graph {
+        public let model: FamilySettingsViewModel
         let coordinator: AccountCoordinator
-        var liveActivityPush: LiveActivityPushDriver? = nil
+        /// `application(_:didRegisterForRemoteNotificationsWithDeviceToken:)` goes here.
+        public let push: PushTokenRegistrar
+        /// `application(_:didReceiveRemoteNotification:)` goes here.
+        public let wake: BackgroundWakeHandler
+        /// Registers ActivityKit push tokens with the built-in server, from
+        /// launch and without any UI. Nil unless the caller passed its wiring,
+        /// and for a second app graph in one process: two owners of
+        /// ActivityKit observation would race each other's versions.
+        public let liveActivityPush: LiveActivityPushDriver?
     }
 
     /// The whole wiring, with the things that differ between the app and the
@@ -158,9 +165,35 @@ public enum FamilySyncComposition {
         liveHintsEnabled: Bool = true,
         recoveryDiagnostics: @escaping (RefreshRecoveryEvent) -> Void = { _ in },
         syncDiagnostics: (any SyncDiagnosticSink)? = nil,
+        registerForRemoteNotifications: @escaping @MainActor () -> Void = {},
+        pushEnvironment: any PushEnvironmentResolving = PushEnvironmentResolver(),
         liveActivityPush: LiveActivityPushWiring? = nil
     ) -> Graph {
         let keychain = KeychainSessionStore(backend: keychainBackend)
+
+        // Background pushes. The registrar asks the endpoint of the session it
+        // was last handed — the same server-info read `LiveHintChannel` makes —
+        // whether the server takes push tokens at all.
+        let pushEndpoint = CurrentPushEndpoint()
+        // Once per server identity per launch: with push off on the server
+        // nothing is ever uploaded, and every activation, token and sign-out
+        // would otherwise ask again.
+        let pushCapabilities = PushCapabilityCache()
+        let push = PushTokenRegistrar(
+            environment: pushEnvironment,
+            defaults: defaults ?? UserDefaults(suiteName: BabySchema.appGroupID) ?? .standard,
+            capabilities: {
+                guard let endpoint = pushEndpoint.value else { return [] }
+                if let known = pushCapabilities.capabilities(for: endpoint) { return known }
+                let info = try await identity.serverInfo(endpoint.origin)
+                // Another server answering at this origin is not the one the
+                // session belongs to. Not remembered: the next ask may reach
+                // the right one.
+                guard info.serverInstanceID == endpoint.serverInstanceID else { return [] }
+                pushCapabilities.remember(info.capabilities, for: endpoint)
+                return info.capabilities
+            }
+        )
 
         // A box, so the token provider can read the *current* session key
         // without the coordinator and the client having to know about each
@@ -190,6 +223,8 @@ public enum FamilySyncComposition {
         // here and one started by the widget or an App Intent fence each
         // other rather than both rotating the refresh token.
         let leases = AppGroupFencedLease(container: store.container, lockURL: store.coordinationLockURL)
+        // The engines are built by the model, so they reach it through this.
+        let modelReference = FamilyModelReference()
         let makeEngine: FamilySyncEngineFactory = { familyKey, endpoint in
             let renewer = FamilySessionRenewer(
                 store: store, keychain: keychain, leases: leases, identity: identity, endpoint: endpoint, diagnostics: recoveryDiagnostics
@@ -230,9 +265,7 @@ public enum FamilySyncComposition {
                 // family are exactly as stale as its records are. Ruling B
                 // covers this path too, not only the ones the settings view
                 // model itself drives.
-                onRevoked: { realm in
-                    try? InvitationCodeStore(backend: keychainBackend, realm: realm).removeAll()
-                }
+                onRevoked: revocationHandler(codeStoreBackend: keychainBackend, model: modelReference)
             )
         }
 
@@ -262,13 +295,39 @@ public enum FamilySyncComposition {
             codeStoreBackend: keychainBackend
         )
         sessionKey.follow(coordinator)
-        let push = liveActivityPush.map { wiring in
+        modelReference.model = model
+
+        model.pushLifecycle = PushLifecycle(
+            activated: { familyKey, endpoint, activation in
+                registerForRemoteNotifications()
+                pushEndpoint.value = endpoint
+                // Built for this family key exactly as `makeEngine` builds the
+                // sync transport: same endpoint, family token, pinned session
+                // and renewal retry.
+                let renewer = FamilySessionRenewer(
+                    store: store, keychain: keychain, leases: leases, identity: identity, endpoint: endpoint, diagnostics: recoveryDiagnostics
+                )
+                let transport = FamilySyncHTTPClient(
+                    endpoint: endpoint,
+                    tokens: KeychainTokenProvider(keychain: keychain, key: { .family(familyKey) }),
+                    session: session,
+                    retryCredentials: { version in try await renewer.credentialsForRetry(after: version, familyKey: familyKey) }
+                )
+                await push.sessionActivated(PushSession(familyKey), transport: transport, activation: activation)
+            },
+            ending: { await push.sessionEnding() },
+            invalidate: { push.forgetUploadedFingerprint() }
+        )
+        let wake = BackgroundWakeHandler(sync: { [weak model] in
+            await model?.syncNowForBackgroundPush() ?? false
+        })
+        let liveActivityDriver = liveActivityPush.map { wiring in
             makeLiveActivityPush(
                 wiring, coordinator: coordinator, store: store, keychain: keychain, leases: leases,
                 identity: identity, session: session, recoveryDiagnostics: recoveryDiagnostics
             )
         }
-        return Graph(model: model, coordinator: coordinator, liveActivityPush: push)
+        return Graph(model: model, coordinator: coordinator, push: push, wake: wake, liveActivityPush: liveActivityDriver)
     }
 
     /// The push coordinator and its launch driver, on the graph's own
@@ -327,6 +386,85 @@ public enum FamilySyncComposition {
             driver?.modeDidChange()
         }
         return driver
+    }
+
+    /// What an engine runs when ordinary sync finds this device removed from
+    /// the family. The shared realm is already purged by then.
+    ///
+    /// The saved invitation codes for that family go too. Push ends through
+    /// the model, in the same order as a leave, so an activation still queued
+    /// cannot hand the registrar the removed session again. Its DELETE is
+    /// refused (the session is gone) and the server's sweep drops the token.
+    static func revocationHandler(
+        codeStoreBackend: any KeychainBackend, model: FamilyModelReference
+    ) -> @MainActor (RealmID) async -> Void {
+        { realm in
+            try? InvitationCodeStore(backend: codeStoreBackend, realm: realm).removeAll()
+            model.model?.membershipEndedBySync()
+        }
+    }
+}
+
+/// The model an engine's callbacks reach. Weak: the model owns its engines.
+@MainActor
+final class FamilyModelReference {
+    weak var model: FamilySettingsViewModel?
+
+    init(_ model: FamilySettingsViewModel? = nil) {
+        self.model = model
+    }
+}
+
+/// What the settings model tells the push registrar: a family session became
+/// active (and how), is about to end, or owes an upload.
+public struct PushLifecycle {
+    public let activated: @MainActor (FamilySessionKey, ConfirmedEndpoint, PushActivation) async -> Void
+    public let ending: @MainActor () async -> Void
+    /// A sign-in, join or re-authentication has begun: whatever was uploaded
+    /// before may be gone from the server, so forget it now rather than when
+    /// the activation runs.
+    public let invalidate: @MainActor () -> Void
+
+    public init(
+        activated: @escaping @MainActor (FamilySessionKey, ConfirmedEndpoint, PushActivation) async -> Void,
+        ending: @escaping @MainActor () async -> Void,
+        invalidate: @escaping @MainActor () -> Void = {}
+    ) {
+        self.activated = activated
+        self.ending = ending
+        self.invalidate = invalidate
+    }
+}
+
+/// The capabilities each server identity advertised, for this launch.
+final class PushCapabilityCache: @unchecked Sendable {
+    private let lock = NSLock()
+    private var known: [String: [String]] = [:]
+
+    func capabilities(for endpoint: ConfirmedEndpoint) -> [String]? {
+        lock.lock(); defer { lock.unlock() }
+        return known[Self.key(endpoint)]
+    }
+
+    func remember(_ capabilities: [String], for endpoint: ConfirmedEndpoint) {
+        lock.lock(); defer { lock.unlock() }
+        known[Self.key(endpoint)] = capabilities
+    }
+
+    private static func key(_ endpoint: ConfirmedEndpoint) -> String {
+        "\(endpoint.origin)|\(endpoint.serverInstanceID.uuidString)"
+    }
+}
+
+/// The endpoint of the session the registrar was last handed, readable from
+/// the registrar's nonisolated capability probe.
+final class CurrentPushEndpoint: @unchecked Sendable {
+    private let lock = NSLock()
+    private var current: ConfirmedEndpoint?
+
+    var value: ConfirmedEndpoint? {
+        get { lock.lock(); defer { lock.unlock() }; return current }
+        set { lock.lock(); current = newValue; lock.unlock() }
     }
 }
 

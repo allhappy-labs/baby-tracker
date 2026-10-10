@@ -11,15 +11,15 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/account"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/family"
-	"babytracker/server/internal/security"
 )
 
 type accountLifecycleStub struct {
-	delete func(context.Context, access.Principal, string, bool) (security.CommandResult, error)
+	delete func(context.Context, access.Principal, string, bool) (account.DeletionResult, error)
 }
 
-func (stub accountLifecycleStub) Delete(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
+func (stub accountLifecycleStub) Delete(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (account.DeletionResult, error) {
 	return stub.delete(ctx, principal, commandID, confirmed)
 }
 
@@ -28,7 +28,7 @@ func TestLifecycleRoutesMapNarrowContractsAndNeverExposeCredentials(t *testing.T
 	commandID := "10000000-0000-4000-8000-000000000009"
 	familyID := "30000000-0000-4000-8000-000000000001"
 	purgeAfter := time.Date(2026, 10, 21, 12, 0, 0, 123, time.UTC)
-	command := security.CommandResult{CommandID: commandID, Outcome: "applied", Code: "ok", Revision: 9}
+	command := authority.Result{CommandID: commandID, Outcome: "applied", Code: "ok", Revision: 9}
 	var calls []string
 	families := familyServiceStub{
 		schedule: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (family.RecoveryStatus, error) {
@@ -45,14 +45,14 @@ func TestLifecycleRoutesMapNarrowContractsAndNeverExposeCredentials(t *testing.T
 			}
 			return family.RecoveryStatus{FamilyID: familyID, State: "deletion_pending", PurgeAfter: purgeAfter, CanRecover: true}, nil
 		},
-		recover: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (security.CommandResult, error) {
+		recover: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (authority.Result, error) {
 			calls = append(calls, "recover")
 			if got != principal || gotCommand != commandID || !confirmed {
 				t.Fatalf("recover principal=%+v command=%q confirmed=%t", got, gotCommand, confirmed)
 			}
 			return command, nil
 		},
-		forfeit: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (security.CommandResult, error) {
+		forfeit: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (authority.Result, error) {
 			calls = append(calls, "forfeit")
 			if got != principal || gotCommand != commandID || !confirmed {
 				t.Fatalf("forfeit principal=%+v command=%q confirmed=%t", got, gotCommand, confirmed)
@@ -60,12 +60,12 @@ func TestLifecycleRoutesMapNarrowContractsAndNeverExposeCredentials(t *testing.T
 			return command, nil
 		},
 	}
-	accounts := accountLifecycleStub{delete: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (security.CommandResult, error) {
+	accounts := accountLifecycleStub{delete: func(_ context.Context, got access.Principal, gotCommand string, confirmed bool) (account.DeletionResult, error) {
 		calls = append(calls, "account")
 		if got != principal || gotCommand != commandID || !confirmed {
 			t.Fatalf("account principal=%+v command=%q confirmed=%t", got, gotCommand, confirmed)
 		}
-		return command, nil
+		return account.DeletionResult{Result: command, AppleAuthorizationRevocation: account.AppleAuthorizationRevocationManual}, nil
 	}}
 	options := familyHandlerOptions(t, principal, families, nil)
 	options.AccountService = accounts
@@ -100,12 +100,15 @@ func TestLifecycleRoutesMapNarrowContractsAndNeverExposeCredentials(t *testing.T
 		t.Fatalf("calls=%q", got)
 	}
 
+	// Hosted mode reports what the account service reports: no Apple refresh
+	// token is kept in Phase 1, so revocation is manual_required in both
+	// modes (hosted ruling), never a mode-derived "pending".
 	options.AppleAuthorizationMode = "code_exchange_required"
 	hosted := httptest.NewRequest(http.MethodPost, "/v1/account/delete", strings.NewReader(body))
 	hosted.Header.Set("Authorization", "Bearer access")
 	recorder := httptest.NewRecorder()
 	New(options).ServeHTTP(recorder, hosted)
-	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"apple_authorization_revocation":"pending"`) {
+	if recorder.Code != http.StatusOK || !strings.Contains(recorder.Body.String(), `"apple_authorization_revocation":"manual_required"`) {
 		t.Fatalf("hosted status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 }
@@ -113,9 +116,9 @@ func TestLifecycleRoutesMapNarrowContractsAndNeverExposeCredentials(t *testing.T
 func TestFamilyRecoveryMutationsRequireRecoveryCapability(t *testing.T) {
 	principal := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", Scope: "family_recovery"}
 	calls := 0
-	service := familyServiceStub{recover: func(context.Context, access.Principal, string, bool) (security.CommandResult, error) {
+	service := familyServiceStub{recover: func(context.Context, access.Principal, string, bool) (authority.Result, error) {
 		calls++
-		return security.CommandResult{CommandID: "10000000-0000-4000-8000-000000000009", Outcome: "applied", Code: "ok", Revision: 9}, nil
+		return authority.Result{CommandID: "10000000-0000-4000-8000-000000000009", Outcome: "applied", Code: "ok", Revision: 9}, nil
 	}}
 	handler := New(familyHandlerOptions(t, principal, service, nil))
 	for _, test := range []struct {
@@ -153,8 +156,8 @@ func TestLifecycleRoutesRequireExplicitConfirmationAndMapSafeErrors(t *testing.T
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
 
-	options.AccountService = accountLifecycleStub{delete: func(context.Context, access.Principal, string, bool) (security.CommandResult, error) {
-		return security.CommandResult{}, account.ErrOwnershipTransferRequired
+	options.AccountService = accountLifecycleStub{delete: func(context.Context, access.Principal, string, bool) (account.DeletionResult, error) {
+		return account.DeletionResult{}, account.ErrOwnershipTransferRequired
 	}}
 	request = httptest.NewRequest(http.MethodPost, "/v1/account/delete", strings.NewReader(familyBody("10000000-0000-4000-8000-000000000009", `"confirmed":true`)))
 	request.Header.Set("Authorization", "Bearer access")

@@ -283,3 +283,24 @@ func readRegularFile(path string, limit int64) ([]byte, error) {
 	}
 	return encoded, nil
 }
+
+// ActorIDPepper loads the actor-ID key alone (BT_ACTOR_ID_PEPPER_FILE, or
+// BT_ACTOR_ID_PEPPER in development), for the admin authority commands that
+// bind and check its commitment in server_state.
+func ActorIDPepper(getenv func(string) string) ([32]byte, error) {
+	if getenv == nil {
+		return [32]byte{}, errors.New("configuration getter is required")
+	}
+	mode, err := LoadMode(getenv)
+	if err != nil {
+		return [32]byte{}, err
+	}
+	key, err := loadPepper(getenv, mode, "BT_ACTOR_ID_PEPPER", "BT_ACTOR_ID_PEPPER_FILE")
+	if err != nil {
+		return [32]byte{}, err
+	}
+	if key == ([32]byte{}) {
+		return [32]byte{}, errors.New("BT_ACTOR_ID_PEPPER_FILE must not be all zero")
+	}
+	return key, nil
+}

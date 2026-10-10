@@ -34,7 +34,7 @@ func roundTripStored(t *testing.T, entity CanonicalEntity) CanonicalEntity {
 	return read
 }
 
-// A timer the server stored comes back out of the journal, a receipt or a
+// A timer the server stored comes back out of a pull, a receipt or a
 // snapshot exactly as stored, its session link included whether it is an id
 // or an explicit null.
 func TestStoredTimerRoundTrip(t *testing.T) {

@@ -2,14 +2,15 @@ package importer_test
 
 import (
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/care"
+	"babytracker/server/internal/family"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
 	familysync "babytracker/server/internal/sync"
 	"babytracker/server/internal/testkit"
 	"context"
 	"encoding/hex"
+	"errors"
 	"fmt"
-	"github.com/jackc/pgx/v5"
 	"reflect"
 	"sync"
 	"sync/atomic"
@@ -25,7 +26,7 @@ func TestImportStagingCommitResumeAndByteRollback(t *testing.T) {
 	if e != nil || first.ManifestComplete || first.MappingComplete || first.NextChunkIndex != 1 {
 		t.Fatalf("stage %+v %v", first, e)
 	}
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	status, e := h.Importer.Status(t.Context(), h.Caregiver, r.ImportID)
 	if e != nil || !reflect.DeepEqual(first, status) {
 		t.Fatalf("resume %+v %v", status, e)
@@ -38,8 +39,8 @@ func TestImportStagingCommitResumeAndByteRollback(t *testing.T) {
 	next.Records[0].RecordID = testkit.RecordB
 	beforeCount, beforeBytes := h.FamilyUsage(t)
 	charged := h.Limits.MaxChargedStorageBytesPerFamily - 1
-	h.ExecFamily(t, `UPDATE family_record_usage SET charged_storage_bytes=$2 WHERE family_id=$1`, h.FamilyID, charged)
-	if _, e = h.Importer.Resolve(t.Context(), h.Caregiver, next); e == nil || e != records.ErrQuotaExceeded {
+	h.ExecFamily(t, `UPDATE families SET care_charged_bytes=$2 WHERE id=$1`, h.FamilyID, charged)
+	if _, e = h.Importer.Resolve(t.Context(), h.Caregiver, next); !errors.Is(e, care.ErrQuotaExceeded) {
 		t.Fatalf("storage cap admission: %v", e)
 	}
 	if count, bytes := h.FamilyUsage(t); count != beforeCount || bytes != charged {
@@ -49,7 +50,7 @@ func TestImportStagingCommitResumeAndByteRollback(t *testing.T) {
 	if e != nil || status.NextChunkIndex != 1 || status.ManifestComplete {
 		t.Fatalf("failed chunk committed %+v %v", status, e)
 	}
-	h.ExecFamily(t, `UPDATE family_record_usage SET charged_storage_bytes=$2 WHERE family_id=$1`, h.FamilyID, beforeBytes)
+	h.ExecFamily(t, `UPDATE families SET care_charged_bytes=$2 WHERE id=$1`, h.FamilyID, beforeBytes)
 	final, e := h.Importer.Resolve(t.Context(), h.Caregiver, next)
 	if e != nil || !final.MappingComplete {
 		t.Fatalf("finalize %+v %v", final, e)
@@ -62,7 +63,7 @@ func TestImportStagingCommitResumeAndByteRollback(t *testing.T) {
 	m.EntityID = testkit.RecordB
 	m.MutationID = h.CommandID()
 	created := apply(t, h, h.Caregiver, m)
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	out, e := h.Service.Apply(t.Context(), h.Caregiver, h.FamilyID, m)
 	if e != nil || out.Status != "already_applied" || !reflect.DeepEqual(out.Cursor, created.Cursor) {
 		t.Fatalf("record crash retry %+v %v", out, e)
@@ -74,7 +75,7 @@ func TestImportHistoryAndActiveAdmissionRaces(t *testing.T) {
 			h := testkit.New(t)
 			if mode == "history" {
 				h.Limits.ImportMaxSessionsPerAccount = 1
-				h.RebuildSyncService(t)
+				h.RebuildSyncService(t, h.Limits)
 			}
 			start := make(chan struct{})
 			var successes atomic.Int32
@@ -123,7 +124,7 @@ func TestImportHistoryAndActiveAdmissionRaces(t *testing.T) {
 func TestImportHistoryCountsExpiredAndCompleteRows(t *testing.T) {
 	h := testkit.New(t)
 	h.Limits.ImportMaxSessionsPerAccount = 2
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	r := testkit.ImportRequest(0, "Élie", "2026-01-12")
 	if _, e := h.Importer.Resolve(t.Context(), h.Owner, r); e != nil {
 		t.Fatal(e)
@@ -226,18 +227,16 @@ func TestImportTimerManifestAndCollisionAndForbiddenOperations(t *testing.T) {
 	}
 }
 
+// wakeObserver records post-commit publishes (the only hint; the write
+// transaction schedules nothing).
 type wakeObserver struct {
-	scheduled, published int
-	cursors              []protocol.Cursor
+	published int
+	cursors   []protocol.Cursor
 }
 
-func (w *wakeObserver) Schedule(_ context.Context, _ pgx.Tx, _ access.Grant, _ string, cursor protocol.Cursor) error {
-	w.scheduled++
-	w.cursors = append(w.cursors, cursor)
-	return nil
-}
-func (w *wakeObserver) Publish(context.Context, string, protocol.Cursor) error {
+func (w *wakeObserver) Publish(_ context.Context, _ string, cursor protocol.Cursor) error {
 	w.published++
+	w.cursors = append(w.cursors, cursor)
 	return nil
 }
 
@@ -250,36 +249,37 @@ func TestImportFinalizationObservesOneHighestCursorAndReplayIsSilent(t *testing.
 	second.SortOrder = 1
 	request.Babies = append(request.Babies, second)
 	observer := &wakeObserver{}
-	h.Importer.SetCommitObserver(observer)
+	h.Importer.SetPublisher(observer)
 	before := h.FamilySequence(t)
 	if _, err := h.Importer.Resolve(t.Context(), h.Owner, request); err != nil {
 		t.Fatal(err)
 	}
 	after := h.FamilySequence(t)
-	if after != before+2 || observer.scheduled != 1 || observer.published != 1 || len(observer.cursors) != 1 || observer.cursors[0].Sequence != after {
+	if after != before+2 || observer.published != 1 || len(observer.cursors) != 1 || observer.cursors[0].Sequence != after {
 		t.Fatalf("before=%d after=%d observer=%+v", before, after, observer)
 	}
 	if _, err := h.Importer.Resolve(t.Context(), h.Owner, request); err != nil {
 		t.Fatal(err)
 	}
-	if observer.scheduled != 1 || observer.published != 1 {
+	if observer.published != 1 {
 		t.Fatalf("replay observed %+v", observer)
 	}
 }
-func TestImportEqualNoOpEmitsNoJournalOrWake(t *testing.T) {
+func TestImportEqualNoOpAdvancesNoSequenceAndPublishesNothing(t *testing.T) {
 	h, r, m, _ := recordSetup(t)
 	if _, e := h.Importer.Resolve(t.Context(), h.Caregiver, r); e != nil {
 		t.Fatal(e)
 	}
 	observer := &wakeObserver{}
-	h.Service = familysync.NewServiceWithResolver(h.Security, records.NewRepository(), h.Info, h.Limits, func() time.Time { return h.Now }, nil, observer)
+	h.Service = familysync.New(familysync.Options{Guard: h.Authority, Server: h.Info, Limits: h.Limits, Now: func() time.Time { return h.Now },
+		Publisher: observer, PageKeys: testkit.PageKeyring("page.v1", 0x77), Allowed: family.Allowed})
 	h.Service.SetImportAdmission(h.Importer)
 	m.ImportID = &r.ImportID
 	m.MutationID = h.CommandID()
 	before := h.FamilySequence(t)
 	apply(t, h, h.Caregiver, m)
-	if h.FamilySequence(t) != before || observer.scheduled != 0 || observer.published != 0 {
-		t.Fatal("equal admission emitted journal/wake")
+	if h.FamilySequence(t) != before || observer.published != 0 {
+		t.Fatal("equal admission advanced the family sequence or published a high water")
 	}
 }
 
@@ -300,7 +300,7 @@ func TestImportFamilyUnfinishedAndHistoryCapsAreIndependent(t *testing.T) {
 	h.ExecFamily(t, `UPDATE import_sessions SET expires_at=created_at+interval '1 second' WHERE family_id=$1`, h.FamilyID)
 	h.Now = h.Now.Add(2 * time.Second)
 	h.Limits.ImportMaxSessionsPerFamily = 10
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	for i := 0; i < 6; i++ {
 		if _, e := h.Importer.Resolve(t.Context(), h.Owner, testkit.ImportRequest(i+5, fmt.Sprintf("History %d", i), "2026-01-12")); e != nil {
 			t.Fatal(e)

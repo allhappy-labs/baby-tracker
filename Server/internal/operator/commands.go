@@ -9,8 +9,8 @@ import (
 	"regexp"
 	"time"
 
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 )
 
 const confirmationLifetime = 5 * time.Minute
@@ -42,10 +42,7 @@ func Code(err error) string {
 	if errors.As(err, &coded) {
 		return string(coded)
 	}
-	if code := security.Code(err); code != "service_unavailable" {
-		return code
-	}
-	return "service_unavailable"
+	return authority.CodeOf(err)
 }
 
 type RecoveryProposal struct {
@@ -111,25 +108,29 @@ type EntitlementCommand struct {
 type Authority interface {
 	PreflightRecovery(context.Context, RecoveryCommand) error
 	PreflightEntitlement(context.Context, EntitlementCommand) error
-	ReplayRecovery(context.Context, RecoveryCommand) (security.CommandResult, bool, error)
-	ReplayEntitlement(context.Context, EntitlementCommand) (security.CommandResult, bool, error)
-	RecoverOwner(context.Context, RecoveryCommand) (security.CommandResult, error)
-	GrantEntitlement(context.Context, EntitlementCommand) (security.CommandResult, error)
-	SuspendEntitlement(context.Context, EntitlementCommand) (security.CommandResult, error)
+	ReplayRecovery(context.Context, RecoveryCommand) (authority.Result, bool, error)
+	ReplayEntitlement(context.Context, EntitlementCommand) (authority.Result, bool, error)
+	RecoverOwner(context.Context, RecoveryCommand) (authority.Result, error)
+	GrantEntitlement(context.Context, EntitlementCommand) (authority.Result, error)
+	SuspendEntitlement(context.Context, EntitlementCommand) (authority.Result, error)
 }
 
 type Options struct {
 	Authority                     Authority
+	IntegrationAuthority          IntegrationAuthority
 	OperatorID, OwnershipPolicyID string
 	EntitlementPolicyID           string
+	IntegrationPolicyID           string
 	ConfirmationKey               [32]byte
 	Now                           func() time.Time
 }
 
 type Service struct {
 	authority                     Authority
+	integrationAuthority          IntegrationAuthority
 	operatorID, ownershipPolicyID string
 	entitlementPolicyID           string
+	integrationPolicyID           string
 	confirmationKey               [32]byte
 	now                           func() time.Time
 }
@@ -142,14 +143,21 @@ func New(options Options) (*Service, error) {
 	if enabled && (options.Authority == nil || !validUUID(options.OperatorID) || options.ConfirmationKey == ([32]byte{})) {
 		return nil, errors.New("enabled operator service requires authority, operator ID, and confirmation key")
 	}
+	if options.IntegrationPolicyID != "" && (options.IntegrationAuthority == nil || !validUUID(options.OperatorID) || options.ConfirmationKey == ([32]byte{})) {
+		return nil, errors.New("enabled integration commands require integration authority, operator ID, and confirmation key")
+	}
 	if options.OwnershipPolicyID != "" && !policyIDPattern.MatchString(options.OwnershipPolicyID) {
 		return nil, errors.New("ownership policy ID is invalid")
 	}
 	if options.EntitlementPolicyID != "" && !policyIDPattern.MatchString(options.EntitlementPolicyID) {
 		return nil, errors.New("entitlement policy ID is invalid")
 	}
-	return &Service{authority: options.Authority, operatorID: options.OperatorID, ownershipPolicyID: options.OwnershipPolicyID,
-		entitlementPolicyID: options.EntitlementPolicyID, confirmationKey: options.ConfirmationKey, now: options.Now}, nil
+	if options.IntegrationPolicyID != "" && !policyIDPattern.MatchString(options.IntegrationPolicyID) {
+		return nil, errors.New("integration policy ID is invalid")
+	}
+	return &Service{authority: options.Authority, integrationAuthority: options.IntegrationAuthority, operatorID: options.OperatorID,
+		ownershipPolicyID: options.OwnershipPolicyID, entitlementPolicyID: options.EntitlementPolicyID, integrationPolicyID: options.IntegrationPolicyID,
+		confirmationKey: options.ConfirmationKey, now: options.Now}, nil
 }
 
 func (service *Service) PrepareRecovery(ctx context.Context, proposal RecoveryProposal) (Confirmation, error) {
@@ -175,25 +183,25 @@ func (service *Service) PrepareRecovery(ctx context.Context, proposal RecoveryPr
 	return service.prepare("ownership-recover", proposal)
 }
 
-func (service *Service) RecoverOwner(ctx context.Context, proposal RecoveryProposal, confirmation Confirmation) (security.CommandResult, error) {
+func (service *Service) RecoverOwner(ctx context.Context, proposal RecoveryProposal, confirmation Confirmation) (authority.Result, error) {
 	if service == nil || service.ownershipPolicyID == "" {
-		return security.CommandResult{}, ErrOperatorPolicyRequired
+		return authority.Result{}, ErrOperatorPolicyRequired
 	}
 	if err := validateRecoveryProposal(proposal); err != nil {
-		return security.CommandResult{}, err
+		return authority.Result{}, err
 	}
 	if proposal.PolicyID != service.ownershipPolicyID {
-		return security.CommandResult{}, ErrOperatorPolicyRequired
+		return authority.Result{}, ErrOperatorPolicyRequired
 	}
 	canonical, command, err := service.recoveryCommand(proposal, confirmation)
 	if err != nil {
-		return security.CommandResult{}, err
+		return authority.Result{}, err
 	}
 	if result, replayed, err := service.authority.ReplayRecovery(ctx, command); err != nil || replayed {
 		return result, err
 	}
 	if err := service.verifyConfirmation("ownership-recover", canonical, confirmation); err != nil {
-		return security.CommandResult{}, err
+		return authority.Result{}, err
 	}
 	return service.authority.RecoverOwner(ctx, command)
 }
@@ -221,40 +229,40 @@ func (service *Service) PrepareEntitlement(ctx context.Context, proposal Entitle
 	return service.prepare("entitlement-"+proposal.Operation, proposal)
 }
 
-func (service *Service) GrantEntitlement(ctx context.Context, proposal EntitlementProposal, confirmation Confirmation) (security.CommandResult, error) {
+func (service *Service) GrantEntitlement(ctx context.Context, proposal EntitlementProposal, confirmation Confirmation) (authority.Result, error) {
 	if proposal.Operation != "grant" {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
 	return service.commitEntitlement(ctx, proposal, confirmation)
 }
 
-func (service *Service) SuspendEntitlement(ctx context.Context, proposal EntitlementProposal, confirmation Confirmation) (security.CommandResult, error) {
+func (service *Service) SuspendEntitlement(ctx context.Context, proposal EntitlementProposal, confirmation Confirmation) (authority.Result, error) {
 	if proposal.Operation != "suspend" {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
 	return service.commitEntitlement(ctx, proposal, confirmation)
 }
 
-func (service *Service) commitEntitlement(ctx context.Context, proposal EntitlementProposal, confirmation Confirmation) (security.CommandResult, error) {
+func (service *Service) commitEntitlement(ctx context.Context, proposal EntitlementProposal, confirmation Confirmation) (authority.Result, error) {
 	if service == nil || service.entitlementPolicyID == "" {
-		return security.CommandResult{}, ErrOperatorPolicyRequired
+		return authority.Result{}, ErrOperatorPolicyRequired
 	}
 	if err := validateEntitlementProposal(proposal); err != nil {
-		return security.CommandResult{}, err
+		return authority.Result{}, err
 	}
 	if proposal.PolicyID != service.entitlementPolicyID {
-		return security.CommandResult{}, ErrOperatorPolicyRequired
+		return authority.Result{}, ErrOperatorPolicyRequired
 	}
 	operation := "entitlement-" + proposal.Operation
 	canonical, command, err := service.entitlementCommand(proposal, confirmation)
 	if err != nil {
-		return security.CommandResult{}, err
+		return authority.Result{}, err
 	}
 	if result, replayed, err := service.authority.ReplayEntitlement(ctx, command); err != nil || replayed {
 		return result, err
 	}
 	if err := service.verifyConfirmation(operation, canonical, confirmation); err != nil {
-		return security.CommandResult{}, err
+		return authority.Result{}, err
 	}
 	if proposal.Operation == "grant" {
 		return service.authority.GrantEntitlement(ctx, command)
@@ -297,6 +305,12 @@ func (service *Service) commitCoordinates(operation, commandID string, proposal 
 	if service.authority == nil {
 		return nil, ReceiptKey{}, ErrUnavailable
 	}
+	return service.receiptCoordinates(operation, commandID, proposal)
+}
+
+// receiptCoordinates derives the canonical proposal and its durable receipt
+// key without assuming which authority seam will execute it.
+func (service *Service) receiptCoordinates(operation, commandID string, proposal any) ([]byte, ReceiptKey, error) {
 	canonical, err := json.Marshal(proposal)
 	if err != nil {
 		return nil, ReceiptKey{}, ErrInvalidRequest

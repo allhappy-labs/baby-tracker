@@ -51,7 +51,15 @@ struct TwoCaregiverSyncE2ETests {
         let owner = try Phone(name: "owner", live: live, clock: clock, directory: scratch, appleSubject: UUID().uuidString.lowercased())
         var joiner = try Phone(name: "joiner", live: live, clock: clock, directory: scratch, appleSubject: LiveServer.outsider2Subject)
         defer { owner.forgetDefaults(); joiner.forgetDefaults() }
+        // Every phone this test builds, so a throw from any step can stop
+        // every engine before the scratch directory and Keychain go away.
+        // The deletion above is only the last resort if that explicit
+        // cleanup itself throws before it gets a chance to run — otherwise a
+        // catch-up or hint sync still reading the store would log a
+        // misleading CoreData disk I/O error instead of the real failure.
+        var phones: [Phone] = [owner, joiner]
 
+        do {
         // MARK: 1. The owner's history, tracked before there was a family.
 
         let baby = try owner.store.addBaby(name: "Zoë Мія 🌙", birthDate: clock.now.addingTimeInterval(-40 * 86_400), referenceSex: .girls, expectedDueDate: nil)
@@ -419,6 +427,7 @@ struct TwoCaregiverSyncE2ETests {
 
         let beforeRelaunch = try joiner.credentials(joinerKey)
         joiner = try await joiner.relaunched()
+        phones.append(joiner)
         let restoredKey = try joiner.familyKey()
         #expect(restoredKey == joinerKey)
         try joiner.expectUpToDate("after relaunching")
@@ -523,6 +532,7 @@ struct TwoCaregiverSyncE2ETests {
         // sign-in worked in step 2 — this phone exists only to redeem the
         // view-only invitation, so it needs no bootstrap identity of its own.
         let third = try Phone(name: "third", live: live, clock: clock, directory: scratch, appleSubject: UUID().uuidString.lowercased())
+        phones.append(third)
         defer { third.forgetDefaults() }
 
         let caregiverInvitation = try await owner.model.createInvitation(role: .caregiver)
@@ -622,6 +632,26 @@ struct TwoCaregiverSyncE2ETests {
         try await expectSameSessions(owner, joiner, baby.id, "after the joiner stopped the running part")
         #expect(try sessionLinks(owner, baby.id).contains("\(addedBottle)=\([addedBottle, addedLeft, continued.id])"))
         proof(24, "History session edits through the server with a part running: Add part (bottle, left) created already linked, Split here (timer to the later half), Join from the bottle's row (timer back), the first part deleted (next part promoted to root, the rest and the timer relinked); both phones agree on every session and the timer's link after each edit, and a fresh snapshot agrees at the end; the joiner stopped the running part into the promoted session \(addedBottle)")
+        } catch {
+            // Stop every engine before the deferred cleanup removes the
+            // scratch directory and Keychain out from under one still
+            // reading or writing the store: that would surface as a
+            // misleading CoreData disk I/O error instead of this failure.
+            await stopEngines(phones)
+            throw error
+        }
+        await stopEngines(phones)
+    }
+}
+
+/// Stops every phone's engine so the store is never read or written again
+/// before the scratch directory and Keychain holding it go away — on a
+/// normal return, and ahead of rethrowing when a step fails. Calling `stop()`
+/// twice (relaunch already stops the phone it replaces) is harmless.
+@MainActor
+private func stopEngines(_ phones: [Phone]) async {
+    for phone in phones {
+        await phone.model.engine?.stop()
     }
 }
 
@@ -744,6 +774,7 @@ struct LiveServer {
     let endpoint: ConfirmedEndpoint
     let session: URLSession
     private let pin: PinnedCertificateDelegate
+    let configuration: URLSessionConfiguration
 
     init(_ environment: E2EEnvironment) throws {
         self.environment = environment
@@ -751,14 +782,15 @@ struct LiveServer {
             origin: try ServerOrigin(validating: environment.baseURL),
             serverInstanceID: environment.serverInstanceID
         )
-        pin = PinnedCertificateDelegate(pinning: environment.certificate)
-        session = URLSession(configuration: .ephemeral, delegate: pin, delegateQueue: nil)
+        configuration = try CapacityTestRoute.currentConfiguration()
+        pin = PinnedCertificateDelegate(pinning: environment.certificate, strictHostname: CapacityTestRoute.enabled ? "sync.example.test" : nil)
+        session = URLSession(configuration: configuration, delegate: pin, delegateQueue: nil)
     }
 
     /// Pinned to the same certificate as every other transport.
     func identityClient() -> HTTPIdentityClient {
         let pin = pin
-        return HTTPIdentityClient(evaluateTrust: { pin.evaluate($0) })
+        return HTTPIdentityClient(configuration: configuration, evaluateTrust: { pin.evaluate($0) })
     }
 
     /// The account the Go bootstrap signed in and left without a family.
@@ -878,16 +910,23 @@ final class Phone {
             deviceID: "\(name)-phone",
             coordinationLockURL: storeURL.appendingPathExtension("coordination.lock")
         )
-        let recorder = RecordingPinnedDelegate(pinning: live.environment.certificate)
+        let recorder = RecordingPinnedDelegate(pinning: live.environment.certificate, strictHostname: CapacityTestRoute.enabled ? "sync.example.test" : nil)
         traffic = recorder.traffic
-        session = URLSession(configuration: .ephemeral, delegate: recorder, delegateQueue: nil)
+        session = URLSession(configuration: live.configuration, delegate: recorder, delegateQueue: nil)
         // Polling effectively off: every step drives its own syncs, and step
         // 15 must prove a change arrived through the live socket alone.
+        //
+        // Push as a simulator build has it: the sandbox environment, with no
+        // provisioning profile to read. The registration call stays the
+        // default no-op, so a phone has an APNs token only when a test hands
+        // it one (`graph.push.deviceTokenReceived`); until then the
+        // production registrar, lifecycle and HTTP client stay inert.
         graph = FamilySyncComposition.assemble(
             store: store, keychainBackend: keychain, identity: live.identityClient(),
             session: session, defaults: defaults, apple: live.appleClient(subject: appleSubject),
             foregroundPollInterval: pollOverride, liveHintsEnabled: liveHintsEnabled,
             recoveryDiagnostics: recoveryDiagnostics, syncDiagnostics: diagnostics,
+            pushEnvironment: PushEnvironmentResolver(isSimulator: true),
             liveActivityPush: liveActivityPush?(keychain)
         )
     }
@@ -935,6 +974,13 @@ final class Phone {
         // The test drives every sync itself; polling in the background would
         // only make the order of events harder to read.
         next.model.sceneEnteredBackground()
+        // Connecting the live socket owes a catch-up sync (`liveConnected`).
+        // When the socket opens after the launch sync has finished, that sync
+        // starts on its own and can still be in flight here; let it land
+        // before anything reads the status or the store.
+        if let engine = next.model.engine as? FamilySyncEngine {
+            _ = await eventually(within: .seconds(5)) { !engine.isBusy }
+        }
         return next
     }
 

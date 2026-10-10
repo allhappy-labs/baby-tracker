@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"time"
 
-	"babytracker/server/internal/security"
+	"babytracker/server/internal/authority"
 )
 
 type FamilyView struct {
@@ -82,6 +82,8 @@ var (
 	ErrOwnershipTransferRequired = codedError("ownership_transfer_required")
 )
 
+// Code is err's stable code: the family service's own code, else the
+// authority's (authority codes are the legacy strings).
 func Code(err error) string {
 	if err == nil {
 		return ""
@@ -90,25 +92,26 @@ func Code(err error) string {
 	if errors.As(err, &coded) {
 		return string(coded)
 	}
-	if code := security.Code(err); code != "service_unavailable" {
-		return code
-	}
-	return "service_unavailable"
+	return authority.CodeOf(err)
 }
 
+// familyError maps an authority error to the family service's legacy codes.
+// A code the family surface never had (scope_failed, an audit chain that
+// failed verification) is service_unavailable, with the cause kept for the
+// 5xx log.
 func familyError(err error) error {
 	var own codedError
 	if errors.As(err, &own) {
 		return err
 	}
-	switch security.Code(err) {
+	switch authority.CodeOf(err) {
 	case "family_slot_occupied":
 		return ErrFamilySlotOccupied
 	// A command the server itself judged malformed. Left unmapped it fell
 	// through to `service_unavailable`, which is both wrong and retryable:
 	// the client was told to keep resending a request that can never be
 	// accepted.
-	case "invalid_command":
+	case "invalid_command", "invalid_request":
 		return ErrInvalidRequest
 	case "owner_required":
 		return ErrOwnerRequired
@@ -132,11 +135,13 @@ func familyError(err error) error {
 		return ErrInvitationLimit
 	case "confirmation_required":
 		return ErrConfirmationRequired
+	case "profile_not_required":
+		return ErrProfileNotRequired
 	case "entitlement_required":
 		return ErrEntitlementRequired
 	case "command_id_reused":
 		return ErrCommandIDReused
-	case "epoch_changed", "session_revoked", "reauthentication_required", "security_busy":
+	case "epoch_changed", "session_revoked", "reauthentication_required", "access_expired", "security_busy":
 		return err
 	case "authorization_quarantine":
 		return ErrAuthorizationQuarantine
@@ -153,8 +158,16 @@ func familyError(err error) error {
 	case "ownership_transfer_required":
 		return ErrOwnershipTransferRequired
 	default:
-		// The cause travels with the code: the writer logs it, the client
-		// still sees only service_unavailable.
+		if err == nil {
+			return ErrUnavailable
+		}
 		return fmt.Errorf("%w: %w", ErrUnavailable, err)
 	}
+}
+
+func familyErrorOrNil(err error) error {
+	if err == nil {
+		return nil
+	}
+	return familyError(err)
 }

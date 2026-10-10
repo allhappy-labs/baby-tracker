@@ -1,13 +1,17 @@
 package auth
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/identity"
 )
 
@@ -62,16 +66,6 @@ func TestActorIDRejectsUnsafeGenerations(t *testing.T) {
 	}
 	if _, err := ActorID(sequentialSecret(), "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", verified, maxSafeJSONInteger); err != nil {
 		t.Fatalf("maximum safe generation rejected: %v", err)
-	}
-}
-
-func TestCredentialObjectIDKnownAnswer(t *testing.T) {
-	got, err := CredentialObjectID("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "apple-refresh-revocation-v1")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "f71e3c87-1a11-8bac-88ba-b811fd571347" {
-		t.Fatalf("object ID=%s", got)
 	}
 }
 
@@ -211,8 +205,7 @@ func TestRefreshDerivationDeadlinesAlwaysEncodeInStage(t *testing.T) {
 	if _, err := DeriveRefreshRotation(input); err != nil {
 		t.Fatal(err)
 	}
-	common := validExchangeStage().StageCommon
-	common.Kind = "refresh"
+	common := validRefreshStage().StageCommon
 	common.AccessExpiresAt = input.AccessExpiresAt.Format(time.RFC3339Nano)
 	common.RefreshExpiresAt = input.RefreshExpiresAt.Format(time.RFC3339Nano)
 	common.ReauthenticateAt = input.ReauthenticateAt.Format(time.RFC3339Nano)
@@ -223,20 +216,18 @@ func TestRefreshDerivationDeadlinesAlwaysEncodeInStage(t *testing.T) {
 	}
 }
 
-func TestExchangeStageEncodingHasFrozenOrderAndExplicitNulls(t *testing.T) {
-	stage := validExchangeStage()
-	encoded, digest, err := EncodeExchangeStage(stage)
+func TestRefreshStageEncodingHasFrozenOrderAndExplicitNulls(t *testing.T) {
+	stage := validRefreshStage()
+	encoded, digest, err := EncodeRefreshStage(stage)
 	if err != nil {
 		t.Fatal(err)
 	}
-	wantPrefix := `{"version":"v1","kind":"exchange","account_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","device_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","session_id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","lineage_root_session_id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"`
+	wantPrefix := `{"version":"v1","kind":"refresh","account_id":"bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb","device_id":"cccccccc-cccc-4ccc-8ccc-cccccccccccc","session_id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee","lineage_root_session_id":"eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"`
 	if !strings.HasPrefix(string(encoded), wantPrefix) {
 		t.Fatalf("stage order=%s", encoded)
 	}
-	for _, explicit := range []string{`"family_id":null`, `"display_name":null`, `"installation_key_id":null`, `"apple_credential_id":null`} {
-		if !strings.Contains(string(encoded), explicit) {
-			t.Fatalf("stage omitted %s: %s", explicit, encoded)
-		}
+	if !strings.Contains(string(encoded), `"family_id":null`) {
+		t.Fatalf("stage omitted family_id: %s", encoded)
 	}
 	if digest != sha256.Sum256(encoded) || len(encoded) > maxStageBytes {
 		t.Fatal("stage digest or bound is wrong")
@@ -244,71 +235,13 @@ func TestExchangeStageEncodingHasFrozenOrderAndExplicitNulls(t *testing.T) {
 }
 
 func TestRefreshStageEncodingExcludesExchangeFields(t *testing.T) {
-	common := validExchangeStage().StageCommon
-	stage := RefreshStage{StageCommon: common, ParentSessionID: "11111111-2222-4333-8444-555555555555"}
-	stage.Kind = "refresh"
+	stage := validRefreshStage()
 	encoded, _, err := EncodeRefreshStage(stage)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !strings.HasSuffix(string(encoded), `"parent_session_id":"11111111-2222-4333-8444-555555555555"}`) || strings.Contains(string(encoded), "identity_provider") {
 		t.Fatalf("refresh stage shape=%s", encoded)
-	}
-}
-
-func TestStageEncodingRejectsInconsistentOptionalGroups(t *testing.T) {
-	stage := validExchangeStage()
-	value := "installation.v1"
-	stage.InstallationKeyID = &value
-	if _, _, err := EncodeExchangeStage(stage); err == nil {
-		t.Fatal("half-present installation digest accepted")
-	}
-	stage = validExchangeStage()
-	stage.RegisterDevice = true
-	if _, _, err := EncodeExchangeStage(stage); err == nil {
-		t.Fatal("registration without continuity digest accepted")
-	}
-}
-
-func TestCredentialReferenceIdentifiersUseBoundedOpaqueGrammar(t *testing.T) {
-	accepted := []string{"A", "Vault.Ref_01-key", strings.Repeat("Z", 128)}
-	for _, value := range accepted {
-		t.Run("accept_"+value[:1], func(t *testing.T) {
-			stage := validExchangeStage()
-			purpose := appleCredentialPurpose
-			objectID := "11111111-2222-4333-8444-555555555555"
-			stage.AppleCredentialID = &value
-			stage.AppleCredentialKeyID = &value
-			stage.AppleCredentialPurpose = &purpose
-			stage.AppleCredentialObjectID = &objectID
-			if _, _, err := EncodeExchangeStage(stage); err != nil {
-				t.Fatalf("credential reference %q rejected: %v", value, err)
-			}
-		})
-	}
-
-	rejected := []string{"", strings.Repeat("a", 129), "slash/value", "colon:value", "white space", "unicode-é"}
-	for _, field := range []string{"id", "key_id"} {
-		for _, value := range rejected {
-			t.Run(field+"_reject", func(t *testing.T) {
-				stage := validExchangeStage()
-				validID, validKeyID := "credential.ref", "vault.Key_01"
-				purpose := appleCredentialPurpose
-				objectID := "11111111-2222-4333-8444-555555555555"
-				if field == "id" {
-					validID = value
-				} else {
-					validKeyID = value
-				}
-				stage.AppleCredentialID = &validID
-				stage.AppleCredentialKeyID = &validKeyID
-				stage.AppleCredentialPurpose = &purpose
-				stage.AppleCredentialObjectID = &objectID
-				if _, _, err := EncodeExchangeStage(stage); err == nil {
-					t.Fatalf("invalid %s %q accepted", field, value)
-				}
-			})
-		}
 	}
 }
 
@@ -320,34 +253,22 @@ func TestStageEncodingRejectsInvalidDeadlineOrdering(t *testing.T) {
 		"reauthentication after absolute":  func(stage *StageCommon) { stage.AbsoluteExpiresAt = "2026-10-20T11:59:59.999999999Z" },
 	}
 	for name, mutate := range tests {
-		for _, kind := range []string{"exchange", "refresh"} {
-			t.Run(kind+"_"+name, func(t *testing.T) {
-				common := validExchangeStage().StageCommon
-				mutate(&common)
-				if kind == "exchange" {
-					stage := validExchangeStage()
-					stage.StageCommon = common
-					if _, _, err := EncodeExchangeStage(stage); err == nil {
-						t.Fatal("invalid exchange deadlines accepted")
-					}
-					return
-				}
-				common.Kind = "refresh"
-				stage := RefreshStage{StageCommon: common, ParentSessionID: "11111111-2222-4333-8444-555555555555"}
-				if _, _, err := EncodeRefreshStage(stage); err == nil {
-					t.Fatal("invalid refresh deadlines accepted")
-				}
-			})
-		}
+		t.Run(name, func(t *testing.T) {
+			stage := validRefreshStage()
+			mutate(&stage.StageCommon)
+			if _, _, err := EncodeRefreshStage(stage); err == nil {
+				t.Fatal("invalid refresh deadlines accepted")
+			}
+		})
 	}
 }
 
 func TestStageOriginMustAlreadyBeCanonicalHTTPSDNSOrigin(t *testing.T) {
 	accepted := []string{"https://sync.example.test", "https://sync.example.test:8443", "https://xn--bcher-kva.example"}
 	for _, origin := range accepted {
-		stage := validExchangeStage()
+		stage := validRefreshStage()
 		stage.CanonicalOrigin = origin
-		if _, _, err := EncodeExchangeStage(stage); err != nil {
+		if _, _, err := EncodeRefreshStage(stage); err != nil {
 			t.Fatalf("canonical origin %q rejected: %v", origin, err)
 		}
 	}
@@ -361,27 +282,25 @@ func TestStageOriginMustAlreadyBeCanonicalHTTPSDNSOrigin(t *testing.T) {
 	}
 	for _, origin := range rejected {
 		t.Run(origin, func(t *testing.T) {
-			stage := validExchangeStage()
+			stage := validRefreshStage()
 			stage.CanonicalOrigin = origin
-			if _, _, err := EncodeExchangeStage(stage); err == nil {
+			if _, _, err := EncodeRefreshStage(stage); err == nil {
 				t.Fatalf("noncanonical origin %q accepted", origin)
 			}
 		})
 	}
 }
 
-func validExchangeStage() ExchangeStage {
-	return ExchangeStage{StageCommon: StageCommon{
-		Version: "v1", Kind: "exchange", AccountID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+func validRefreshStage() RefreshStage {
+	return RefreshStage{StageCommon: StageCommon{
+		Version: "v1", Kind: "refresh", AccountID: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
 		DeviceID: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", SessionID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
 		LineageRootSessionID: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee", ServerInstanceID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
 		CanonicalOrigin: "https://sync.example.test", TokenKeyID: "session.v1", AccessDigest: strings.Repeat("a", 64),
 		RefreshDigest: strings.Repeat("b", 64), RecoveryEpoch: 7, SecurityRevision: 42, Scope: "account",
 		AccessExpiresAt: "2026-09-20T12:10:00Z", RefreshExpiresAt: "2026-10-20T12:00:00Z",
 		ReauthenticateAt: "2026-10-20T12:00:00Z", AbsoluteExpiresAt: "2026-10-20T12:00:00Z",
-	}, IdentityProvider: "apple", IdentityKeyID: "identity.v1", IdentityDigest: strings.Repeat("c", 64),
-		IdentityAudience: "com.example", IdentitySubject: "000123", ProfileConfirmed: false,
-		RegisterAccount: true, RegisterDevice: false}
+	}, ParentSessionID: "11111111-2222-4333-8444-555555555555"}
 }
 
 func refreshKnownAnswerInput(t *testing.T) RefreshDerivationInput {
@@ -435,4 +354,81 @@ func mustHex(t *testing.T, value string) []byte {
 		t.Fatal(err)
 	}
 	return decoded
+}
+
+// The authority's derivation input maps onto the frozen v2 and v3 domains:
+// the ledger head fields are fed values fixed by the parent row
+// (generation 1, issued_seq, sha256(parent ID), issued_seq+1) and both
+// deadlines are the lineage's deadline_at. Derivation and material are
+// therefore functions of the rows a lost-acknowledgement retry rebuilds, and
+// material never needs the parent key secret.
+func TestAuthorityDerivationInputFeedsFrozenDomains(t *testing.T) {
+	want := refreshKnownAnswerInput(t)
+	service := &Service{instanceID: want.ServerInstanceID, origin: "https://sync.example.test"}
+	parent := authority.SessionRow{ID: want.ParentSessionID, AccountID: want.AccountID, DeviceID: want.DeviceID, LineageRootID: want.LineageRootSessionID,
+		Scope: "account", Status: "active", RecoveryEpoch: want.RecoveryEpoch, IssuedSeq: 41, TokenKeyID: want.ParentKey.ID, DeadlineAt: want.AbsoluteExpiresAt,
+		LineageStartedAt: want.AbsoluteExpiresAt.Add(-30 * 24 * time.Hour)}
+	in := authority.RefreshDerivationInput{Parent: parent, ParentKey: want.ParentKey, ParentDigest: want.ParentDigest, OutputKeyID: want.OutputKeyID,
+		Scope: "account", AccessExpiresAt: want.AccessExpiresAt, RefreshExpiresAt: want.RefreshExpiresAt}
+	want.HeadGeneration, want.HeadRevision, want.TargetRevision, want.HeadHash = 1, 41, 42, sha256.Sum256([]byte(parent.ID))
+	if got := service.derivationInput(in); !reflect.DeepEqual(got, want) {
+		t.Fatalf("v2 input=%+v want=%+v", got, want)
+	}
+	expected, err := DeriveRefreshRotation(want)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if derived, err := service.deriveRotation(in); err != nil || derived != authority.RefreshDerivation(expected) {
+		t.Fatalf("v2 derivation=%+v err=%v want=%+v", derived, err, expected)
+	}
+
+	in.AttemptID = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	in.Continuity = &authority.DeviceBinding{DeviceID: want.DeviceID, AccountID: want.AccountID, CanonicalOrigin: service.origin, CredentialKeyID: "device.v1"}
+	in.Continuity.CredentialDigest[0] = 0x5a
+	recovery := RecoveryDerivationInput{RefreshDerivationInput: want, AttemptID: in.AttemptID, CanonicalOrigin: service.origin,
+		ContinuityKeyID: "device.v1", ContinuityDigest: in.Continuity.CredentialDigest}
+	if got := service.recoveryDerivationInput(in); !reflect.DeepEqual(got, recovery) {
+		t.Fatalf("v3 input=%+v want=%+v", got, recovery)
+	}
+	expected, err = DeriveRecoverableRefreshRotation(recovery)
+	if err != nil {
+		t.Fatal(err)
+	}
+	derived, err := service.deriveRecoverableRotation(in)
+	if err != nil || derived != authority.RefreshDerivation(expected) {
+		t.Fatalf("v3 derivation=%+v err=%v want=%+v", derived, err, expected)
+	}
+
+	// Material sees the stage with the key secret zeroed and is stable.
+	stage := authority.RefreshStage{Input: in, EffectiveDeadline: want.AbsoluteExpiresAt, Child: authority.SessionRow{ID: derived.SessionID,
+		AccountID: want.AccountID, DeviceID: want.DeviceID, LineageRootID: want.LineageRootSessionID, ParentID: parent.ID, Scope: "account",
+		Status: "active", RecoveryEpoch: want.RecoveryEpoch, IssuedSeq: 57, TokenKeyID: want.OutputKeyID, AccessExpiresAt: want.AccessExpiresAt,
+		RefreshExpiresAt: want.RefreshExpiresAt, DeadlineAt: want.AbsoluteExpiresAt, CreatedAt: want.AccessExpiresAt.Add(-10 * time.Minute)}}
+	stage.Child.AccessDigest[0], stage.Child.RefreshDigest[0] = 1, 2
+	stage.Input.ParentKey.Secret = [32]byte{}
+	first, digest, err := service.recoverableRotationMaterial(stage)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, secondDigest, err := service.recoverableRotationMaterial(stage)
+	if err != nil || !bytes.Equal(first, second) || digest != secondDigest || digest != sha256.Sum256(first) {
+		t.Fatalf("unstable recovery material: %v", err)
+	}
+	var decoded RefreshStage
+	if err := json.Unmarshal(first, &decoded); err != nil || decoded.Recovery == nil {
+		t.Fatalf("material=%s err=%v", first, err)
+	}
+	frozen := decoded.Recovery.Input
+	if frozen.HeadRevision != 41 || frozen.TargetRevision != 42 || frozen.HeadHash != want.HeadHash || frozen.ParentKeyID != want.ParentKey.ID ||
+		frozen.AttemptID != in.AttemptID || decoded.SecurityRevision != 57 || !decoded.Recovery.CreatedAt.Equal(stage.Child.CreatedAt) {
+		t.Fatalf("frozen material=%+v stage=%+v", frozen, decoded.StageCommon)
+	}
+	restored, err := RestoreRecoveryInput(frozen, want.ParentKey)
+	if err != nil || !reflect.DeepEqual(restored, recovery) {
+		t.Fatalf("restored=%+v err=%v", restored, err)
+	}
+	legacy, legacyDigest, err := service.rotationMaterial(stage)
+	if err != nil || legacyDigest != sha256.Sum256(legacy) || bytes.Contains(legacy, []byte(`"recovery":`)) {
+		t.Fatalf("refresh material=%s err=%v", legacy, err)
+	}
 }

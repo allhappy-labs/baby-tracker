@@ -15,12 +15,10 @@ type Principal struct {
 }
 
 type Grant struct {
-	// MembershipRevision identifies the current membership lifetime in authority replay; zero is unavailable.
-	MembershipRevision uint64
-	AccountID          string
-	FamilyID           string
-	Role               string
-	Revision           uint64
+	AccountID string
+	FamilyID  string
+	Role      string
+	Revision  uint64
 }
 
 // RoleMayWrite is the single server-side answer to whether a membership role

@@ -3,9 +3,16 @@ import Observation
 import BabyCore
 import BabyStore
 
+/// The kind of part an editor shows, so the view picks its rows.
+public enum PartKind: Hashable, CaseIterable, Sendable {
+    case breast, bottle, sleep
+}
+
 /// One part of a session, as History edits it: a breast or bottle component
 /// of a feed entry, or a whole sleep (ruling H-R2).
-public enum PartEditTarget: Hashable, Sendable {
+public enum PartEditTarget: Hashable, Sendable, Identifiable {
+    public var id: Self { self }
+
     case breast(feedID: UUID, componentID: UUID)
     case bottle(feedID: UUID, componentID: UUID)
     case sleep(sleepID: UUID)
@@ -28,21 +35,16 @@ public enum PartEditTarget: Hashable, Sendable {
 
 /// Every string the part editors show.
 public enum PartEditCopy {
-    public static let cancel = LoggingL10n.text("Cancel")
     public static let breastTitle = LoggingL10n.text("Breast")
     public static let bottleTitle = LoggingL10n.text("Bottle")
+    /// New mode's title: keeps the More sheet's wording.
+    public static let newTitle = LoggingL10n.text("Past entry")
     public static let sideLabel = LoggingL10n.text("Side")
-    public static let startLabel = LoggingL10n.text("Start")
-    public static let endLabel = LoggingL10n.text("End")
-    public static let durationLabel = LoggingL10n.text("Duration")
     public static let kindLabel = LoggingL10n.text("Kind")
     public static let nap = LoggingL10n.text("Nap")
     public static let night = LoggingL10n.text("Night")
     /// The sleep kind left to the classifier, which goes by the start time.
     public static let auto = LoggingL10n.text("Auto")
-    public static let detailsLabel = LoggingL10n.text("Details")
-    public static let noteLabel = LoggingL10n.text("Note")
-    public static let notePrompt = LoggingL10n.text("Optional")
 
     /// Ruling H-R4's message, the same words Home's running-timer editor uses.
     public static func startBeforePreviousPart(at time: String) -> String {
@@ -63,8 +65,9 @@ public enum PartEditCopy {
 }
 
 /// The state and writes of one part's editor: a breast side's side, start and
-/// duration; a bottle's volume, contents and time; or a sleep's start, end
-/// and kind — each with the entry's note.
+/// end; a bottle's volume, contents, start and optional end; or a sleep's
+/// start, end and kind — each with the entry's note. Start and End are
+/// independent: moving one never moves the other.
 ///
 /// Holds ids, not models. The other phone may change or delete the part while
 /// the editor is open, so every write fetches it afresh, and `reload()`, which
@@ -77,18 +80,14 @@ public final class PartEditModel {
     public let unit: VolumeUnit
 
     public var start: Date
-    /// A breast part's length. Its end follows: moving the start keeps the
-    /// duration, as the Past entry layout reads.
-    public var durationSeconds: Int
+    /// Breast and sleep: always set. Bottle: nil for a bottle given at a moment.
+    public var end: Date?
     public var side: BreastSide
     public var volumeML: Double
     public var contents: BottleContents
     /// Nil is Auto: the classification derived from the start time.
     public var sleepKind: SleepKind?
     public var note: String
-    /// A sleep's own end. A breast part's end is `start + durationSeconds`,
-    /// and a bottle's moves with its time; see `end`.
-    private var sleepEnd: Date
     /// True once the part has vanished, for example after the other phone
     /// deleted it. The sheet closes on it.
     public private(set) var isGone: Bool
@@ -113,18 +112,17 @@ public final class PartEditModel {
 
     private struct Draft: Equatable {
         var start: Date
-        var durationSeconds: Int = 0
-        var sleepEnd: Date
+        var end: Date?
         /// False for a sleep stored with no end: saving leaves it open unless
         /// the end is edited.
         var hasEnd = true
-        /// A timed bottle's length, kept when its time moves.
-        var bottleLength: TimeInterval?
         var side: BreastSide = .left
         var volumeML: Double = 0
         var contents: BottleContents = .formula
         var sleepKind: SleepKind?
         var note: String = ""
+
+        var seconds: Int? { TimeSpan(start: start, end: end).seconds }
     }
 
     public init(store: BabyStore, babyID: UUID, target: PartEditTarget, unit: VolumeUnit = .millilitres) {
@@ -133,11 +131,10 @@ public final class PartEditModel {
         self.target = target
         self.unit = unit
         let read = Self.read(target, babyID: babyID, in: store)
-        let draft = read?.draft ?? Draft(start: store.now, sleepEnd: store.now)
+        let draft = read?.draft ?? Draft(start: store.now, end: store.now)
         loaded = draft
         start = draft.start
-        durationSeconds = draft.durationSeconds
-        sleepEnd = draft.sleepEnd
+        end = draft.end
         side = draft.side
         volumeML = draft.volumeML
         contents = draft.contents
@@ -148,37 +145,29 @@ public final class PartEditModel {
         isGone = read == nil
     }
 
-    /// Breast: `start + durationSeconds`, and setting it sets the duration.
-    /// Sleep: its own end. Bottle: its time, or a timed bottle's end.
-    public var end: Date {
-        get {
-            switch target {
-            case .breast: start.addingTimeInterval(TimeInterval(durationSeconds))
-            case .bottle: start.addingTimeInterval(loaded.bottleLength ?? 0)
-            case .sleep: sleepEnd
-            }
-        }
-        set {
-            switch target {
-            case .breast: durationSeconds = max(0, Int(newValue.timeIntervalSince(start).rounded()))
-            case .bottle: break
-            case .sleep: sleepEnd = newValue
-            }
+    /// The length the rows show, never edited directly.
+    public var durationSeconds: Int { TimeSpan(start: start, end: end).seconds ?? 0 }
+
+    public var kind: PartKind {
+        switch target {
+        case .breast: .breast
+        case .bottle: .bottle
+        case .sleep: .sleep
         }
     }
 
     /// Now, or the part's own end if it is somehow already ahead of the
     /// clock, so opening such a part to fix its note stays saveable.
     public var latestAllowedDate: Date {
-        max(store.now, loadedEnd)
+        max(store.now, loadedEnd ?? loaded.start)
     }
 
-    /// The part's end as it was read.
-    private var loadedEnd: Date {
+    /// The part's end as it was read; nil for a moment's bottle or an open
+    /// sleep.
+    private var loadedEnd: Date? {
         switch target {
-        case .breast: loaded.start.addingTimeInterval(TimeInterval(loaded.durationSeconds))
-        case .bottle: loaded.start.addingTimeInterval(loaded.bottleLength ?? 0)
-        case .sleep: loaded.hasEnd ? loaded.sleepEnd : loaded.start
+        case .breast, .bottle: loaded.end
+        case .sleep: loaded.hasEnd ? loaded.end : nil
         }
     }
 
@@ -191,17 +180,29 @@ public final class PartEditModel {
     public var validationMessage: String? {
         guard !isGone else { return nil }
         let latest = latestAllowedDate
+        let timesMoved = start != loaded.start || end != loaded.end
         switch target {
         case .breast:
-            if durationSeconds != loaded.durationSeconds, durationSeconds < 30 {
-                return PastEntrySheetCopy.breastTooShort
+            // The future and an end moved before its start are judged
+            // whenever a time moved; the 30-second floor only once the
+            // length itself changes, so an old short part keeps its side and
+            // note edits. Without the `endBeforeStart` case here, a legacy
+            // 0-second part could have its Start dragged past its End: the
+            // clamped length (`durationSeconds`, floored at 0) would still
+            // read 0, same as `loaded.seconds`, and the reversal would slip
+            // through unflagged.
+            if timesMoved, let problem = TimeSpan(start: start, end: end).problem(latest: latest, minimumSeconds: 30),
+               problem == .inTheFuture || problem == .endBeforeStart || durationSeconds != loaded.seconds {
+                return TimeSpanCopy.message(problem)
             }
-            if end > latest { return PastEntrySheetCopy.inTheFuture }
         case .bottle:
-            if start > latest { return PastEntrySheetCopy.inTheFuture }
+            if timesMoved, let problem = TimeSpan(start: start, end: end).problem(latest: latest) {
+                return TimeSpanCopy.message(problem)
+            }
         case .sleep:
-            if writesSleepEnd, end <= start { return PastEntrySheetCopy.endBeforeStart }
-            if start > latest || (writesSleepEnd && end > latest) { return PastEntrySheetCopy.inTheFuture }
+            if timesMoved, let problem = TimeSpan(start: start, end: writesSleepEnd ? end : nil).problem(latest: latest) {
+                return TimeSpanCopy.message(problem)
+            }
         }
         if start != loaded.start {
             if let previousPartEnd = bounds.previousPartEnd, start < previousPartEnd {
@@ -211,7 +212,7 @@ public final class PartEditModel {
                 return PartEditCopy.startAfterNextPart(at: JoinRowModel.clockTime(nextPartStart, zone: zoneID))
             }
         }
-        if end != loadedEnd, let nextPartStart = bounds.nextPartStart, end > nextPartStart {
+        if end != loadedEnd, let end, let nextPartStart = bounds.nextPartStart, end > nextPartStart {
             return PartEditCopy.endAfterNextPart(at: JoinRowModel.clockTime(nextPartStart, zone: zoneID))
         }
         return nil
@@ -308,8 +309,7 @@ public final class PartEditModel {
         }
         let fresh = read.draft
         EditModel.merge(&start, loaded: loaded.start, fresh: fresh.start)
-        EditModel.merge(&durationSeconds, loaded: loaded.durationSeconds, fresh: fresh.durationSeconds)
-        EditModel.merge(&sleepEnd, loaded: loaded.sleepEnd, fresh: fresh.sleepEnd)
+        EditModel.merge(&end, loaded: loaded.end, fresh: fresh.end)
         EditModel.merge(&side, loaded: loaded.side, fresh: fresh.side)
         EditModel.merge(&volumeML, loaded: loaded.volumeML, fresh: fresh.volumeML)
         EditModel.merge(&contents, loaded: loaded.contents, fresh: fresh.contents)
@@ -331,39 +331,47 @@ public final class PartEditModel {
     // MARK: - Private
 
     /// A sleep stored with no end stays open unless its end is edited.
-    private var writesSleepEnd: Bool { loaded.hasEnd || sleepEnd != loaded.sleepEnd }
+    private var writesSleepEnd: Bool { loaded.hasEnd || end != loaded.end }
 
     private func write(_ feed: FeedEntry, index: Int) throws {
         let before = (feed.components, feed.startedAt, feed.endedAt, feed.note, feed.lastModifiedAt)
         // The stored times change only as far as the user moved them: a side,
         // volume or note edit leaves an old part's times exactly as stored,
-        // and a new duration alone never invents a start the part did not
+        // and an End edit alone never invents a start the part did not
         // record — except a lone part's, whose time is its feed's time. The
         // entry's span follows only a part whose times moved.
         let startMoved = start != loaded.start
-        let durationChanged = durationSeconds != loaded.durationSeconds
+        let timesChanged = startMoved || end != loaded.end
         let refit: Bool
         switch feed.components[index] {
         case let .breast(id, _, seconds, startedAt, endedAt):
+            // An old part with no recorded start keeps it unknown unless the start
+            // itself moved; an End edit changes only its length.
             let knownStart = startedAt ?? (feed.components.count == 1 ? feed.startedAt : nil)
             let newStart = startMoved ? start : knownStart
-            let timesChanged = startMoved || durationChanged
+            let length = durationSeconds
             feed.components[index] = .breast(
-                id: id, side: side, seconds: durationChanged ? durationSeconds : seconds,
+                id: id, side: side, seconds: timesChanged ? length : seconds,
                 startedAt: timesChanged ? newStart : startedAt,
-                endedAt: timesChanged ? newStart.map { $0.addingTimeInterval(TimeInterval(durationSeconds)) } : endedAt)
+                endedAt: timesChanged ? newStart.map { $0.addingTimeInterval(TimeInterval(length)) } : endedAt)
             refit = timesChanged && newStart != nil
         case let .bottle(id, _, _, seconds, startedAt, endedAt):
-            let shift = start.timeIntervalSince(startedAt ?? loaded.start)
+            // As for a breast part: an old bottle with no recorded time keeps
+            // it unknown unless its start itself moved.
+            let knownStart = startedAt ?? (feed.components.count == 1 ? feed.startedAt : nil)
+            let newStart = startMoved ? start : knownStart
+            let length = TimeSpan(start: start, end: end).seconds
             feed.components[index] = .bottle(
-                id: id, volumeML: volumeML, contents: contents, seconds: seconds,
-                startedAt: startMoved ? start : startedAt,
-                endedAt: startMoved ? endedAt.map { $0.addingTimeInterval(shift) } : endedAt)
-            refit = startMoved
+                id: id, volumeML: volumeML, contents: contents,
+                seconds: timesChanged ? length : seconds,
+                startedAt: timesChanged ? newStart : startedAt,
+                endedAt: timesChanged ? newStart.flatMap { start in length.map { start.addingTimeInterval(TimeInterval($0)) } }
+                                      : endedAt)
+            refit = timesChanged && newStart != nil
         case .solids:
             return
         }
-        if refit { Self.fitSpan(of: feed, edited: index, previousStart: before.1) }
+        if refit { Self.fitSpan(of: feed, edited: index) }
         feed.note = EditModel.trimmedToNil(note)
         do {
             try store.update(feed)
@@ -376,7 +384,7 @@ public final class PartEditModel {
     private func write(_ sleep: SleepEntry) throws {
         let before = (sleep.startedAt, sleep.endedAt, sleep.kindOverrideRaw, sleep.note, sleep.lastModifiedAt)
         sleep.startedAt = start
-        if writesSleepEnd { sleep.endedAt = sleepEnd }
+        if writesSleepEnd { sleep.endedAt = end }
         sleep.kindOverride = sleepKind
         sleep.note = EditModel.trimmedToNil(note)
         do {
@@ -391,12 +399,12 @@ public final class PartEditModel {
     /// part's time. Several parts all knowing their starts set the span
     /// exactly; an old part with no start leaves it to widen only, since that
     /// part's place is unknown.
-    private static func fitSpan(of feed: FeedEntry, edited index: Int, previousStart: Date) {
+    private static func fitSpan(of feed: FeedEntry, edited index: Int) {
         let timed = feed.components.filter { $0.breastSide != nil || $0.bottleContents != nil }
         if feed.components.count == 1, let start = feed.components[0].startedAt {
-            let shift = start.timeIntervalSince(previousStart)
+            // A moment's entry ends where it starts.
             feed.startedAt = start
-            feed.endedAt = feed.components[0].endedAt ?? feed.endedAt.map { $0.addingTimeInterval(shift) }
+            feed.endedAt = feed.components[0].endedAt ?? start
         } else if !timed.isEmpty, timed.allSatisfy({ $0.startedAt != nil }),
                   let start = timed.compactMap(\.startedAt).min(),
                   let end = timed.compactMap({ $0.endedAt ?? $0.startedAt }).max() {
@@ -435,15 +443,20 @@ public final class PartEditModel {
         let component = feed.components[index]
         // A single-part feed's time is the feed's time.
         let start = feed.components.count == 1 ? feed.startedAt : component.startedAt ?? feed.startedAt
-        var draft = Draft(start: start, sleepEnd: start, note: feed.note ?? "")
+        var draft = Draft(start: start, end: nil, note: feed.note ?? "")
         switch component {
         case let .breast(_, side, seconds, _, _):
             draft.side = side
-            draft.durationSeconds = seconds
-        case let .bottle(_, volumeML, contents, _, startedAt, endedAt):
+            draft.end = start.addingTimeInterval(TimeInterval(seconds))
+        case let .bottle(_, volumeML, contents, seconds, startedAt, endedAt):
             draft.volumeML = volumeML
             draft.contents = contents
-            if let startedAt, let endedAt { draft.bottleLength = endedAt.timeIntervalSince(startedAt) }
+            if let startedAt, let endedAt, endedAt > startedAt {
+                draft.end = start.addingTimeInterval(endedAt.timeIntervalSince(startedAt))
+            } else if let seconds, seconds > 0 {
+                // A length recorded without its times still opens as an end.
+                draft.end = start.addingTimeInterval(TimeInterval(seconds))
+            }
         case .solids:
             break
         }
@@ -451,7 +464,7 @@ public final class PartEditModel {
     }
 
     private static func draft(_ sleep: SleepEntry) -> Draft {
-        Draft(start: sleep.startedAt, sleepEnd: sleep.endedAt ?? sleep.startedAt, hasEnd: sleep.endedAt != nil,
+        Draft(start: sleep.startedAt, end: sleep.endedAt ?? sleep.startedAt, hasEnd: sleep.endedAt != nil,
               sleepKind: sleep.kindOverride, note: sleep.note ?? "")
     }
 

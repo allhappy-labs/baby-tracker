@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -17,10 +18,9 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/limits"
-	"babytracker/server/internal/recovery"
-	"babytracker/server/internal/security"
 )
 
 type accountGateFunc func(context.Context) error
@@ -42,6 +42,8 @@ func (function limiterFunc) Take(ctx context.Context, scope, key string, policy 
 type limiterStub struct {
 	take     func(context.Context, string, string, limits.Policy) (limits.Decision, error)
 	takeMany func(context.Context, []limits.Charge) (limits.Decision, error)
+	// peek, when set, answers Peek; unset, Peek admits.
+	peek func(context.Context, []limits.Charge) (limits.Decision, error)
 }
 
 func (stub limiterStub) Take(ctx context.Context, scope, key string, policy limits.Policy) (limits.Decision, error) {
@@ -52,12 +54,20 @@ func (stub limiterStub) TakeMany(ctx context.Context, charges []limits.Charge) (
 	return stub.takeMany(ctx, charges)
 }
 
+func (stub limiterStub) Peek(ctx context.Context, charges []limits.Charge) (limits.Decision, error) {
+	if stub.peek == nil {
+		return limits.Decision{Allowed: true}, nil
+	}
+	return stub.peek(ctx, charges)
+}
+
 type sessionServiceStub struct {
 	exchange       func(context.Context, identity.ExchangeRequest) (auth.SessionBundle, error)
 	refresh        func(context.Context, string) (auth.SessionBundle, error)
 	refreshSubject func(context.Context, string) (auth.RefreshSubject, error)
 	authenticate   func(context.Context, string) (access.Principal, error)
-	logout         func(context.Context, access.Principal, string) (security.CommandResult, error)
+	logout         func(context.Context, access.Principal, string) (authority.Result, error)
+	accessDigests  func(string) ([]authority.KeyedDigest, error)
 }
 
 func (stub sessionServiceStub) Exchange(ctx context.Context, input identity.ExchangeRequest) (auth.SessionBundle, error) {
@@ -72,8 +82,18 @@ func (stub sessionServiceStub) ResolveRefreshSubject(ctx context.Context, token 
 func (stub sessionServiceStub) Authenticate(ctx context.Context, token string) (access.Principal, error) {
 	return stub.authenticate(ctx, token)
 }
-func (stub sessionServiceStub) Logout(ctx context.Context, principal access.Principal, commandID string) (security.CommandResult, error) {
+func (stub sessionServiceStub) Logout(ctx context.Context, principal access.Principal, commandID string) (authority.Result, error) {
 	return stub.logout(ctx, principal, commandID)
+}
+
+// AccessDigests is a stand-in digest unless the stub sets its own: the
+// sync stubs authorize with a fixed principal (stubAuthorize), not by the
+// digest.
+func (stub sessionServiceStub) AccessDigests(token string) ([]authority.KeyedDigest, error) {
+	if stub.accessDigests != nil {
+		return stub.accessDigests(token)
+	}
+	return []authority.KeyedDigest{{KeyID: "stub"}}, nil
 }
 
 type notificationServiceFunc func(context.Context, string) error
@@ -83,6 +103,10 @@ func (function notificationServiceFunc) Handle(ctx context.Context, body string)
 }
 
 func (function limiterFunc) TakeMany(context.Context, []limits.Charge) (limits.Decision, error) {
+	return limits.Decision{Allowed: true}, nil
+}
+
+func (function limiterFunc) Peek(context.Context, []limits.Charge) (limits.Decision, error) {
 	return limits.Decision{Allowed: true}, nil
 }
 
@@ -269,12 +293,12 @@ func TestSessionHTTPRoutesEncodeBundleAndLogoutAuthenticatedDevice(t *testing.T)
 			gotBearer = token
 			return principal, nil
 		},
-		logout: func(_ context.Context, got access.Principal, commandID string) (security.CommandResult, error) {
+		logout: func(_ context.Context, got access.Principal, commandID string) (authority.Result, error) {
 			if got != principal {
 				t.Fatalf("principal=%+v", got)
 			}
 			gotLogout = commandID
-			return security.CommandResult{CommandID: commandID, Revision: 4}, nil
+			return authority.Result{CommandID: commandID, Revision: 4}, nil
 		},
 	}
 	options := sessionHandlerOptions(t, service, "identity_token_only")
@@ -358,7 +382,7 @@ func TestAuthQuarantineReturnsStableCodeWithoutCallingService(t *testing.T) {
 	}}
 	options := sessionHandlerOptions(t, service, "identity_token_only")
 	options.Gate = accountGateFunc(func(context.Context) error {
-		return errors.Join(recovery.ErrQuarantine, errors.New("private recovery detail"))
+		return fmt.Errorf("private recovery detail: %w", authority.ErrAuthorizationQuarantine)
 	})
 
 	recorder := httptest.NewRecorder()

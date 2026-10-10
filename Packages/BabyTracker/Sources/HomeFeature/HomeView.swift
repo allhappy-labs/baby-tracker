@@ -146,8 +146,10 @@ public struct HomeView: View {
             .toolbar(.hidden, for: .navigationBar)
             #endif
         }
-        .sheet(item: $timerEditor) { editor in
+        .fittedSheet(item: $timerEditor) { editor in
             RunningTimerEditSheet(model: editor) { timerEditor = nil }
+                // A fitted sheet does not inherit custom environment values.
+                .environment(\.errorReporter, errorReporter)
         }
         .onAppear {
             isVisible = true

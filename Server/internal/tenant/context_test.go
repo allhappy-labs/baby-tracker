@@ -18,22 +18,29 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-func TestRuntimeAndProjectorRolesStaySeparated(t *testing.T) {
+// Schema 29 removes the projector's mirror function: no worker role can
+// write server_state (`baby-tracker-admin authority init` writes it as the
+// migrator) or change the schema. The projector group itself is gone from
+// the baseline (Phase 4 Task 27).
+func TestRuntimeAndMaintenanceRolesCannotWriteServerState(t *testing.T) {
 	fixture := testpg.New(t)
 	ctx := t.Context()
-	arguments := []any{"123e4567-e89b-42d3-a456-426614174000", int64(1), int64(1), int64(0), make([]byte, 32)}
-	if _, err := fixture.Runtime.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)", arguments...); err == nil {
-		t.Fatal("pure runtime role could update the recovery mirror")
+	var mirror bool
+	if err := fixture.Owner.QueryRow(ctx, "SELECT to_regprocedure('app.update_server_state(uuid,bigint,bigint,bigint,bytea)') IS NOT NULL").Scan(&mirror); err != nil {
+		t.Fatal(err)
 	}
-	if _, err := fixture.Projector.Exec(ctx, "SELECT app.update_server_state($1,$2,$3,$4,$5)", arguments...); err != nil {
-		t.Fatalf("projector could not update recovery mirror: %v", err)
+	if mirror {
+		t.Fatal("projector recovery mirror function survived")
 	}
-	for _, query := range []string{
-		"INSERT INTO accounts (id, display_name) VALUES ('10000000-0000-4000-8000-000000000099', 'forbidden')",
-		"CREATE TABLE projector_escape (id bigint)",
-	} {
-		if _, err := fixture.Projector.Exec(ctx, query); err == nil {
-			t.Fatalf("projector crossed tenant/DDL boundary: %s", query)
+	for name, pool := range map[string]*pgxpool.Pool{"runtime": fixture.Runtime, "maintenance": fixture.Maintenance} {
+		for _, query := range []string{
+			"INSERT INTO server_state (instance_id, recovery_epoch) VALUES ('123e4567-e89b-42d3-a456-426614174000', 1)",
+			"UPDATE server_state SET recovery_epoch = recovery_epoch + 1",
+			"CREATE TABLE worker_escape (id bigint)",
+		} {
+			if _, err := pool.Exec(ctx, query); err == nil {
+				t.Fatalf("%s crossed the server_state/DDL boundary: %s", name, query)
+			}
 		}
 	}
 }
@@ -84,8 +91,9 @@ func TestTenantFoundation(t *testing.T) {
 	seed := func(account, family string) {
 		tx := begin(t, owner)
 		setLocal(t, tx, account, family)
+		exec(t, tx, "SELECT set_config('app.authority', '1', true)")
 		exec(t, tx, "INSERT INTO accounts (id, display_name) VALUES ($1, 'Parent')", account)
-		exec(t, tx, "INSERT INTO families (id, display_name) VALUES ($1, 'Family')", family)
+		exec(t, tx, "INSERT INTO families (id, display_name, owner_account_id) VALUES ($1, 'Family', $2)", family, account)
 		exec(t, tx, "INSERT INTO memberships (family_id, account_id, role) VALUES ($1, $2, 'owner')", family, account)
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
@@ -95,6 +103,7 @@ func TestTenantFoundation(t *testing.T) {
 	seed(accountB, familyB)
 	tx := begin(t, owner)
 	setLocal(t, tx, accountC, familyA)
+	exec(t, tx, "SELECT set_config('app.authority', '1', true)")
 	exec(t, tx, "INSERT INTO accounts (id, display_name) VALUES ($1, 'Caregiver')", accountC)
 	exec(t, tx, "INSERT INTO memberships (family_id, account_id, role) VALUES ($1, $2, 'caregiver')", familyA, accountC)
 	if err := tx.Commit(ctx); err != nil {
@@ -182,76 +191,91 @@ func TestTenantFoundation(t *testing.T) {
 		}
 	})
 
-	t.Run("active family creation without owner fails at commit", func(t *testing.T) {
+	// Schema 29 replaces the deferred check_family_owner trigger: an active
+	// family names its owner on the row (families_active_has_owner) and a
+	// family has at most one active owner membership at every statement
+	// (memberships_one_active_owner, not deferrable). Zero owner memberships
+	// are refused by the authority commands, not by the schema.
+	authority := func(t *testing.T, tx pgx.Tx) {
+		t.Helper()
+		exec(t, tx, "SELECT set_config('app.authority', '1', true)")
+	}
+
+	t.Run("active family creation without owner fails", func(t *testing.T) {
 		tx := begin(t, owner)
 		setLocal(t, tx, accountA, familyC)
-		exec(t, tx, "INSERT INTO families (id, display_name) VALUES ($1, 'No owner')", familyC)
-		assertSQLState(t, tx.Commit(ctx), "23514")
+		authority(t, tx)
+		_, err := tx.Exec(ctx, "INSERT INTO families (id, display_name) VALUES ($1, 'No owner')", familyC)
+		assertSQLState(t, err, "23514")
 	})
 
-	t.Run("removing demoting or duplicating owner fails at commit", func(t *testing.T) {
+	t.Run("tenant context cannot remove demote or duplicate the owner; authority cannot duplicate it", func(t *testing.T) {
 		for _, query := range []string{
 			"DELETE FROM memberships WHERE role = 'owner'",
 			"UPDATE memberships SET role = 'caregiver' WHERE role = 'owner'",
 			"UPDATE memberships SET status = 'removed' WHERE role = 'owner'",
 			"UPDATE memberships SET role = 'owner' WHERE role = 'caregiver'",
 		} {
-			tx := begin(t, owner)
+			tx := begin(t, runtime)
 			setLocal(t, tx, accountA, familyA)
-			exec(t, tx, query)
-			assertSQLState(t, tx.Commit(ctx), "23514")
+			_, err := tx.Exec(ctx, query)
+			assertSQLState(t, err, "42501")
+			_ = tx.Rollback(ctx)
 		}
-	})
-
-	t.Run("deferred validation survives a caller context change", func(t *testing.T) {
 		tx := begin(t, owner)
 		setLocal(t, tx, accountA, familyA)
-		exec(t, tx, "DELETE FROM memberships WHERE role = 'owner'")
-		setLocal(t, tx, accountB, familyB)
-		assertSQLState(t, tx.Commit(ctx), "23514")
+		authority(t, tx)
+		_, err := tx.Exec(ctx, "UPDATE memberships SET role = 'owner' WHERE role = 'caregiver'")
+		assertSQLState(t, err, "23505")
 	})
 
-	t.Run("concurrent reactivation cannot admit a second owner from a stale snapshot", func(t *testing.T) {
+	t.Run("concurrent promotion cannot admit a second owner", func(t *testing.T) {
 		const family = "20000000-0000-4000-8000-000000000004"
 		tx := begin(t, owner)
 		setLocal(t, tx, accountA, family)
+		authority(t, tx)
 		exec(t, tx, "INSERT INTO families (id, display_name, status) VALUES ($1, 'Recovering', 'deletion_pending')", family)
 		exec(t, tx, "INSERT INTO memberships (family_id, account_id, role) VALUES ($1, $2, 'caregiver'), ($1, $3, 'caregiver')", family, accountA, accountC)
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
 
-		stale, err := owner.BeginTx(ctx, pgx.TxOptions{IsoLevel: pgx.RepeatableRead})
-		if err != nil {
+		first := begin(t, owner)
+		setLocal(t, first, accountA, family)
+		authority(t, first)
+		exec(t, first, "UPDATE families SET status = 'active', owner_account_id = $2 WHERE id = $1", family, accountA)
+		exec(t, first, "UPDATE memberships SET role = 'owner' WHERE family_id = $1 AND account_id = $2", family, accountA)
+
+		second := begin(t, owner)
+		setLocal(t, second, accountC, family)
+		authority(t, second)
+		// The second promotion blocks on the first's uncommitted index entry
+		// and fails once the first commits.
+		done := make(chan error, 1)
+		go func() {
+			_, err := second.Exec(context.Background(), "UPDATE memberships SET role = 'owner' WHERE family_id = $1 AND account_id = $2", family, accountC)
+			done <- err
+		}()
+		if err := first.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
-		defer stale.Rollback(ctx)
-		setLocal(t, stale, accountC, family)
-		assertIDs(t, stale, "SELECT status FROM families", []string{"deletion_pending"})
-
-		tx = begin(t, owner)
-		setLocal(t, tx, accountA, family)
-		exec(t, tx, "UPDATE families SET status = 'active'")
-		exec(t, tx, "UPDATE memberships SET role = 'owner' WHERE account_id = $1", accountA)
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
-
-		_, err = stale.Exec(ctx, "UPDATE memberships SET role = 'owner' WHERE account_id = $1", accountC)
-		assertSQLState(t, err, "40001")
+		assertSQLState(t, <-done, "23505")
 	})
 
-	t.Run("atomic ownership transfer permits temporary zero or two owners", func(t *testing.T) {
-		for _, twoFirst := range []bool{false, true} {
+	t.Run("ownership transfer demotes before it promotes", func(t *testing.T) {
+		tx := begin(t, owner)
+		setLocal(t, tx, accountA, familyA)
+		authority(t, tx)
+		_, err := tx.Exec(ctx, "UPDATE memberships SET role = 'owner' WHERE family_id = $1 AND account_id = $2", familyA, accountC)
+		assertSQLState(t, err, "23505")
+		_ = tx.Rollback(ctx)
+		for _, step := range [][2]string{{accountA, accountC}, {accountC, accountA}} {
 			tx := begin(t, owner)
 			setLocal(t, tx, accountA, familyA)
-			if twoFirst {
-				exec(t, tx, "UPDATE memberships SET role = 'owner' WHERE account_id = $1", accountA)
-				exec(t, tx, "UPDATE memberships SET role = 'caregiver' WHERE account_id = $1", accountC)
-			} else {
-				exec(t, tx, "UPDATE memberships SET role = 'caregiver' WHERE account_id = $1", accountA)
-				exec(t, tx, "UPDATE memberships SET role = 'owner' WHERE account_id = $1", accountC)
-			}
+			authority(t, tx)
+			exec(t, tx, "UPDATE memberships SET role = 'caregiver' WHERE family_id = $1 AND account_id = $2", familyA, step[0])
+			exec(t, tx, "UPDATE memberships SET role = 'owner' WHERE family_id = $1 AND account_id = $2", familyA, step[1])
+			exec(t, tx, "UPDATE families SET owner_account_id = $2 WHERE id = $1", familyA, step[1])
 			if err := tx.Commit(ctx); err != nil {
 				t.Fatal(err)
 			}
@@ -261,40 +285,42 @@ func TestTenantFoundation(t *testing.T) {
 	t.Run("inactive families may lack owner but reactivation requires one", func(t *testing.T) {
 		tx := begin(t, owner)
 		setLocal(t, tx, accountA, familyC)
+		authority(t, tx)
 		exec(t, tx, "INSERT INTO families (id, display_name, status) VALUES ($1, 'Deleted', 'deletion_pending')", familyC)
 		if err := tx.Commit(ctx); err != nil {
 			t.Fatal(err)
 		}
 		tx = begin(t, owner)
 		setLocal(t, tx, accountA, familyC)
-		exec(t, tx, "UPDATE families SET status = 'active' WHERE id = $1", familyC)
-		assertSQLState(t, tx.Commit(ctx), "23514")
+		authority(t, tx)
+		_, err := tx.Exec(ctx, "UPDATE families SET status = 'active' WHERE id = $1", familyC)
+		assertSQLState(t, err, "23514")
 	})
 
-	t.Run("family deletion and insert then delete need no owner", func(t *testing.T) {
+	t.Run("tenant context cannot insert or delete families", func(t *testing.T) {
+		// Schema 29: family rows are created and deleted only by authority
+		// transactions, even by the table owner (FORCE RLS).
 		tx := begin(t, owner)
 		setLocal(t, tx, accountB, familyB)
-		exec(t, tx, "DELETE FROM families WHERE id = $1", familyB)
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
+		result, err := tx.Exec(ctx, "DELETE FROM families WHERE id = $1", familyB)
+		if err != nil || result.RowsAffected() != 0 {
+			t.Fatalf("tenant family delete rows=%d err=%v", result.RowsAffected(), err)
 		}
+		_ = tx.Rollback(ctx)
 		tx = begin(t, owner)
-		setLocal(t, tx, accountB, familyB)
-		exec(t, tx, "INSERT INTO families (id, display_name) VALUES ($1, 'Ephemeral')", familyB)
-		exec(t, tx, "DELETE FROM families WHERE id = $1", familyB)
-		if err := tx.Commit(ctx); err != nil {
-			t.Fatal(err)
-		}
+		setLocal(t, tx, accountB, familyC)
+		_, err = tx.Exec(ctx, "INSERT INTO families (id, display_name, owner_account_id) VALUES ($1, 'Ephemeral', $2)", familyC, accountB)
+		assertSQLState(t, err, "42501")
 	})
 
 	t.Run("runtime cannot create truncate bypass RLS or assume privileged roles", func(t *testing.T) {
-		for _, query := range []string{"CREATE TABLE public.forbidden (id integer)", "CREATE TABLE app.forbidden (id integer)", "CREATE TEMP TABLE forbidden (id integer)", "TRUNCATE accounts", "ALTER TABLE families DISABLE ROW LEVEL SECURITY", "SET ROLE baby_tracker_maintenance", "SET ROLE baby_tracker_projector", "CREATE ROLE forbidden"} {
+		for _, query := range []string{"CREATE TABLE public.forbidden (id integer)", "CREATE TABLE app.forbidden (id integer)", "CREATE TEMP TABLE forbidden (id integer)", "TRUNCATE accounts", "ALTER TABLE families DISABLE ROW LEVEL SECURITY", "SET ROLE baby_tracker_maintenance", "CREATE ROLE forbidden"} {
 			tx := begin(t, runtime)
 			_, err := tx.Exec(ctx, query)
 			assertSQLState(t, err, "42501")
 			_ = tx.Rollback(ctx)
 		}
-		rows, err := owner.Query(ctx, "SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname IN ('baby_tracker_runtime', 'baby_tracker_maintenance', 'baby_tracker_projector') ORDER BY rolname")
+		rows, err := owner.Query(ctx, "SELECT rolname, rolcanlogin, rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname IN ('baby_tracker_runtime', 'baby_tracker_maintenance') ORDER BY rolname")
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -312,23 +338,22 @@ func TestTenantFoundation(t *testing.T) {
 			t.Logf("%s: NOLOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS", name)
 			count++
 		}
-		if rows.Err() != nil || count != 3 {
+		if rows.Err() != nil || count != 2 {
 			t.Fatalf("role count %d: %v", count, rows.Err())
 		}
 		rows.Close()
-		var runtimeSuper, runtimeBypass, runtimeOwner, ownerMembership, triggerExecute bool
+		var runtimeSuper, runtimeBypass, runtimeOwner, ownerMembership bool
 		if err := runtime.QueryRow(ctx, `SELECT r.rolsuper, r.rolbypassrls,
-		    c.relowner = r.oid, pg_has_role(current_user, c.relowner, 'MEMBER'),
-		    has_function_privilege(current_user, 'app.check_family_owner()', 'EXECUTE')
+		    c.relowner = r.oid, pg_has_role(current_user, c.relowner, 'MEMBER')
 		    FROM pg_roles r CROSS JOIN pg_class c
 		    WHERE r.rolname = current_user AND c.oid = 'public.families'::regclass`).Scan(
-			&runtimeSuper, &runtimeBypass, &runtimeOwner, &ownerMembership, &triggerExecute); err != nil {
+			&runtimeSuper, &runtimeBypass, &runtimeOwner, &ownerMembership); err != nil {
 			t.Fatal(err)
 		}
-		if runtimeSuper || runtimeBypass || runtimeOwner || ownerMembership || triggerExecute {
-			t.Fatal("runtime principal has privileged ownership, membership, or trigger execution")
+		if runtimeSuper || runtimeBypass || runtimeOwner || ownerMembership {
+			t.Fatal("runtime principal has privileged ownership or membership")
 		}
-		t.Log("runtime LOGIN: not superuser, not BYPASSRLS, not table owner, not member of owner; cannot execute trigger-only definers")
+		t.Log("runtime LOGIN: not superuser, not BYPASSRLS, not table owner, not member of owner")
 		for _, table := range []string{"accounts", "families", "memberships"} {
 			var selectOnly, insert, update, deletePrivilege, truncate, references, trigger bool
 			if err := runtime.QueryRow(ctx, `SELECT has_table_privilege(current_user, $1, 'SELECT'),
@@ -340,10 +365,12 @@ func TestTenantFoundation(t *testing.T) {
 			    has_table_privilege(current_user, $1, 'TRIGGER')`, table).Scan(&selectOnly, &insert, &update, &deletePrivilege, &truncate, &references, &trigger); err != nil {
 				t.Fatal(err)
 			}
-			if !selectOnly || insert || update || deletePrivilege || truncate || references || trigger {
+			// Schema 29: authority transactions insert rows and update only
+			// column-scoped fields; no table-wide UPDATE, DELETE or DDL-like grants.
+			if !selectOnly || !insert || update || deletePrivilege || truncate || references || trigger {
 				t.Fatalf("unexpected runtime grants on %s", table)
 			}
-			t.Logf("runtime %s grants: SELECT only; structural writes use typed authority functions", table)
+			t.Logf("runtime %s grants: SELECT, INSERT and column-scoped UPDATE only", table)
 		}
 	})
 
@@ -352,7 +379,7 @@ func TestTenantFoundation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runtime migration readiness: %v", err)
 		}
-		if status.Current != 29 || status.Required != 29 {
+		if status.Current != 32 || status.Required != 32 {
 			t.Fatalf("runtime schema status = %+v", status)
 		}
 		var count int

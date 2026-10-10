@@ -3,14 +3,14 @@ package realtime
 import (
 	"context"
 	"errors"
-	"sort"
+	"fmt"
 	"sync"
 	"sync/atomic"
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 )
 
 const (
@@ -24,6 +24,20 @@ var (
 	ErrCapacity            = errors.New("live socket capacity exceeded")
 	ErrReservationReleased = errors.New("live socket reservation released")
 	ErrHubClosed           = errors.New("live hub closed")
+	// ErrAuthorizationChanged refuses a reservation, or its Bind, because an
+	// invalidation the hub processed after the handshake's authorization
+	// read names its grant. It is an ErrReservationReleased.
+	ErrAuthorizationChanged = fmt.Errorf("%w: authorization changed", ErrReservationReleased)
+)
+
+const (
+	defaultCoalesceWindow = 50 * time.Millisecond
+	defaultSweepTimeout   = 5 * time.Second
+	// invalidationLogSize bounds the invalidations a reservation is checked
+	// against (ReserveAfter). A handshake's authorization read and its
+	// reservation are microseconds to milliseconds apart; a mark older than
+	// this many invalidations is refused rather than checked.
+	invalidationLogSize = 256
 )
 
 type Hint struct {
@@ -39,17 +53,19 @@ type Connection interface {
 
 type aborter interface{ Abort() error }
 
-type AuthorizationLease struct {
-	Principal access.Principal
-	Grant     access.Grant
-}
+// AuthorizationLease is a live connection's authorization: the principal it
+// authenticated as and the grant it was admitted with.
+type AuthorizationLease = authority.LiveLease
 
 type LiveAuthorizer interface {
 	CheckMany(context.Context, []AuthorizationLease) ([]bool, error)
 }
 
+// invalidationSource is authority.Service.Subscribe. The hub implements
+// authority.InvalidationOverflowSink, so a revocation that does not fit its
+// queue triggers a full re-check instead of being lost.
 type invalidationSource interface {
-	Subscribe(security.InvalidationSink) func()
+	Subscribe(authority.InvalidationSink) func()
 }
 
 type HubOptions struct {
@@ -57,6 +73,26 @@ type HubOptions struct {
 	Authorizer    LiveAuthorizer
 	Invalidations invalidationSource
 	Now           func() time.Time
+	// CoalesceWindow: 0 means 50ms. Each family gets at most one delivery
+	// per window, carrying the newest cursor published to it in the window.
+	CoalesceWindow time.Duration
+	// SweepTimeout: 0 means 5s. A re-check of the leases (periodic, or after
+	// dropped invalidations) that has not answered by then closes every
+	// lease it covers.
+	SweepTimeout time.Duration
+}
+
+// InvalidationMark is a position in the invalidations a hub has processed.
+// The live handshake takes one before its authorization read and reserves
+// with ReserveAfter, so a revocation that commits after the read and reaches
+// the hub before the reservation is not missed.
+type InvalidationMark uint64
+
+// loggedInvalidation is one processed invalidation; all marks dropped
+// invalidations, which may have named anyone.
+type loggedInvalidation struct {
+	item authority.SecurityInvalidation
+	all  bool
 }
 
 type Hub struct {
@@ -76,9 +112,26 @@ type Hub struct {
 	writeTimeout  time.Duration
 	pingInterval  time.Duration
 	sweepInterval time.Duration
+	sweepTimeout  time.Duration
 	maximumLife   time.Duration
 	shutdownGrace time.Duration
 	now           func() time.Time
+	// recheck asks the sweep goroutine for a full re-check (dropped
+	// invalidations); capacity 1, so requests during a running re-check
+	// coalesce into one more.
+	recheck chan struct{}
+	// The invalidation log, under mu: invalidationSeq counts every processed
+	// invalidation; the last invalidationLogSize are kept by seq modulo size.
+	invalidationSeq uint64
+	invalidationLog [invalidationLogSize]loggedInvalidation
+	// Coalescing, under pendingMu (never held with mu): the newest hint per
+	// family since the last flush, and whether a flush is armed.
+	pendingMu     sync.Mutex
+	pending       map[string]Hint
+	coalesce      time.Duration
+	flushTimer    *time.Timer
+	armed         bool
+	pendingClosed bool
 }
 
 type Reservation struct {
@@ -89,6 +142,8 @@ type Reservation struct {
 	accepted  time.Time
 	mu        sync.Mutex
 	state     uint8 // 0 reserved, 1 bound, 2 released
+	// revoked, under hub.mu: an invalidation released this reservation.
+	revoked bool
 }
 
 type lease struct {
@@ -117,13 +172,23 @@ func NewHub(parent context.Context, options HubOptions) (*Hub, error) {
 	if err := options.Limits.Validate(); err != nil {
 		return nil, err
 	}
+	if options.CoalesceWindow < 0 || options.SweepTimeout < 0 {
+		return nil, errors.New("live hub windows must not be negative")
+	}
+	if options.CoalesceWindow == 0 {
+		options.CoalesceWindow = defaultCoalesceWindow
+	}
+	if options.SweepTimeout == 0 {
+		options.SweepTimeout = defaultSweepTimeout
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	hub := &Hub{
 		limits: options.Limits, authorizer: options.Authorizer, ctx: ctx, cancel: cancel,
 		reservations: make(map[uint64]*Reservation), leases: make(map[uint64]*lease), byFamily: make(map[string]map[*lease]struct{}),
 		deviceCount: make(map[string]int), accountCount: make(map[string]int),
-		writeTimeout: 5 * time.Second, pingInterval: 25 * time.Second, sweepInterval: 5 * time.Second,
+		writeTimeout: 5 * time.Second, pingInterval: 25 * time.Second, sweepInterval: 5 * time.Second, sweepTimeout: options.SweepTimeout,
 		maximumLife: 15 * time.Minute, shutdownGrace: 5 * time.Second, now: time.Now,
+		recheck: make(chan struct{}, 1), pending: make(map[string]Hint), coalesce: options.CoalesceWindow,
 	}
 	if options.Now != nil {
 		hub.now = options.Now
@@ -144,7 +209,25 @@ func NewHub(parent context.Context, options HubOptions) (*Hub, error) {
 	return hub, nil
 }
 
-func (hub *Hub) Reserve(_ context.Context, principal access.Principal, grant access.Grant) (*Reservation, error) {
+// InvalidationMark is the hub's position in the invalidations it has
+// processed. Take it before the authorization read that ReserveAfter admits.
+func (hub *Hub) InvalidationMark() InvalidationMark {
+	if hub == nil {
+		return 0
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return InvalidationMark(hub.invalidationSeq)
+}
+
+// ReserveAfter holds capacity for a connection authorized as principal and
+// grant by an authorization read made after mark was taken. It refuses
+// (ErrAuthorizationChanged) when an invalidation processed since mark names
+// the grant: the read may not have seen that revocation's commit. Once
+// reserved, a later invalidation releases the reservation itself, so Bind
+// refuses; together they close the window from the authorization read to
+// Bind.
+func (hub *Hub) ReserveAfter(_ context.Context, mark InvalidationMark, principal access.Principal, grant access.Grant) (*Reservation, error) {
 	if hub == nil || !protocol.ValidUUID(principal.AccountID) || !protocol.ValidUUID(principal.DeviceID) || !protocol.ValidUUID(principal.SessionID) ||
 		principal.RecoveryEpoch == 0 || principal.SecurityRevision == 0 || principal.Scope != "family" || principal.SessionScope != "family" ||
 		principal.SessionFamilyID != grant.FamilyID || principal.AccountID != grant.AccountID || !protocol.ValidUUID(grant.FamilyID) || grant.Revision == 0 {
@@ -158,6 +241,9 @@ func (hub *Hub) Reserve(_ context.Context, principal access.Principal, grant acc
 	defer hub.mu.Unlock()
 	if hub.closed {
 		return nil, ErrHubClosed
+	}
+	if hub.invalidatedSinceLocked(uint64(mark), principal, grant) {
+		return nil, ErrAuthorizationChanged
 	}
 	if len(hub.reservations)+len(hub.leases) >= hub.limits.SocketProcessLimit ||
 		hub.deviceCount[principal.DeviceID] >= hub.limits.SocketDeviceLimit || hub.accountCount[principal.AccountID] >= hub.limits.SocketAccountLimit {
@@ -183,8 +269,12 @@ func (reservation *Reservation) Bind(connection Connection) (func(), error) {
 	hub := reservation.hub
 	hub.mu.Lock()
 	if hub.closed || hub.reservations[reservation.id] != reservation {
+		revoked := reservation.revoked
 		hub.mu.Unlock()
 		reservation.state = 2
+		if revoked {
+			return nil, ErrAuthorizationChanged
+		}
 		return nil, ErrReservationReleased
 	}
 	deadline := reservation.accepted.Add(hub.maximumLife)
@@ -326,73 +416,272 @@ func (item *lease) run() {
 	}
 }
 
+// Publish announces a family's committed high water. Hints are coalesced
+// per family: within one window only the newest cursor is kept (a higher
+// sequence, or a different cursor domain, replaces the pending hint; an older
+// domain's pending hint is delivered at once first, so a connection still
+// sees the domain change), and each window ends in one delivery per family.
+// A family with no bound connection keeps nothing: a connection bound later
+// catches up with its own sync on connect.
 func (hub *Hub) Publish(_ context.Context, hint Hint) {
 	if hub == nil || !protocol.ValidUUID(hint.FamilyID) || hint.Cursor.Validate() != nil || hint.Cursor.FamilyID != hint.FamilyID {
 		return
 	}
+	if !hub.HasRegisteredFamily(hint.FamilyID) {
+		return
+	}
+	var superseded *Hint
+	hub.pendingMu.Lock()
+	if hub.pendingClosed {
+		hub.pendingMu.Unlock()
+		return
+	}
+	current, ok := hub.pending[hint.FamilyID]
+	switch {
+	case !ok:
+		hub.pending[hint.FamilyID] = hint
+	case !sameCursorDomain(current.Cursor, hint.Cursor):
+		superseded = &current
+		hub.pending[hint.FamilyID] = hint
+	case hint.Cursor.Sequence > current.Cursor.Sequence:
+		hub.pending[hint.FamilyID] = hint
+	}
+	if !hub.armed {
+		hub.armed = true
+		if hub.flushTimer == nil {
+			hub.flushTimer = time.AfterFunc(hub.coalesce, hub.flush)
+		} else {
+			hub.flushTimer.Reset(hub.coalesce)
+		}
+	}
+	hub.pendingMu.Unlock()
+	if superseded != nil {
+		hub.deliver(*superseded)
+	}
+}
+
+// flush delivers every pending hint. A Publish after the swap arms the next
+// window, so no hint waits for more than one window plus one flush.
+func (hub *Hub) flush() {
+	hub.pendingMu.Lock()
+	batch := hub.pending
+	hub.armed = false
+	if len(batch) == 0 {
+		// Nothing to swap out; the map stays the publishers' alone.
+		hub.pendingMu.Unlock()
+		return
+	}
+	hub.pending = make(map[string]Hint, len(batch))
+	hub.pendingMu.Unlock()
+	for _, hint := range batch {
+		hub.deliver(hint)
+	}
+}
+
+// deliver hands hint to every connection bound to its family. It never
+// waits on a connection: each lease keeps one pending hint, the newest, and
+// its own goroutine writes it.
+func (hub *Hub) deliver(hint Hint) {
+	for _, item := range hub.familyLeases(hint.FamilyID, nil) {
+		hub.offer(item, hint, false)
+	}
+}
+
+// Reannounce is the wake worker's path: it hands hint to the connections of
+// deviceIDs bound to its family, at once (no coalescing window), even to a
+// connection that was already sent that cursor, which Publish never repeats.
+// A device behind its family has not pulled what it was told, and the
+// client syncs on any hint its local cursor does not cover. A connection
+// that was sent a higher cursor is re-sent that one. It returns the number
+// of connections handed a hint; other devices and families get nothing.
+func (hub *Hub) Reannounce(_ context.Context, hint Hint, deviceIDs []string) int {
+	if hub == nil || len(deviceIDs) == 0 || !protocol.ValidUUID(hint.FamilyID) || hint.Cursor.Validate() != nil || hint.Cursor.FamilyID != hint.FamilyID {
+		return 0
+	}
+	devices := make(map[string]struct{}, len(deviceIDs))
+	for _, device := range deviceIDs {
+		devices[device] = struct{}{}
+	}
+	reached := 0
+	for _, item := range hub.familyLeases(hint.FamilyID, devices) {
+		if hub.offer(item, hint, true) {
+			reached++
+		}
+	}
+	return reached
+}
+
+// familyLeases is the leases bound to familyID, of the given devices only
+// when devices is not nil.
+func (hub *Hub) familyLeases(familyID string, devices map[string]struct{}) []*lease {
 	hub.mu.Lock()
-	family := hub.byFamily[hint.FamilyID]
+	defer hub.mu.Unlock()
+	family := hub.byFamily[familyID]
 	items := make([]*lease, 0, len(family))
 	for item := range family {
-		items = append(items, item)
-	}
-	hub.mu.Unlock()
-	for _, item := range items {
-		item.mu.Lock()
-		if !item.active {
-			item.mu.Unlock()
-			continue
-		}
-		if item.domain != nil && !sameCursorDomain(*item.domain, hint.Cursor) {
-			item.mu.Unlock()
-			item.release()
-			hub.closeDetached([]*lease{item}, ClosePolicyViolation, "recovery epoch changed")
-			continue
-		}
-		if item.domain == nil {
-			domain := hint.Cursor
-			item.domain = &domain
-		}
-		if item.highest != nil && hint.Cursor.Sequence <= item.highest.Sequence {
-			item.mu.Unlock()
-			continue
-		}
-		highest := hint.Cursor
-		item.highest = &highest
-		if item.pending == nil || sameCursorDomain(item.pending.Cursor, hint.Cursor) && hint.Cursor.Sequence > item.pending.Cursor.Sequence {
-			copy := hint
-			item.pending = &copy
-			select {
-			case item.wake <- struct{}{}:
-			default:
+		if devices != nil {
+			if _, named := devices[item.principal.DeviceID]; !named {
+				continue
 			}
 		}
-		item.mu.Unlock()
+		items = append(items, item)
 	}
+	return items
+}
+
+// offer hands hint to one lease and reports whether the lease now has a
+// hint to write. A cursor of another domain closes the lease. Without force
+// a cursor at or below the highest the lease was sent is dropped; with
+// force the lease is re-sent the higher of the two.
+func (hub *Hub) offer(item *lease, hint Hint, force bool) bool {
+	item.mu.Lock()
+	if !item.active {
+		item.mu.Unlock()
+		return false
+	}
+	if item.domain != nil && !sameCursorDomain(*item.domain, hint.Cursor) {
+		item.mu.Unlock()
+		item.release()
+		hub.closeDetached([]*lease{item}, ClosePolicyViolation, "recovery epoch changed")
+		return false
+	}
+	if item.domain == nil {
+		domain := hint.Cursor
+		item.domain = &domain
+	}
+	if item.highest != nil && hint.Cursor.Sequence <= item.highest.Sequence {
+		if !force {
+			item.mu.Unlock()
+			return false
+		}
+		hint.Cursor = *item.highest
+	}
+	highest := hint.Cursor
+	item.highest = &highest
+	if item.pending == nil || sameCursorDomain(item.pending.Cursor, hint.Cursor) && hint.Cursor.Sequence > item.pending.Cursor.Sequence {
+		copy := hint
+		item.pending = &copy
+	}
+	select {
+	case item.wake <- struct{}{}:
+	default:
+	}
+	item.mu.Unlock()
+	return true
 }
 
 func sameCursorDomain(left, right protocol.Cursor) bool {
 	return left.ServerInstanceID == right.ServerInstanceID && left.RecoveryEpoch == right.RecoveryEpoch && left.FamilyID == right.FamilyID
 }
 
-func (hub *Hub) Invalidate(_ context.Context, invalidation security.SecurityInvalidation) {
+// Invalidate closes the live connections a committed command's invalidation
+// names, at once rather than at the next sweep. Empty fields match every
+// lease. Revision tells a lease admitted after the command apart from one it
+// invalidated, and is compared within its own scope:
+//
+//   - a family invalidation (FamilyID set) carries the family audit seq, and
+//     a lease whose grant was issued at or after it is kept;
+//   - an account invalidation (FamilyID empty: Logout, refresh reuse,
+//     MarkIdentityUnavailable, DeleteAccount) carries the account audit seq,
+//     which is not comparable with a grant's family seq; it is compared with
+//     the session's issued seq (Principal.SecurityRevision, an account seq),
+//     so a session issued at or after it is kept.
+//
+// It also releases every reservation it names (a later Bind refuses with
+// ErrAuthorizationChanged), and is logged so a reservation made after it
+// from an earlier authorization read is refused (ReserveAfter).
+func (hub *Hub) Invalidate(_ context.Context, invalidation authority.SecurityInvalidation) {
 	if hub == nil || invalidation.Revision == 0 {
 		return
 	}
 	hub.mu.Lock()
+	hub.logInvalidationLocked(loggedInvalidation{item: invalidation})
 	items := make([]*lease, 0)
 	for _, item := range hub.leases {
-		if invalidation.Revision <= item.grant.Revision ||
-			invalidation.AccountID != "" && invalidation.AccountID != item.principal.AccountID ||
-			invalidation.FamilyID != "" && invalidation.FamilyID != item.grant.FamilyID ||
-			invalidation.SessionID != "" && invalidation.SessionID != item.principal.SessionID {
+		if !invalidates(invalidation, item.principal, item.grant) {
 			continue
 		}
 		items = append(items, item)
 		item.releaseLocked()
 	}
+	for _, reservation := range hub.reservations {
+		if invalidates(invalidation, reservation.principal, reservation.grant) {
+			hub.revokeReservationLocked(reservation)
+		}
+	}
 	hub.mu.Unlock()
 	hub.closeDetached(items, ClosePolicyViolation, "authorization changed")
+}
+
+// invalidates reports whether invalidation names a connection authorized as
+// principal and grant (Invalidate's rules: empty fields match, Revision is
+// compared within its own scope).
+func invalidates(invalidation authority.SecurityInvalidation, principal access.Principal, grant access.Grant) bool {
+	issued := grant.Revision
+	if invalidation.FamilyID == "" {
+		issued = principal.SecurityRevision
+	}
+	return invalidation.Revision > issued &&
+		(invalidation.AccountID == "" || invalidation.AccountID == principal.AccountID) &&
+		(invalidation.FamilyID == "" || invalidation.FamilyID == grant.FamilyID) &&
+		(invalidation.SessionID == "" || invalidation.SessionID == principal.SessionID)
+}
+
+func (hub *Hub) logInvalidationLocked(entry loggedInvalidation) {
+	hub.invalidationSeq++
+	hub.invalidationLog[hub.invalidationSeq%invalidationLogSize] = entry
+}
+
+// invalidatedSinceLocked reports whether an invalidation processed after
+// mark names principal and grant. A mark older than the log fails closed.
+func (hub *Hub) invalidatedSinceLocked(mark uint64, principal access.Principal, grant access.Grant) bool {
+	if mark >= hub.invalidationSeq {
+		return false
+	}
+	if hub.invalidationSeq-mark > invalidationLogSize {
+		return true
+	}
+	for seq := mark + 1; seq <= hub.invalidationSeq; seq++ {
+		entry := hub.invalidationLog[seq%invalidationLogSize]
+		if entry.all || invalidates(entry.item, principal, grant) {
+			return true
+		}
+	}
+	return false
+}
+
+// revokeReservationLocked releases a reservation an invalidation named, and
+// its capacity, so its Bind refuses.
+func (hub *Hub) revokeReservationLocked(reservation *Reservation) {
+	if hub.reservations[reservation.id] != reservation {
+		return
+	}
+	delete(hub.reservations, reservation.id)
+	hub.releaseCountsLocked(reservation.principal)
+	reservation.revoked = true
+}
+
+// InvalidationsDropped is called, on the authority's delivery goroutine,
+// when invalidations did not fit the hub's subscription queue. Which grants
+// they named is unknown, so every reservation in flight is released and
+// every earlier mark refused at once, and the bound leases are re-checked
+// against the authority on the sweep goroutine (a check that fails or misses
+// its deadline closes every lease; a hub with no authorizer cannot re-check,
+// so it closes every lease). The call never waits for the re-check.
+func (hub *Hub) InvalidationsDropped(context.Context) {
+	if hub == nil {
+		return
+	}
+	hub.mu.Lock()
+	hub.logInvalidationLocked(loggedInvalidation{all: true})
+	for _, reservation := range hub.reservations {
+		hub.revokeReservationLocked(reservation)
+	}
+	hub.mu.Unlock()
+	select {
+	case hub.recheck <- struct{}{}:
+	default:
+	}
 }
 
 func (hub *Hub) closeDetached(items []*lease, code int, reason string) {
@@ -417,20 +706,41 @@ func (hub *Hub) closeDetached(items []*lease, code int, reason string) {
 	}
 }
 
+// runSweep owns every re-check: the periodic sweep (with an authorizer) and
+// the re-check after dropped invalidations. It runs apart from the
+// invalidation and publish paths, so a slow authority delays neither.
 func (hub *Hub) runSweep() {
-	if hub.authorizer == nil {
-		return
+	var tick <-chan time.Time
+	if hub.authorizer != nil {
+		ticker := time.NewTicker(hub.sweepInterval)
+		defer ticker.Stop()
+		tick = ticker.C
 	}
-	ticker := time.NewTicker(hub.sweepInterval)
-	defer ticker.Stop()
 	for {
 		select {
 		case <-hub.ctx.Done():
 			return
-		case <-ticker.C:
+		case <-tick:
+			_ = hub.sweep(hub.ctx)
+		case <-hub.recheck:
+			if hub.authorizer == nil {
+				hub.closeAll(ClosePolicyViolation, "authorization unavailable")
+				continue
+			}
 			_ = hub.sweep(hub.ctx)
 		}
 	}
+}
+
+func (hub *Hub) closeAll(code int, reason string) {
+	hub.mu.Lock()
+	items := make([]*lease, 0, len(hub.leases))
+	for _, item := range hub.leases {
+		items = append(items, item)
+	}
+	hub.mu.Unlock()
+	hub.detach(items)
+	hub.closeDetached(items, code, reason)
 }
 
 func (hub *Hub) sweep(ctx context.Context) error {
@@ -448,7 +758,13 @@ func (hub *Hub) sweep(ctx context.Context) error {
 	if len(leasing) == 0 {
 		return nil
 	}
+	ctx, cancel := context.WithTimeout(ctx, hub.sweepTimeout)
+	defer cancel()
 	allowed, err := hub.authorizer.CheckMany(ctx, leasing)
+	if err == nil && ctx.Err() != nil {
+		// Answered, but after the deadline: fail closed as if it had not.
+		err = ctx.Err()
+	}
 	if err != nil {
 		hub.detach(items)
 		hub.closeDetached(items, ClosePolicyViolation, "authorization unavailable")
@@ -480,36 +796,6 @@ func (hub *Hub) detach(items []*lease) {
 	}
 }
 
-func (hub *Hub) RegisteredFamilies() []string {
-	hub.mu.Lock()
-	defer hub.mu.Unlock()
-	result := make([]string, 0, len(hub.byFamily))
-	for familyID := range hub.byFamily {
-		result = append(result, familyID)
-	}
-	return result
-}
-
-func (hub *Hub) RegisteredLeases() []AuthorizationLease {
-	if hub == nil {
-		return nil
-	}
-	hub.mu.Lock()
-	defer hub.mu.Unlock()
-	byFamily := make(map[string]AuthorizationLease)
-	for _, item := range hub.leases {
-		if _, exists := byFamily[item.grant.FamilyID]; !exists {
-			byFamily[item.grant.FamilyID] = AuthorizationLease{Principal: item.principal, Grant: item.grant}
-		}
-	}
-	result := make([]AuthorizationLease, 0, len(byFamily))
-	for _, item := range byFamily {
-		result = append(result, item)
-	}
-	sort.Slice(result, func(i, j int) bool { return result[i].Grant.FamilyID < result[j].Grant.FamilyID })
-	return result
-}
-
 func (hub *Hub) Context() context.Context {
 	if hub == nil {
 		return context.Background()
@@ -521,6 +807,14 @@ func (hub *Hub) Shutdown(ctx context.Context) error {
 	if hub == nil {
 		return nil
 	}
+	// No hint is kept or delivered once shutdown starts.
+	hub.pendingMu.Lock()
+	hub.pendingClosed = true
+	hub.pending = nil
+	if hub.flushTimer != nil {
+		hub.flushTimer.Stop()
+	}
+	hub.pendingMu.Unlock()
 	hub.mu.Lock()
 	if hub.closed {
 		hub.mu.Unlock()
@@ -612,6 +906,19 @@ func (hub *Hub) Shutdown(ctx context.Context) error {
 	case <-ctx.Done():
 		return ctx.Err()
 	}
+}
+
+// DeviceConnected reports whether deviceID holds a bound lease or a
+// reservation here: the wake worker reaches such a device through
+// Reannounce and never pushes it. A reservation counts because its
+// connection binds within the handshake and syncs on connect.
+func (hub *Hub) DeviceConnected(deviceID string) bool {
+	if hub == nil {
+		return false
+	}
+	hub.mu.Lock()
+	defer hub.mu.Unlock()
+	return hub.deviceCount[deviceID] > 0
 }
 
 // HasRegisteredFamily checks bound leases only; notifications cannot create registrations.

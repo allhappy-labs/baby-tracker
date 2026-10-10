@@ -9,20 +9,20 @@ func TestViewerReadsButDoesNotWrite(t *testing.T) {
 	ownerOnly := []string{"delete_baby", "manage_members", "repair_profile", "transfer_owner", "export", "export_family", "delete_family"}
 
 	for _, action := range reads {
-		if !allowed("viewer", action) {
+		if !Allowed("viewer", action) {
 			t.Errorf("viewer should be allowed to %q", action)
 		}
 	}
 	for _, action := range writes {
-		if allowed("viewer", action) {
+		if Allowed("viewer", action) {
 			t.Errorf("viewer must not be allowed to %q", action)
 		}
-		if !allowed("caregiver", action) || !allowed("owner", action) {
+		if !Allowed("caregiver", action) || !Allowed("owner", action) {
 			t.Errorf("%q must remain available to caregiver and owner", action)
 		}
 	}
 	for _, action := range ownerOnly {
-		if allowed("viewer", action) {
+		if Allowed("viewer", action) {
 			t.Errorf("viewer must not be allowed to %q", action)
 		}
 	}
@@ -31,14 +31,14 @@ func TestViewerReadsButDoesNotWrite(t *testing.T) {
 // Adding the role must not quietly widen what an ordinary caregiver can do.
 func TestExistingRolesUnchangedByViewer(t *testing.T) {
 	for _, action := range []string{"delete_baby", "manage_members", "transfer_owner", "delete_family"} {
-		if allowed("caregiver", action) {
+		if Allowed("caregiver", action) {
 			t.Errorf("caregiver must not be allowed to %q", action)
 		}
-		if !allowed("owner", action) {
+		if !Allowed("owner", action) {
 			t.Errorf("owner must still be allowed to %q", action)
 		}
 	}
-	if allowed("viewer", "unknown_action") || allowed("owner", "unknown_action") {
+	if Allowed("viewer", "unknown_action") || Allowed("owner", "unknown_action") {
 		t.Error("an unknown action must be refused for every role")
 	}
 }
@@ -55,7 +55,7 @@ func TestViewOnlyRefusalIsDistinguishableFromOwnerOnly(t *testing.T) {
 	// Actions a caregiver may take and a viewer may not: view-only is the
 	// reason, and the only reason.
 	for _, action := range []string{"mutate_record", "add_baby"} {
-		if !allowed("caregiver", action) || allowed("viewer", action) {
+		if !Allowed("caregiver", action) || Allowed("viewer", action) {
 			t.Fatalf("%q is no longer the caregiver/viewer boundary this test is about", action)
 		}
 	}
@@ -63,7 +63,7 @@ func TestViewOnlyRefusalIsDistinguishableFromOwnerOnly(t *testing.T) {
 	// in the same position as a caregiver, and promoting them would not help,
 	// so `owner_required` remains the honest answer.
 	for _, action := range []string{"manage_members", "transfer_owner", "delete_family"} {
-		if allowed("caregiver", action) {
+		if Allowed("caregiver", action) {
 			t.Fatalf("%q stopped being owner-only", action)
 		}
 	}

@@ -66,7 +66,8 @@ func ValidateCompatibility(applied []MigrationDigest, compatibility Compatibilit
 			current = item.Version
 		}
 	}
-	for version := int64(1); version <= current; version++ {
+	// The history is complete from the first known version: 1, or the baseline.
+	for version := compatibility.Known[0].Version; version <= current; version++ {
 		if !seen[version] {
 			return fmt.Errorf("migration_compatibility: missing applied version %d", version)
 		}
@@ -77,12 +78,23 @@ func ValidateCompatibility(applied []MigrationDigest, compatibility Compatibilit
 	return nil
 }
 
+// validateCompatibilityCatalog checks the known history: versions 1, 2, … or
+// a squashed baseline (NNNNNN_baseline.sql at version B) followed by B+1, …,
+// with min and max inside it.
 func validateCompatibilityCatalog(compatibility Compatibility) error {
-	if compatibility.Min < 1 || compatibility.Max < compatibility.Min || int64(len(compatibility.Known)) < compatibility.Max {
+	if len(compatibility.Known) == 0 {
+		return errors.New("migration_compatibility: invalid compatibility bounds")
+	}
+	first := compatibility.Known[0].Version
+	if first != 1 && !isBaseline(compatibility.Known[0].Name) {
+		return fmt.Errorf("migration_compatibility: invalid known migration %d", first)
+	}
+	last := first + int64(len(compatibility.Known)) - 1
+	if compatibility.Min < first || compatibility.Max < compatibility.Min || last < compatibility.Max {
 		return errors.New("migration_compatibility: invalid compatibility bounds")
 	}
 	for index, item := range compatibility.Known {
-		version := int64(index + 1)
+		version := first + int64(index)
 		parsedVersion, parsedName, err := parseMigrationName(item.Name)
 		if item.Version != version || err != nil || parsedVersion != item.Version || parsedName != item.Name {
 			return fmt.Errorf("migration_compatibility: invalid known migration %d", item.Version)

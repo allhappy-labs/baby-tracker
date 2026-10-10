@@ -11,6 +11,7 @@ import (
 type Phase string
 
 const (
+	CacheWait          Phase = "cache_wait"
 	Authority          Phase = "authority"
 	Database           Phase = "database"
 	Observer           Phase = "observer"
@@ -26,9 +27,14 @@ type Recorder func(context.Context, Phase, time.Duration)
 
 type recorderKey struct{}
 type captureKey struct{}
+type integrityBytesKey struct{}
+
+const integrityBytesSummary Phase = "integrity_bytes_summary"
+
 type captured struct {
 	mu     sync.Mutex
 	closed bool
+	bytes  uint64
 	values map[Phase]time.Duration
 }
 
@@ -49,7 +55,7 @@ func CaptureSince(ctx context.Context, phase Phase, start time.Time) {
 }
 func Capture(ctx context.Context, phase Phase, elapsed time.Duration) {
 	switch phase {
-	case SecurityFence, FamilyFence, TransactionAcquire, IntegrityInventory, IntegrityExtension, IntegrityVerify:
+	case CacheWait, SecurityFence, FamilyFence, TransactionAcquire, IntegrityInventory, IntegrityExtension, IntegrityVerify:
 	default:
 		return
 	}
@@ -93,9 +99,16 @@ func Flush(ctx context.Context) {
 	}
 	c.closed = true
 	values := c.values
+	bytes := c.bytes
+	c.bytes = 0
 	c.values = nil
 	c.mu.Unlock()
-	for _, phase := range []Phase{SecurityFence, FamilyFence, TransactionAcquire, IntegrityInventory, IntegrityExtension, IntegrityVerify} {
+	if bytes > 0 {
+		if recorder, _ := ctx.Value(recorderKey{}).(Recorder); recorder != nil {
+			recorder(context.WithValue(ctx, integrityBytesKey{}, bytes), integrityBytesSummary, 0)
+		}
+	}
+	for _, phase := range []Phase{CacheWait, SecurityFence, FamilyFence, TransactionAcquire, IntegrityInventory, IntegrityExtension, IntegrityVerify} {
 		if elapsed, ok := values[phase]; ok {
 			Record(ctx, nil, phase, elapsed)
 		}
@@ -121,7 +134,7 @@ func Record(ctx context.Context, recorder Recorder, phase Phase, elapsed time.Du
 		return
 	}
 	switch phase {
-	case Authority, Database, Observer, SecurityFence, FamilyFence, TransactionAcquire, IntegrityInventory, IntegrityExtension, IntegrityVerify:
+	case CacheWait, Authority, Database, Observer, SecurityFence, FamilyFence, TransactionAcquire, IntegrityInventory, IntegrityExtension, IntegrityVerify:
 	default:
 		return
 	}
@@ -132,4 +145,20 @@ func Record(ctx context.Context, recorder Recorder, phase Phase, elapsed time.Du
 		elapsed = time.Minute
 	}
 	recorder(ctx, phase, elapsed)
+}
+
+// CaptureIntegrityBytes is scalar-only and shares the deferred fence-safe flush.
+func CaptureIntegrityBytes(ctx context.Context, n uint64) {
+	if ctx == nil {
+		return
+	}
+	c, _ := ctx.Value(captureKey{}).(*captured)
+	if c == nil {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if !c.closed {
+		c.bytes += n
+	}
 }

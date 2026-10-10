@@ -51,7 +51,7 @@ trap cleanup EXIT
 trap 'exit 130' INT
 trap 'exit 143' TERM
 
-for secret in bootstrap_password migrator_password runtime_password projector_password; do
+for secret in bootstrap_password migrator_password runtime_password; do
   openssl rand -hex 32 > "$BT_SECRETS_DIR/$secret"
 done
 chmod 0600 "$BT_SECRETS_DIR"/*
@@ -96,14 +96,27 @@ fi
 
 docker exec -i "$db" psql -X -U postgres -d babytracker -v ON_ERROR_STOP=1 < Server/deploy/postgres/init-roles.sql
 docker exec "$db" psql -XAt -U postgres -d babytracker -v ON_ERROR_STOP=1 -c \
-  "SELECT bool_and(pg_roles.oid IS NOT NULL) FROM (VALUES ('baby_tracker_runtime'),('baby_tracker_maintenance'),('baby_tracker_projector'),('baby_tracker_apple_revoker'),('baby_tracker_live_activity')) expected(rolname) LEFT JOIN pg_roles ON pg_roles.rolname=expected.rolname" | grep -Fx t >/dev/null
+  "SELECT bool_and(pg_roles.oid IS NOT NULL) FROM (VALUES ('baby_tracker_runtime'),('baby_tracker_maintenance')) expected(rolname) LEFT JOIN pg_roles ON pg_roles.rolname=expected.rolname" | grep -Fx t >/dev/null
 docker exec "$db" psql -XAt -U postgres -d babytracker -v ON_ERROR_STOP=1 -c \
-  "SELECT NOT EXISTS (SELECT 1 FROM pg_auth_members membership JOIN pg_roles member ON member.oid=membership.member WHERE member.rolname IN ('baby_tracker_app','baby_tracker_export_app','baby_tracker_projector_app','baby_tracker_apple_revoker_app','baby_tracker_live_activity_app'))" | grep -Fx t >/dev/null
+  "SELECT NOT EXISTS (SELECT 1 FROM pg_auth_members membership JOIN pg_roles member ON member.oid=membership.member WHERE member.rolname IN ('baby_tracker_app','baby_tracker_export_app'))" | grep -Fx t >/dev/null
 
 export BABY_TRACKER_REQUIRE_DATABASE=1
 bootstrap_password=$(<"$BT_SECRETS_DIR/bootstrap_password")
 export BABY_TRACKER_TEST_DATABASE_URL="postgres://postgres:$bootstrap_password@127.0.0.1:$host_port/babytracker?sslmode=disable"
 go_test=(go test -p=1 -race -count=1)
+# For timing runs: BT_TEST_RACE=0 drops -race, BT_TEST_TIMEOUT
+# sets -timeout and BT_TEST_VERBOSE=1 adds -v. The defaults are unchanged.
+case ${BT_TEST_RACE:-1} in
+  1) ;;
+  0) go_test=(go test -p=1 -count=1) ;;
+  *) echo "test-db: BT_TEST_RACE must be 0 or 1" >&2; exit 2 ;;
+esac
+if [[ -n ${BT_TEST_TIMEOUT:-} ]]; then
+  go_test+=(-timeout "$BT_TEST_TIMEOUT")
+fi
+if [[ ${BT_TEST_VERBOSE:-0} == 1 ]]; then
+  go_test+=(-v)
+fi
 if [[ -n ${BT_TEST_TAGS:-} ]]; then
   go_test+=(-tags "$BT_TEST_TAGS")
 fi

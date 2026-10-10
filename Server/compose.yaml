@@ -5,7 +5,7 @@ services:
       POSTGRES_USER: postgres
       POSTGRES_DB: babytracker
       POSTGRES_PASSWORD_FILE: /run/secrets/bootstrap_password
-    secrets: [bootstrap_password, migrator_password, runtime_password, projector_password, export_password]
+    secrets: [bootstrap_password, migrator_password, runtime_password, export_password]
     volumes:
       - database:/var/lib/postgresql/data
       - ./deploy/postgres/init-roles.sql:/docker-entrypoint-initdb.d/10-init-roles.sql:ro
@@ -22,16 +22,16 @@ services:
       BT_MODE: ${BT_MODE:-self_hosted}
       BT_LISTEN_ADDRESS: :8080
       BT_DATABASE_URL_FILE: /run/secrets/runtime_database_url
-      BT_PROJECTOR_DATABASE_URL_FILE: /run/secrets/projector_database_url
-      BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE: ${BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE:-}
+      # The maintenance credential (baby_tracker_export_app, a member of
+      # baby_tracker_maintenance) is required in every mode: retention, the
+      # family purge, wakes and audit partitions run as it.
+      BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE: ${BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE:-/run/secrets/maintenance_database_url}
       BT_EXPORT_DATABASE_URL_FILE: ${BT_EXPORT_DATABASE_URL_FILE:-}
       BT_EXPORT_KEYS_FILE: ${BT_EXPORT_KEYS_FILE:-}
       BT_EXPORT_KEY_ID: ${BT_EXPORT_KEY_ID:-}
       BT_PUBLIC_ORIGIN: ${BT_PUBLIC_ORIGIN:-https://sync.example.test}
       BT_SERVER_INSTANCE_ID: ${BT_SERVER_INSTANCE_ID:?set BT_SERVER_INSTANCE_ID}
       BT_RECOVERY_EPOCH: ${BT_RECOVERY_EPOCH:-1}
-      BT_SECURITY_LEDGER_DIR: /var/lib/babytracker/security-ledger
-      BT_LEDGER_HEAD_DIR: /var/lib/babytracker/ledger-head
       BT_APPLE_AUDIENCE: ${BT_APPLE_AUDIENCE:?set BT_APPLE_AUDIENCE}
       BT_IDENTITY_KEY_ID: ${BT_IDENTITY_KEY_ID:-identity.v1}
       BT_IDENTITY_PEPPER_FILE: /run/secrets/identity_pepper
@@ -59,12 +59,29 @@ services:
       BT_MAX_CANONICAL_RECORDS_PER_FAMILY: ${BT_MAX_CANONICAL_RECORDS_PER_FAMILY:-100000}
       BT_MAX_CHARGED_STORAGE_BYTES_PER_FAMILY: ${BT_MAX_CHARGED_STORAGE_BYTES_PER_FAMILY:-268435456}
       BT_TRUSTED_PROXY_CIDRS: ${BT_TRUSTED_PROXY_CIDRS:-127.0.0.1/32}
-    secrets: [runtime_database_url, projector_database_url, identity_pepper, session_token_pepper, device_continuity_pepper, apple_notification_pepper, invitation_pepper, page_token_key, actor_id_pepper, rate_limit_pepper]
+      # Finite admission and database budgets. Empty keeps the documented
+      # defaults (admission 32/0, legacy pool settings).
+      BT_ADMISSION_TOTAL: ${BT_ADMISSION_TOTAL:-}
+      BT_ADMISSION_MCP_MAX: ${BT_ADMISSION_MCP_MAX:-}
+      BT_DB_RUNTIME_MAX_CONNS: ${BT_DB_RUNTIME_MAX_CONNS:-}
+      BT_DB_MAINTENANCE_MAX_CONNS: ${BT_DB_MAINTENANCE_MAX_CONNS:-}
+      BT_DB_MCP_MAX_CONNS: ${BT_DB_MCP_MAX_CONNS:-}
+      BT_DB_SERVER_MAX_CONNECTIONS: ${BT_DB_SERVER_MAX_CONNECTIONS:-}
+      BT_DB_RESERVED_CONNECTIONS: ${BT_DB_RESERVED_CONNECTIONS:-}
+      # Private read-only MCP is disabled by default: no /mcp route, no MCP
+      # pool and no MCP secret is read. Enabling it needs the explicit budgets
+      # above (BT_ADMISSION_MCP_MAX and BT_DB_MCP_MAX_CONNS from 1 to 4), a
+      # database URL file for the runtime role (for example
+      # /run/secrets/runtime_database_url) and a cursor key file under the
+      # read-only /run/mcp mount. See README "Private MCP endpoint".
+      BT_MCP_ENABLED: ${BT_MCP_ENABLED:-false}
+      BT_MCP_DATABASE_URL_FILE: ${BT_MCP_DATABASE_URL_FILE:-}
+      BT_MCP_CURSOR_KEY_FILE: ${BT_MCP_CURSOR_KEY_FILE:-}
+    secrets: [runtime_database_url, maintenance_database_url, identity_pepper, session_token_pepper, device_continuity_pepper, apple_notification_pepper, invitation_pepper, page_token_key, actor_id_pepper, rate_limit_pepper]
     ports: ["127.0.0.1:${BT_HTTP_PORT:-8080}:8080"]
     volumes:
-      - security_ledger:/var/lib/babytracker/security-ledger
-      - ledger_head:/var/lib/babytracker/ledger-head
       - ${BT_KEYRING_DIR:-./deploy/keyrings}:/run/keyrings:ro
+      - ${BT_MCP_SECRETS_DIR:-./deploy/mcp}:/run/mcp:ro
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -77,16 +94,12 @@ services:
     profiles: [tools]
     entrypoint: [/usr/local/bin/baby-tracker-admin]
     command: [migrate]
+    # `migrate`, then `authority init|verify|rotate-epoch` (run as the
+    # migrator: only it may write server_state).
     environment:
       BT_DATABASE_URL_FILE: /run/secrets/migrator_database_url
-      BT_PROJECTOR_DATABASE_URL_FILE: /run/secrets/projector_database_url
-      BT_SECURITY_LEDGER_DIR: /var/lib/babytracker/security-ledger
-      BT_LEDGER_HEAD_DIR: /var/lib/babytracker/ledger-head
       BT_ACTOR_ID_PEPPER_FILE: /run/secrets/actor_id_pepper
-    secrets: [migrator_database_url, runtime_database_url, projector_database_url, actor_id_pepper]
-    volumes:
-      - security_ledger:/var/lib/babytracker/security-ledger
-      - ledger_head:/var/lib/babytracker/ledger-head
+    secrets: [migrator_database_url, runtime_database_url, actor_id_pepper]
     read_only: true
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
@@ -98,8 +111,6 @@ services:
 
 volumes:
   database:
-  security_ledger:
-  ledger_head:
 
 secrets:
   bootstrap_password:
@@ -108,16 +119,14 @@ secrets:
     file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/migrator_password
   runtime_password:
     file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/runtime_password
-  projector_password:
-    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/projector_password
   export_password:
     file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/export_password
   migrator_database_url:
     file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/migrator_database_url
   runtime_database_url:
     file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/runtime_database_url
-  projector_database_url:
-    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/projector_database_url
+  maintenance_database_url:
+    file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/maintenance_database_url
   identity_pepper:
     file: ${BT_SECRETS_DIR:?set BT_SECRETS_DIR}/identity_pepper
   session_token_pepper:

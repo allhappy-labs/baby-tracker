@@ -12,6 +12,8 @@ struct FamilyLifecycleConfirmationView: View {
     let onCancel: () -> Void
 
     var body: some View {
+        // Presented with `fittedSheet`: as tall as the copy and the two
+        // buttons; past the screen the copy scrolls and the buttons stay.
         VStack(spacing: 0) {
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
@@ -36,6 +38,7 @@ struct FamilyLifecycleConfirmationView: View {
                 .padding(.top, 28)
                 .padding(.bottom, 20)
             }
+            .scrollBounceBehavior(.basedOnSize)
 
             VStack(spacing: 10) {
                 Button(confirmation.confirmLabel, role: confirmation.isDestructive ? .destructive : nil, action: onConfirm)
@@ -56,13 +59,6 @@ struct FamilyLifecycleConfirmationView: View {
             .padding(.horizontal, 20)
             .padding(.top, 14)
             .padding(.bottom, 20)
-            .background {
-                Rectangle().fill(.regularMaterial)
-                    .ignoresSafeArea(edges: .bottom)
-            }
         }
-        .background(Palette.ground)
-        .presentationDetents([.height(340), .large])
-        .presentationDragIndicator(.visible)
     }
 }

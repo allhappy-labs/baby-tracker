@@ -334,20 +334,20 @@ public final class SessionSheetModel {
                     label = side.displayName
                     icon = side == .left ? .breastLeft : .breastRight
                     target = .breast(feedID: feed.id, componentID: id)
-                    detail = "\(Self.clock(start, zone: feed.timeZoneID)) · \(ElapsedFormatter.precise(seconds))"
                     end = feed.components.count == 1
                         ? feed.endedAt ?? start.addingTimeInterval(TimeInterval(seconds))
                         : componentEnd ?? start.addingTimeInterval(TimeInterval(seconds))
+                    detail = "\(Self.clock(start, zone: feed.timeZoneID))–\(Self.clock(end, zone: feed.timeZoneID))"
                     breastSeconds += seconds
                 case let .bottle(id, volume, contents, seconds, _, componentEnd):
                     label = "\(contents.displayName) \(Volume(millilitres: volume).formatted(as: unit))"
                     icon = .bottle
                     target = .bottle(feedID: feed.id, componentID: id)
-                    let time = Self.clock(start, zone: feed.timeZoneID)
-                    detail = (seconds ?? 0) > 0 ? "\(time) · \(ElapsedFormatter.precise(seconds ?? 0))" : time
                     end = feed.components.count == 1
                         ? feed.endedAt ?? start
                         : componentEnd ?? start.addingTimeInterval(TimeInterval(seconds ?? 0))
+                    let time = Self.clock(start, zone: feed.timeZoneID)
+                    detail = (seconds ?? 0) > 0 ? "\(time)–\(Self.clock(end, zone: feed.timeZoneID))" : time
                     volumeML += volume
                 case .solids:
                     continue

@@ -54,6 +54,25 @@ final class RefusingTransport: FamilySyncTransport, @unchecked Sendable {
     func snapshot(pageToken: String?) async throws -> SnapshotResponse { try await inner.snapshot(pageToken: pageToken) }
 }
 
+@MainActor
+final class RefusingEverySync: FamilySyncTransport, @unchecked Sendable {
+    let inner: FakeSyncTransport
+    let code: SyncErrorCode
+    private(set) var syncCalls = 0
+
+    init(inner: FakeSyncTransport, code: SyncErrorCode) {
+        self.inner = inner
+        self.code = code
+    }
+
+    func sync(_ request: SyncRequest) async throws -> SyncResponse {
+        syncCalls += 1
+        throw code
+    }
+
+    func snapshot(pageToken: String?) async throws -> SnapshotResponse { try await inner.snapshot(pageToken: pageToken) }
+}
+
 enum SyncFixtures {
     static let instanceID = UUID(uuidString: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")!
     static let familyID = UUID(uuidString: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb")!
@@ -294,13 +313,53 @@ struct SyncCoordinatorTests {
         } else { transport.failWith = .epochChanged }
         let snapshotID = UUID()
         transport.snapshotPages = [SyncFixtures.snapshot(snapshotID: snapshotID)]
+        // The snapshot is followed by one pull from its own high water; this
+        // is the page that answers it, carrying the cursor forward unchanged
+        // since nothing new has landed.
+        transport.pages = [SyncFixtures.page(highWater: SyncFixtures.cursor(5, epoch: 2))]
 
         await coordinator.syncOnce(reason: .foreground)
 
         #expect(transport.snapshotRequests == 1)
-        #expect(try store.syncCursor()?.recoveryEpoch == 2)
+        #expect(transport.requests.count == 2)
+        #expect(transport.requests.last?.cursor == SyncFixtures.cursor(5, epoch: 2))
+        #expect(try store.syncCursor() == SyncFixtures.cursor(5, epoch: 2))
         #expect(coordinator.currentIssue == nil)
         #expect(proofs == 0)
+    }
+
+    /// A snapshot pages current rows and is not frozen: a write that lands
+    /// while it pages can be half visible. One pull from the snapshot's high
+    /// water, straight after it, settles the device without waiting for the
+    /// next poll.
+    @Test func snapshotIsFollowedByOnePullFromItsHighWater() async throws {
+        let (store, transport, coordinator) = try make()
+        transport.failWith = .snapshotRequired
+        transport.snapshotPages = [SyncFixtures.snapshot()] // high water 5, epoch 2
+        transport.pages = [SyncFixtures.page(highWater: SyncFixtures.cursor(7, epoch: 2))]
+
+        await coordinator.syncOnce(reason: .foreground)
+
+        #expect(transport.snapshotRequests == 1)
+        #expect(transport.requests.count == 2)
+        #expect(transport.requests[1].cursor == SyncFixtures.cursor(5, epoch: 2))
+        #expect(transport.requests[1].pageToken == nil)
+        #expect(try store.syncCursor() == SyncFixtures.cursor(7, epoch: 2))
+        #expect(coordinator.currentIssue == nil)
+    }
+
+    /// The pull after a snapshot is one attempt: a refusal is not answered
+    /// with another snapshot from inside the first.
+    @Test func aRefusedPullAfterASnapshotDoesNotRecurse() async throws {
+        let inner = FakeSyncTransport()
+        inner.snapshotPages = [SyncFixtures.snapshot()]
+        let refusing = RefusingEverySync(inner: inner, code: .snapshotRequired)
+        let coordinator = SyncCoordinator(store: try SyncFixtures.store(), transport: refusing, accountKey: SyncFixtures.accountKey)
+
+        await coordinator.syncOnce(reason: .foreground)
+
+        #expect(inner.snapshotRequests == 1)
+        #expect(refusing.syncCalls == 2) // the attempt, then the one pull after the snapshot
     }
 
     /// A size complaint shrinks the batch and stays silent — it is the

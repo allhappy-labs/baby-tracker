@@ -212,16 +212,24 @@ func TestDroppedTimerEditResponseRecoversReceiptThenStopSeesTheEdit(t *testing.T
 	if err != nil {
 		t.Fatal(err)
 	}
-	edits := 0
+	// Pulls serve each entity's latest state: the timer once, as its stop
+	// tombstone, and the completion feed carrying the edited start.
+	stops, completions := 0, 0
 	for _, change := range pulled.Changes {
-		if change.EntityID == testkit.TimerA && change.Operation == "update" {
-			edits++
-			if change.SnapshotOrTombstone.Payload.(protocol.TimerStartPayload).StartedAt != editedStart {
-				t.Fatalf("caregiver pulled edit=%+v", change.SnapshotOrTombstone)
+		if change.EntityID == testkit.TimerA {
+			if change.Operation != "timer_stop" || change.SnapshotOrTombstone.Meta.TombstonedAt == nil {
+				t.Fatalf("caregiver pulled timer change=%+v", change)
 			}
+			stops++
+		}
+		if change.EntityID == testkit.RecordA {
+			if change.SnapshotOrTombstone.Payload.(protocol.FeedPayload).StartedAt != editedStart {
+				t.Fatalf("caregiver pulled completion=%+v", change.SnapshotOrTombstone)
+			}
+			completions++
 		}
 	}
-	if edits != 1 || fixture.CountCompletedRecords(testkit.RecordA) != 1 {
-		t.Fatalf("caregiver edits=%d completed=%d", edits, fixture.CountCompletedRecords(testkit.RecordA))
+	if stops != 1 || completions != 1 || fixture.CountCompletedRecords(testkit.RecordA) != 1 {
+		t.Fatalf("caregiver stops=%d completions=%d completed=%d", stops, completions, fixture.CountCompletedRecords(testkit.RecordA))
 	}
 }

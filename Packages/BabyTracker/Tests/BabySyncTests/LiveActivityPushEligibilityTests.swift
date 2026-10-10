@@ -204,7 +204,10 @@ struct LiveActivityPushBuildConfigurationTests {
     }
 
     @Test func startAlertKeysAreLocalizedInTheAppBundleCatalogForEveryLocale() throws {
-        let apns = try String(contentsOf: Self.repository.appending(path: "Server/internal/liveactivity/apns.go"), encoding: .utf8)
+        // The server's Live Activity payloads are built in transport.go: the
+        // PostgreSQL authority's port replaced `main`'s apns.go with it and
+        // the shared `internal/apns` client.
+        let apns = try String(contentsOf: Self.repository.appending(path: "Server/internal/liveactivity/transport.go"), encoding: .utf8)
         let catalogData = try Data(contentsOf: Self.repository.appending(path: "Apps/SharedIntents/Localizable.xcstrings"))
         let catalog = try #require(try JSONSerialization.jsonObject(with: catalogData) as? [String: Any])
         let strings = try #require(catalog["strings"] as? [String: Any])

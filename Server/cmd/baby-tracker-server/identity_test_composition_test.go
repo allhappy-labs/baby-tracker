@@ -4,8 +4,6 @@ package main
 
 import (
 	"bytes"
-	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -13,8 +11,8 @@ import (
 	"testing"
 
 	"babytracker/server/internal/config"
-	"babytracker/server/internal/family"
 	"babytracker/server/internal/identity"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestIdentityTestCompositionSignsOnlyThroughCompileTimeHandler(t *testing.T) {
@@ -46,23 +44,17 @@ func TestIdentityTestHostedAdapterRequiresHostedModeAndExplicitFlag(t *testing.T
 	if identityTestHostedAdapterEnabled(selfHosted) {
 		t.Fatal("identitytest adapter enabled in self-hosted mode")
 	}
-	if deliveryQueueHosted(selfHosted.Mode) || composeSecurityFamilySettings(selfHosted).requireEntitlement {
-		t.Fatal("identitytest changed self-hosted delivery or entitlement semantics")
-	}
-	if _, ok := familyServiceOptions(selfHosted, nil, nil).Entitlements.(family.SelfHostedEntitlementPolicy); !ok {
-		t.Fatalf("self-host entitlement policy=%T", familyServiceOptions(selfHosted, nil, nil).Entitlements)
+	if requireFamilySyncEntitlement(selfHosted.Mode) || authorityOptions(selfHosted, &pgxpool.Pool{}).RequireFamilySyncEntitlement {
+		t.Fatal("identitytest changed self-hosted entitlement semantics")
 	}
 
 	t.Setenv(identityTestHostedAdapterEnv, "")
-	hosted := config.Config{Mode: config.ModeHosted, LedgerHeadDir: t.TempDir()}
+	hosted := config.Config{Mode: config.ModeHosted, AppleAudience: "com.example.protocol"}
 	if identityTestHostedAdapterEnabled(hosted) {
 		t.Fatal("identitytest adapter enabled without explicit flag")
 	}
-	if !deliveryQueueHosted(hosted.Mode) || !composeSecurityFamilySettings(hosted).requireEntitlement {
-		t.Fatal("hosted delivery or entitlement semantics were disabled")
-	}
-	if _, ok := familyServiceOptions(hosted, nil, nil).Entitlements.(family.HostedEntitlementPolicy); !ok {
-		t.Fatalf("hosted entitlement policy=%T", familyServiceOptions(hosted, nil, nil).Entitlements)
+	if !requireFamilySyncEntitlement(hosted.Mode) || !authorityOptions(hosted, &pgxpool.Pool{}).RequireFamilySyncEntitlement {
+		t.Fatal("hosted entitlement semantics were disabled")
 	}
 
 	t.Setenv(identityTestHostedAdapterEnv, "1")
@@ -72,54 +64,19 @@ func TestIdentityTestHostedAdapterRequiresHostedModeAndExplicitFlag(t *testing.T
 	if _, err := newConfiguredIdentityVerifier(config.Config{AppleAudience: "com.example.protocol"}); err != nil {
 		t.Fatal(err)
 	}
-	options := sessionServiceOptions(hosted, nil, nil, nil, nil)
+	options := sessionServiceOptions(hosted, nil, nil, nil)
 	enabled, err := configureIdentityTestHostedAuth(hosted, &options)
-	if err != nil || !enabled || options.Apple == nil || options.Credentials == nil {
-		t.Fatalf("hosted test adapter enabled=%t apple=%T credentials=%T err=%v", enabled, options.Apple, options.Credentials, err)
+	if err != nil || !enabled || options.Apple == nil {
+		t.Fatalf("hosted test adapter enabled=%t apple=%T err=%v", enabled, options.Apple, err)
 	}
-}
-
-func TestIdentityTestHostedCredentialStatePersistsAcrossAdapterRestart(t *testing.T) {
-	t.Setenv(identityTestHostedAdapterEnv, "1")
-	cfg := config.Config{Mode: config.ModeHosted, AppleAudience: "com.example.protocol", LedgerHeadDir: t.TempDir()}
-	cfg.Auth.DeviceContinuityKeys.Current.Secret[0] = 1
-	if _, err := newConfiguredIdentityVerifier(cfg); err != nil {
-		t.Fatal(err)
+	// The exchanger proves the expected identity with the expected nonce;
+	// its Apple refresh token is never persisted (Phase 1 hosted ruling).
+	tokens, err := options.Apple.ExchangeCode(t.Context(), identity.AppleCodeExchangeRequest{AuthorizationCode: "code",
+		ExpectedIdentity: identity.VerifiedIdentity{Subject: "owner"}, ExpectedNonce: strings.Repeat("b", 64)})
+	if err != nil || tokens.IdentityToken == "" {
+		t.Fatalf("identitytest exchange: %+v %v", tokens, err)
 	}
-	first := sessionServiceOptions(cfg, nil, nil, nil, nil)
-	if enabled, err := configureIdentityTestHostedAuth(cfg, &first); err != nil || !enabled {
-		t.Fatalf("first adapter enabled=%t err=%v", enabled, err)
-	}
-	binding, err := identity.NewAppleCredentialBinding("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa")
-	if err != nil {
-		t.Fatal(err)
-	}
-	promotion, err := first.Credentials.RotateForSession(t.Context(), binding,
-		"70000000-0000-4000-8000-000000000001", "70000000-0000-4000-8000-000000000101", func(context.Context) (identity.AppleTokens, error) {
-			return identity.AppleTokens{IdentityToken: "signed", RefreshToken: "durable-refresh"}, nil
-		})
-	if err != nil {
-		t.Fatal(err)
-	}
-	hash := sha256.Sum256([]byte("accepted-command"))
-	promotion, err = first.Credentials.PreparePromotionCAS(t.Context(), binding, promotion, hash)
-	if err != nil {
-		t.Fatal(err)
-	}
-	adoption, err := first.Credentials.ConfirmPromotion(t.Context(), promotion)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = first.Credentials.FinishAdoption(t.Context(), binding, adoption); err != nil {
-		t.Fatal(err)
-	}
-
-	second := sessionServiceOptions(cfg, nil, nil, nil, nil)
-	if enabled, err := configureIdentityTestHostedAuth(cfg, &second); err != nil || !enabled {
-		t.Fatalf("restarted adapter enabled=%t err=%v", enabled, err)
-	}
-	resume, err := second.Credentials.Resume(t.Context(), binding)
-	if err != nil || resume.State.Phase != identity.CredentialPhaseReady || !resume.State.HasCurrent || resume.State.HasPending {
-		t.Fatalf("restarted credential state=%+v err=%v", resume.State, err)
+	if _, err := options.Apple.ExchangeCode(t.Context(), identity.AppleCodeExchangeRequest{}); err == nil {
+		t.Fatal("identitytest exchanger accepted an empty authorization code")
 	}
 }

@@ -483,8 +483,22 @@ struct APNsRecorder {
         guard (response as? HTTPURLResponse)?.statusCode == 200 else {
             throw E2EFailure("APNs recorder unavailable: \(String(decoding: data, as: UTF8.self))")
         }
-        struct Envelope: Decodable { let requests: [PushedRequest] }
-        return try JSONDecoder().decode(Envelope.self, from: data).requests
+        // Server difference (PostgreSQL authority port, Phase 4 Task 25): the
+        // server has one APNs client, and its recorder takes background wake
+        // pushes (`push-token-v1`, BackgroundWakePushE2ETests) as well as
+        // Live Activity pushes, keeping each record's apns-push-type. main's
+        // recorder held Live Activity pushes only. This test reads the
+        // liveactivity records; a wake's content-available-only payload has
+        // no event or content-state for `PushedRequest` to decode.
+        struct Envelope: Decodable { let requests: [LiveActivityRecord] }
+        struct LiveActivityRecord: Decodable {
+            let request: PushedRequest?
+            init(from decoder: any Decoder) throws {
+                struct PushType: Decodable { let headers: [String: String] }
+                request = try PushType(from: decoder).headers["apns-push-type"] == "liveactivity" ? PushedRequest(from: decoder) : nil
+            }
+        }
+        return try JSONDecoder().decode(Envelope.self, from: data).requests.compactMap(\.request)
     }
 
     /// The first request after `sequence` that matches, waiting for the worker.

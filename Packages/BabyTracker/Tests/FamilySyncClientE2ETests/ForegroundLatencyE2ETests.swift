@@ -17,13 +17,17 @@ struct ForegroundLatencyE2ETests {
         guard ForegroundFixture.enabled else { return }
         let fixture = try ForegroundFixture()
         do {
+            if CapacityTestRoute.enabled { try await fixture.capacityTransportControls() }
             try await fixture.seedIsolationFamily()
             try await fixture.start()
+            if CapacityTestRoute.enabled { emitForegroundLine("foreground-latency proof: capacity HTTP native-WSS trust and cancellation controls complete") }
             let owner = fixture.owner, peer = fixture.peer
             let versions = try fixture.versions()
             _ = try await measureForegroundSaveToPeer(owner: owner, peer: peer, samples: 3)
+            if CapacityTestRoute.enabled { try await Task.sleep(for: .seconds(30)) }
             let report = try await measureForegroundSaveToPeer(owner: owner, peer: peer, samples: 200)
             report.emit("healthy", expected: 200)
+            emitForegroundLine("foreground-latency phase: measurement ended")
             try #require(report.pairs.count == 200, "healthy observation budget exhausted")
             try #require(report.durableP95 < 1 && report.observableP95 < 1, "healthy foreground latency exceeds one second")
             try #require(try fixture.versions() == versions, "healthy measurement renewed credentials")
@@ -33,7 +37,30 @@ struct ForegroundLatencyE2ETests {
             try await fixture.verifyIsolationFamily()
             try #require(owner.traffic.liveDials.count == 1 && peer.traffic.liveDials.count == 1)
             try await fixture.finish()
-            print("foreground-latency proof: healthy complete")
+            emitForegroundLine("foreground-latency proof: healthy complete")
+        } catch { emitFailure(error); try? await fixture.finish(); throw error }
+    }
+
+    @Test func capacityLifecycleDiagnostic() async throws {
+        guard CapacityTestRoute.enabled else { return }
+        let fixture = try ForegroundFixture()
+        do {
+            try await fixture.capacityTransportControls()
+            try await fixture.seedIsolationFamily()
+            try await fixture.start()
+            emitForegroundLine("foreground-latency proof: capacity HTTP native-WSS trust and cancellation controls complete")
+            let report = try await measureForegroundSaveToPeer(owner: fixture.owner, peer: fixture.peer, samples: 3)
+            report.emit("capacity_lifecycle", expected: 3)
+            emitForegroundLine("foreground-latency phase: measurement ended")
+            try #require(report.pairs.count == 3)
+            // Cross the production 30-second native ping interval before
+            // stopping. This remains a three-pair lifecycle control only.
+            emitForegroundLine("foreground-latency phase: native ping dwell begin")
+            try await Task.sleep(for: .seconds(35))
+            emitForegroundLine("foreground-latency phase: native ping dwell end")
+            try await fixture.verifyIsolationFamily()
+            try await fixture.finish()
+            emitForegroundLine("foreground-latency proof: capacity lifecycle complete")
         } catch { emitFailure(error); try? await fixture.finish(); throw error }
     }
 
@@ -70,7 +97,7 @@ struct ForegroundLatencyE2ETests {
             fixture.owner.model.localWriteHappened()
             triggerProbe.stop()
             try await fixture.finish()
-            print("foreground-latency proof: negative complete")
+            emitForegroundLine("foreground-latency proof: negative complete")
         } catch { emitFailure(error); try? await fixture.finish(); throw error }
     }
 
@@ -142,10 +169,10 @@ struct ForegroundLatencyE2ETests {
             try await Task.sleep(for: .milliseconds(1100))
             try #require(signedOut.completed == nil && fixture.owner.traffic.syncRequests == requests)
             signedOut.stop()
-            print("foreground-latency proof: signed-out owner refused")
-            print("foreground-latency limits: background_execution=unmeasured snapshot_import=setup_only rendered_ui=unmeasured physical_device=unmeasured")
+            emitForegroundLine("foreground-latency proof: signed-out owner refused")
+            emitForegroundLine("foreground-latency limits: background_execution=unmeasured snapshot_import=setup_only rendered_ui=unmeasured physical_device=unmeasured")
             try await fixture.finish()
-            print("foreground-latency proof: recovery complete")
+            emitForegroundLine("foreground-latency proof: recovery complete")
         } catch { emitFailure(error); try? await fixture.finish(); throw error }
     }
 }
@@ -161,14 +188,14 @@ struct ForegroundLatencyReport {
             let row: [String: Any] = ["distribution": distribution, "ordinal": index + 1,
                 "durable_seconds": pair.durable, "observable_seconds": pair.observable, "publication_seconds": pair.publication]
             let data = try! JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
-            print("foreground-latency pair: " + String(decoding: data, as: UTF8.self))
+            emitForegroundLine("foreground-latency pair: " + String(decoding: data, as: UTF8.self))
         }
         let row: [String: Any] = ["distribution": distribution, "count": pairs.count, "expected": expected,
             "elapsed_seconds": elapsed, "durable_p50_seconds": percentile(pairs.map(\.durable), 0.5),
             "durable_p95_seconds": durableP95, "durable_p99_seconds": percentile(pairs.map(\.durable), 0.99),
             "observable_p95_seconds": observableP95, "publication_p95_seconds": percentile(pairs.map(\.publication), 0.95)]
         let data = try! JSONSerialization.data(withJSONObject: row, options: [.sortedKeys])
-        print("foreground-latency sample: " + String(decoding: data, as: UTF8.self))
+        emitForegroundLine("foreground-latency sample: " + String(decoding: data, as: UTF8.self))
     }
 }
 
@@ -178,7 +205,7 @@ private func percentile(_ values: [Double], _ fraction: Double) -> Double {
 }
 private func secondsSince(_ start: UInt64) -> Double { Double(DispatchTime.now().uptimeNanoseconds - start) / 1e9 }
 private func emitDuration(_ distribution: String, since start: UInt64) {
-    print("foreground-latency timing: distribution=\(distribution) elapsed_seconds=\(secondsSince(start))")
+    emitForegroundLine("foreground-latency timing: distribution=\(distribution) elapsed_seconds=\(secondsSince(start))")
 }
 
 @MainActor
@@ -314,7 +341,7 @@ private final class ForegroundDiagnostics: SyncDiagnosticSink, @unchecked Sendab
                 requests.append(Double(at - start) / 1e9)
             }
         }
-        print("foreground-latency http: scope=fixture failures=\(failures) role=\(role) count=\(requests.count) p95_seconds=\(percentile(requests, 0.95)) events=\(values.count)")
+        emitForegroundLine("foreground-latency http: scope=fixture failures=\(failures) role=\(role) count=\(requests.count) p95_seconds=\(percentile(requests, 0.95)) events=\(values.count)")
     }
 }
 @MainActor private final class RecoveryCounter { var count = 0 }
@@ -336,6 +363,7 @@ private final class ForegroundFixture {
     let clock: TestDateProvider
     var isolationPhone: Phone?
     var isolationRecord: UUID?
+    var isolationBaseline: [UUID]?
     var finished = false
 
     init(peerHints: Bool = true, pollOverride: Duration? = nil) throws {
@@ -347,7 +375,7 @@ private final class ForegroundFixture {
         let instance = try #require(env["BABY_TRACKER_E2E_INSTANCE"].flatMap(UUID.init(uuidString:)))
         let raw = try #require(JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath: statePath))) as? [String: Any])
         var bundles: [String: SessionBundle] = [:], sessions: [String: Data] = [:]
-        for name in ["Owner", "Caregiver"] {
+        for name in (CapacityTestRoute.enabled ? ["Owner", "Caregiver", "Isolation"] : ["Owner", "Caregiver"]) {
             let data = try JSONSerialization.data(withJSONObject: #require(raw[name]))
             bundles[name] = try JSONDecoder().decode(WireSessionBundle.self, from: data).value
             sessions[name] = data
@@ -385,10 +413,45 @@ private final class ForegroundFixture {
             phone.foregroundBridge = ForegroundObservationBridge(phone)
         }
     }
+    func capacityTransportControls() async throws {
+        let (_, response) = try await live.session.data(from: URL(string: "https://sync.example.test/healthz")!)
+        try #require((response as? HTTPURLResponse)?.statusCode == 200)
+        let bad = URLSession(configuration: live.configuration, delegate: PinnedCertificateDelegate(pinning: Data(), strictHostname: "sync.example.test"), delegateQueue: nil)
+        defer { bad.invalidateAndCancel() }
+        do { _ = try await bad.data(from: URL(string: "https://sync.example.test/healthz")!); throw E2EFailure("invalid pin accepted") }
+        catch is URLError { }
+        do { _ = try await live.session.data(from: URL(string: "https://wrong.example.test/healthz")!); throw E2EFailure("wrong target accepted") }
+        catch is URLError { }
+        let socket = bad.webSocketTask(with: URL(string: "wss://sync.example.test/v1/live")!)
+        socket.resume()
+        do { _ = try await socket.receive(); throw E2EFailure("invalid WebSocket pin accepted") }
+        catch is URLError { }
+        socket.cancel(with: .goingAway, reason: nil)
+        // The actual authenticated native WSS path is asserted by start().
+        emitForegroundLine("foreground-latency proof: capacity negative trust and target controls complete")
+    }
     func seedIsolationFamily() async throws {
         let phone = try Phone(name: "isolation", live: live, clock: clock, directory: scratch,
             appleSubject: UUID().uuidString.lowercased(), pollOverride: nil, liveHintsEnabled: false)
         isolationPhone = phone
+        if CapacityTestRoute.enabled {
+            let bundle = try live.bootstrapSession("Isolation")
+            let key = FamilySessionKey(canonicalOrigin: live.endpoint.origin.canonicalString, serverInstanceID: live.endpoint.serverInstanceID,
+                familyID: try #require(bundle.familyID), accountID: bundle.accountID, deviceID: bundle.deviceID, recoveryEpoch: bundle.recoveryEpoch)
+            let credentials = try SessionCredentials(accessToken: bundle.accessToken, refreshToken: bundle.refreshToken,
+                expiresAt: bundle.expiresAt, recoveryEpoch: bundle.recoveryEpoch,
+                deviceContinuity: DeviceContinuity(deviceID: bundle.deviceID, credential: #require(bundle.deviceCredential)))
+            let keychain = KeychainSessionStore(backend: phone.keychain)
+            try phone.store.markAccountSignedIn(key.accountSessionKey.leaseKey, credentialVersion: credentials.credentialVersion) {
+                try keychain.saveFamily(credentials, for: key)
+                try keychain.saveDeviceContinuity(DeviceContinuityBinding(accountID: key.accountID, continuity: credentials.deviceContinuity), for: key.accountSessionKey.continuityKey)
+            }
+            FamilySessionRecordStore.save(FamilySessionRecord(endpoint: live.endpoint, familyKey: key), to: phone.defaults)
+            phone.model.restoreSession()
+            try await phone.engine().activateAsJoiner()
+            isolationBaseline = try phone.history().diapers.map(\.id).sorted { $0.uuidString < $1.uuidString }
+            return
+        }
         let baby = try phone.store.addBaby(name: "Synthetic control", birthDate: clock.now.addingTimeInterval(-86400), referenceSex: .girls, expectedDueDate: nil)
         isolationRecord = try phone.store.logDiaper(.wet, for: baby.id).id
         _ = try await phone.signIn(displayName: "Synthetic control", live: live)
@@ -397,7 +460,21 @@ private final class ForegroundFixture {
         try #require(phone.traffic.liveDials.isEmpty)
     }
     func verifyIsolationFamily() async throws {
-        let control = try #require(isolationPhone), id = try #require(isolationRecord)
+        let control = try #require(isolationPhone)
+        if let isolationBaseline {
+            try await control.sync()
+            try #require(try control.history().diapers.map(\.id).sorted { $0.uuidString < $1.uuidString } == isolationBaseline)
+            try #require(try control.familyKey().familyID != owner.familyKey().familyID)
+            let controlBabies = try control.history().babies.map(\.id)
+            for phone in [owner, peer] {
+                try #require(try phone.history().babies.count == 1)
+                try #require(try Set(phone.history().babies.map(\.id)).isDisjoint(with: controlBabies))
+            }
+            try #require(control.traffic.liveDials.isEmpty)
+            emitForegroundLine("foreground-latency proof: isolation families=2 measured_sockets=2 cross_family_records=0")
+            return
+        }
+        let id = try #require(isolationRecord)
         try await control.sync()
         try #require(try control.history().diapers.map(\.id) == [id])
         try #require(try control.familyKey().familyID != owner.familyKey().familyID)
@@ -406,17 +483,17 @@ private final class ForegroundFixture {
             try #require(try phone.history().babies.count == 1)
         }
         try #require(control.traffic.liveDials.isEmpty)
-        print("foreground-latency proof: isolation families=2 measured_sockets=2 cross_family_records=0")
+        emitForegroundLine("foreground-latency proof: isolation families=2 measured_sockets=2 cross_family_records=0")
     }
     func start() async throws {
-        print("foreground-latency setup: start")
+        emitForegroundLine("foreground-latency setup: start")
         let setup = DispatchTime.now().uptimeNanoseconds
         // The first case takes a genuine snapshot; later serialized cases
         // reopen the same disk stores and current credentials. This works in
         // any case order and respects the two-active-snapshots/account quota.
         let needsSnapshot = try owner.store.syncCursor(in: owner.familyKey().realmID) == nil
         try await owner.engine().activateAsJoiner()
-        print("foreground-latency setup: owner snapshot complete")
+        emitForegroundLine("foreground-latency setup: owner snapshot complete")
         try await peer.engine().activateAsJoiner()
         emitDuration(needsSnapshot ? "initial_snapshot" : "existing_store_activation", since: setup)
         let dial = DispatchTime.now().uptimeNanoseconds
@@ -448,17 +525,23 @@ private final class ForegroundFixture {
         for (name, phone) in [("Owner", owner), ("Caregiver", peer)] {
             if let key = try? phone.familyKey(), let credentials = try? phone.credentials(key) { Self.latest[name] = credentials }
             phone.foregroundBridge?.stopped = true
+            emitForegroundLine("foreground-latency phase: stop \(name) begin")
             await phone.model.engine?.stop()
+            emitForegroundLine("foreground-latency phase: stop \(name) end")
             phone.session.invalidateAndCancel()
             phone.forgetDefaults()
         }
         if let isolationPhone {
+            emitForegroundLine("foreground-latency phase: stop isolation begin")
             await isolationPhone.model.engine?.stop()
+            emitForegroundLine("foreground-latency phase: stop isolation end")
             isolationPhone.session.invalidateAndCancel(); isolationPhone.forgetDefaults()
         }
+        emitForegroundLine("foreground-latency phase: stores cleanup begin")
         ownerDiagnostics.emit("owner"); peerDiagnostics.emit("peer")
         Self.finishedCases += 1
-        if Self.finishedCases == 3 { try FileManager.default.removeItem(at: scratch) }
+        if CapacityTestRoute.enabled || Self.finishedCases == 3 { try FileManager.default.removeItem(at: scratch) }
+        emitForegroundLine("foreground-latency phase: stores cleanup end")
     }
 }
 
@@ -474,14 +557,14 @@ private func waitFor(seconds: Double, _ condition: () -> Bool) async throws {
 // Only bounded error kinds/codes survive disposable log redaction.
 private func emitFailure(_ error: any Error) {
     if let code = error as? SyncErrorCode {
-        print("foreground-latency failure: sync_code=\(code.rawValue)")
+        emitForegroundLine("foreground-latency failure: sync_code=\(code.rawValue)")
     } else if error is CredentialBoundAuthFailure {
-        print("foreground-latency failure: credential_bound_auth")
+        emitForegroundLine("foreground-latency failure: credential_bound_auth")
     } else if error is DecodingError {
-        print("foreground-latency failure: decoding")
+        emitForegroundLine("foreground-latency failure: decoding")
     } else if error is E2EFailure {
-        print("foreground-latency failure: bounded_wait_or_fixture")
+        emitForegroundLine("foreground-latency failure: bounded_wait_or_fixture")
     } else {
-        print("foreground-latency failure: assertion_or_store")
+        emitForegroundLine("foreground-latency failure: assertion_or_store")
     }
 }

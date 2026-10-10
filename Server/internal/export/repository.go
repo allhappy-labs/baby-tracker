@@ -8,8 +8,8 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/records"
 	"github.com/jackc/pgx/v5"
 )
 
@@ -24,7 +24,23 @@ func (sink dbChunkSink) Put(ctx context.Context, c Chunk) error {
 	return err
 }
 
-func collectArchive(ctx context.Context, tx pgx.Tx, grant access.Grant, identity protocol.ServerInfo, now time.Time) (ArchiveV1, error) {
+// auditPager reads one page of a family's audit chain
+// (authority.Service.FamilyAuditPage).
+type auditPager func(ctx context.Context, familyID string, afterSeq, throughSeq uint64, limit int) ([]authority.AuditEntry, error)
+
+// careSource is where the archive's care data comes from: every entity of
+// the family (tombstones included), and the change list through a sequence.
+// Both read tx, the archive's one snapshot.
+type careSource interface {
+	entities(ctx context.Context, tx pgx.Tx, familyID string, visit func(protocol.CanonicalEntity) error) error
+	journal(ctx context.Context, tx pgx.Tx, familyID string, through uint64, identity protocol.ServerInfo, visit func(protocol.JournalChange) error) error
+}
+
+// collectArchive reads the family archive: care data from tx through
+// source, a read-only snapshot under the requester's tenant context, and the
+// audit section through audit, up to grant.Revision.
+func collectArchive(ctx context.Context, tx pgx.Tx, grant access.Grant, identity protocol.ServerInfo, now time.Time, audit auditPager,
+	source careSource) (ArchiveV1, error) {
 	// Keep the temporary typed snapshot bounded even before EncodeArchive
 	// applies its exact 50 MiB wire cap. Each retained item is charged at its
 	// JSON size plus array punctuation.
@@ -74,7 +90,7 @@ func collectArchive(ctx context.Context, tx pgx.Tx, grant access.Grant, identity
 	if err != nil {
 		return a, err
 	}
-	if err := records.NewRepository().StreamCanonical(ctx, tx, grant.FamilyID, func(e protocol.CanonicalEntity) error {
+	if err := source.entities(ctx, tx, grant.FamilyID, func(e protocol.CanonicalEntity) error {
 		if err := charge(e); err != nil {
 			return err
 		}
@@ -105,68 +121,43 @@ func collectArchive(ctx context.Context, tx pgx.Tx, grant access.Grant, identity
 	}); err != nil {
 		return a, err
 	}
-	rows, err = tx.Query(ctx, `SELECT sequence,entity_kind,entity_id::text,entity_version,actor_account_id::text,device_id::text,operation,
-		canonical_entity,accepted_at FROM public.mutation_journal WHERE family_id=$1 AND sequence<=$2 ORDER BY sequence`, grant.FamilyID, high)
-	if err != nil {
-		return a, err
-	}
-	for rows.Next() {
-		var j protocol.JournalChange
-		var raw []byte
-		var accepted time.Time
-		if err := rows.Scan(&j.Cursor.Sequence, &j.EntityKind, &j.EntityID, &j.EntityVersion, &j.ActorAccountID, &j.DeviceID, &j.Operation, &raw, &accepted); err != nil {
-			rows.Close()
-			return a, err
-		}
-		j.Cursor.ServerInstanceID = identity.InstanceID
-		j.Cursor.RecoveryEpoch = identity.RecoveryEpoch
-		j.Cursor.FamilyID = grant.FamilyID
-		j.AcceptedAt = accepted.UTC().Truncate(time.Microsecond).Format("2006-01-02T15:04:05.000000Z")
-		if err := json.Unmarshal(raw, &j.SnapshotOrTombstone); err != nil {
-			rows.Close()
-			return a, err
-		}
+	if err := source.journal(ctx, tx, grant.FamilyID, high, identity, func(j protocol.JournalChange) error {
 		if err := charge(j); err != nil {
-			rows.Close()
-			return a, err
+			return err
 		}
 		a.Journal = append(a.Journal, j)
 		if len(a.Journal) > 250000 {
-			rows.Close()
-			return a, ErrTooLarge
+			return ErrTooLarge
 		}
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
+		return nil
+	}); err != nil {
 		return a, err
 	}
-	rows, err = tx.Query(ctx, `SELECT revision,kind,actor_account_id::text,at FROM app.export_family_audit($1)`, grant.FamilyID)
-	if err != nil {
-		return a, err
-	}
-	for rows.Next() {
-		var item ArchiveAudit
-		if err := rows.Scan(&item.Revision, &item.Kind, &item.ActorAccountID, &item.At); err != nil {
-			rows.Close()
-			return a, err
-		}
-		at, err := time.Parse(time.RFC3339Nano, item.At)
+	// The audit section is the family's own chain through the revision the
+	// snapshot saw (grant.Revision, families.audit_seq), read page by page in
+	// authority transactions: audit rows are authority-only under RLS, and
+	// they are append-only, so rows at or below that seq are the ones the
+	// snapshot's family state follows from.
+	for after := uint64(0); after < grant.Revision; {
+		page, err := audit(ctx, grant.FamilyID, after, grant.Revision, authority.MaxAuditPageRows)
 		if err != nil {
-			rows.Close()
 			return a, err
 		}
-		item.At = at.UTC().Truncate(time.Microsecond).Format("2006-01-02T15:04:05.000000Z")
-		if err := charge(item); err != nil {
-			rows.Close()
-			return a, err
+		for _, entry := range page {
+			if entry.Seq <= after || entry.Seq > grant.Revision {
+				return a, fmt.Errorf("export audit page out of order: %w", ErrUnavailable)
+			}
+			after = entry.Seq
+			item := ArchiveAudit{Revision: entry.Seq, Kind: entry.Kind, ActorAccountID: entry.ActorAccountID,
+				At: entry.At.UTC().Truncate(time.Microsecond).Format("2006-01-02T15:04:05.000000Z")}
+			if err := charge(item); err != nil {
+				return a, err
+			}
+			a.Audit = append(a.Audit, item)
 		}
-		a.Audit = append(a.Audit, item)
-	}
-	err = rows.Err()
-	rows.Close()
-	if err != nil {
-		return a, err
+		if len(page) < authority.MaxAuditPageRows {
+			break
+		}
 	}
 	if len(a.Members) == 0 {
 		return a, errors.New("export membership projection missing")

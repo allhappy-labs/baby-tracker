@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
+	core "babytracker/server/internal/authority"
 	"babytracker/server/internal/operator"
-	"babytracker/server/internal/security"
 )
 
 const (
@@ -28,7 +28,7 @@ type fakeAuthority struct {
 
 type fakeReceipt struct {
 	key    operator.ReceiptKey
-	result security.CommandResult
+	result core.Result
 }
 
 type expiringAuthority struct {
@@ -39,18 +39,18 @@ type expiringAuthority struct {
 	now     func() time.Time
 }
 
-func (authority *expiringAuthority) RecoverOwner(ctx context.Context, command operator.RecoveryCommand) (security.CommandResult, error) {
+func (authority *expiringAuthority) RecoverOwner(ctx context.Context, command operator.RecoveryCommand) (core.Result, error) {
 	authority.seen <- command.ConfirmationExpiresAt
 	close(authority.entered)
 	select {
 	case <-authority.release:
 	case <-ctx.Done():
-		return security.CommandResult{}, ctx.Err()
+		return core.Result{}, ctx.Err()
 	}
 	// This comparison represents the lifecycle adapter's trusted clock check
 	// while it owns the exclusive authority fence.
 	if !authority.now().Before(command.ConfirmationExpiresAt) {
-		return security.CommandResult{}, operator.ErrInvalidConfirmation
+		return core.Result{}, operator.ErrInvalidConfirmation
 	}
 	return authority.fakeAuthority.RecoverOwner(ctx, command)
 }
@@ -65,43 +65,43 @@ func (authority *fakeAuthority) PreflightEntitlement(context.Context, operator.E
 	return nil
 }
 
-func (authority *fakeAuthority) ReplayRecovery(_ context.Context, command operator.RecoveryCommand) (security.CommandResult, bool, error) {
+func (authority *fakeAuthority) ReplayRecovery(_ context.Context, command operator.RecoveryCommand) (core.Result, bool, error) {
 	return authority.replay(command.Receipt)
 }
 
-func (authority *fakeAuthority) ReplayEntitlement(_ context.Context, command operator.EntitlementCommand) (security.CommandResult, bool, error) {
+func (authority *fakeAuthority) ReplayEntitlement(_ context.Context, command operator.EntitlementCommand) (core.Result, bool, error) {
 	return authority.replay(command.Receipt)
 }
 
-func (authority *fakeAuthority) replay(key operator.ReceiptKey) (security.CommandResult, bool, error) {
+func (authority *fakeAuthority) replay(key operator.ReceiptKey) (core.Result, bool, error) {
 	receipt, ok := authority.receipts[key.CommandID]
 	if !ok {
-		return security.CommandResult{}, false, nil
+		return core.Result{}, false, nil
 	}
 	if receipt.key != key {
-		return security.CommandResult{}, false, operator.ErrCommandIDReused
+		return core.Result{}, false, operator.ErrCommandIDReused
 	}
 	return receipt.result, true, nil
 }
 
-func (authority *fakeAuthority) RecoverOwner(_ context.Context, command operator.RecoveryCommand) (security.CommandResult, error) {
+func (authority *fakeAuthority) RecoverOwner(_ context.Context, command operator.RecoveryCommand) (core.Result, error) {
 	authority.recoveryCommands = append(authority.recoveryCommands, command)
-	result := security.CommandResult{CommandID: command.Proposal.CommandID, Outcome: "committed", Code: "ok", Revision: command.Proposal.ExpectedRevision + 1}
+	result := core.Result{CommandID: command.Proposal.CommandID, Outcome: "committed", Code: "ok", Revision: command.Proposal.ExpectedRevision + 1}
 	authority.receipts[command.Proposal.CommandID] = fakeReceipt{key: command.Receipt, result: result}
 	return result, nil
 }
 
-func (authority *fakeAuthority) GrantEntitlement(_ context.Context, command operator.EntitlementCommand) (security.CommandResult, error) {
+func (authority *fakeAuthority) GrantEntitlement(_ context.Context, command operator.EntitlementCommand) (core.Result, error) {
 	return authority.commitEntitlement(command)
 }
 
-func (authority *fakeAuthority) SuspendEntitlement(_ context.Context, command operator.EntitlementCommand) (security.CommandResult, error) {
+func (authority *fakeAuthority) SuspendEntitlement(_ context.Context, command operator.EntitlementCommand) (core.Result, error) {
 	return authority.commitEntitlement(command)
 }
 
-func (authority *fakeAuthority) commitEntitlement(command operator.EntitlementCommand) (security.CommandResult, error) {
+func (authority *fakeAuthority) commitEntitlement(command operator.EntitlementCommand) (core.Result, error) {
 	authority.entitlementCommands = append(authority.entitlementCommands, command)
-	result := security.CommandResult{CommandID: command.Proposal.CommandID, Outcome: "committed", Code: "ok", Revision: command.Proposal.ExpectedRevision + 1}
+	result := core.Result{CommandID: command.Proposal.CommandID, Outcome: "committed", Code: "ok", Revision: command.Proposal.ExpectedRevision + 1}
 	authority.receipts[command.Proposal.CommandID] = fakeReceipt{key: command.Receipt, result: result}
 	return result, nil
 }

@@ -8,49 +8,40 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/account"
-	"babytracker/server/internal/family"
-	"babytracker/server/internal/security"
-	"babytracker/server/internal/testkit"
+	"babytracker/server/internal/authority"
 	"github.com/jackc/pgx/v5"
 )
 
-type familyResolver struct{ service *family.Service }
-
-func (r familyResolver) Current(ctx context.Context, p access.Principal) (string, error) {
-	v, e := r.service.Current(ctx, p)
-	return v.ID, e
-}
+// main's authorization tests on the authority snapshot. main's membership
+// revision is the session lineage (app.live_activity_authorized): a removal
+// revokes the member's sessions, and a rejoin starts a new lineage. The
+// guard's registration sweep is the worker's (Queue.SweepRegistrations).
 
 func TestLiveActivityAuthorityLifecycle(t *testing.T) {
 	for _, change := range []string{"refresh", "logout", "expiry", "removed_rejoined", "deleted", "viewer", "epoch"} {
 		t.Run(change, func(t *testing.T) {
-			h := testkit.New(t)
-			seedBaby(t, h)
-			service := NewService(h.Security, familyResolver{h.Family}, topic)
-			if _, err := service.RegisterDevice(t.Context(), h.Caregiver, deviceRequest()); err != nil {
+			h, _, reg := workerHarness(t)
+			workerBaby(t, h)
+			if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
 				t.Fatal(err)
 			}
-			q := NewQueue(h.LiveActivity)
-			claims, err := q.Claim(t.Context(), time.Now(), 10)
+			q := NewQueue(h.Maintenance)
+			claims, err := q.Claim(t.Context(), h.DatabaseNow(), 10)
 			if err != nil || len(claims) == 0 {
 				t.Fatalf("claim %d %v", len(claims), err)
-			}
-			guard, err := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
-			if err != nil {
-				t.Fatal(err)
 			}
 			subject := SubjectFromClaim(claims[0])
 			changed := false
 			check := func() error {
-				return guard.WithLiveActivitySnapshot(t.Context(), subject, func(tx pgx.Tx, g access.Grant) error {
-					if g.MembershipRevision == 0 {
-						t.Error("missing membership lifetime")
+				return h.Authority.WithLiveActivitySnapshot(t.Context(), subject, func(tx pgx.Tx, g access.Grant) error {
+					if g.Role == "" {
+						t.Error("missing member role")
 					}
 					if changed && change == "viewer" && access.RoleMayWrite(g.Role) {
 						t.Error("viewer gained writes")
 					}
 					var n int
-					return tx.QueryRow(t.Context(), `SELECT count(*) FROM babies WHERE family_id=$1`, h.FamilyID).Scan(&n)
+					return tx.QueryRow(t.Context(), `SELECT count(*) FROM care_entities WHERE family_id=$1 AND kind=1`, h.FamilyID).Scan(&n)
 				})
 			}
 			if err = check(); err != nil {
@@ -63,7 +54,9 @@ func TestLiveActivityAuthorityLifecycle(t *testing.T) {
 			case "logout":
 				_, err = h.Auth.Logout(t.Context(), h.Caregiver, h.CommandID())
 			case "expiry":
-				h.Now = h.Now.Add(400 * 24 * time.Hour)
+				// The registration's lineage deadline passes (the database
+				// clock decides; main moved its service clock).
+				tenantExec(t, h, h.Caregiver.AccountID, `UPDATE live_activity_devices SET authority_expires_at=clock_timestamp()-interval '1 second'`)
 			case "removed_rejoined":
 				_, err = h.Family.Remove(t.Context(), h.Owner, h.CommandID(), h.Caregiver.AccountID)
 				if err != nil {
@@ -79,14 +72,11 @@ func TestLiveActivityAuthorityLifecycle(t *testing.T) {
 				}
 				_, err = h.Family.Redeem(t.Context(), h.Caregiver, h.CommandID(), invite.Token, true)
 			case "deleted":
-				_, err = (&account.Service{Security: h.Security}).Delete(t.Context(), h.Caregiver, h.CommandID(), true)
-				if err != nil {
-					t.Fatal(err)
-				}
+				_, err = (&account.Service{Authority: h.Authority}).Delete(t.Context(), h.Caregiver, h.CommandID(), true)
 			case "viewer":
 				_, err = h.Family.ChangeRole(t.Context(), h.Owner, h.CommandID(), h.Caregiver.AccountID, "viewer")
 			case "epoch":
-				_, err = h.Migrator.Exec(t.Context(), `UPDATE server_state SET recovery_epoch=recovery_epoch+1`)
+				h.AuthorityExec(t, `UPDATE server_state SET recovery_epoch=recovery_epoch+1`)
 			}
 			if err != nil {
 				t.Fatal(err)
@@ -97,11 +87,16 @@ func TestLiveActivityAuthorityLifecycle(t *testing.T) {
 			if allowed && err != nil {
 				t.Fatalf("valid authority rejected: %v", err)
 			}
-			if !allowed && err == nil {
-				t.Fatal("stale authority accepted")
+			if !allowed && !errors.Is(err, authority.ErrLiveActivityAuthorizationChanged) {
+				t.Fatalf("stale authority accepted: %v", err)
 			}
 			if !allowed {
-				if _, err = guard.SweepLiveActivityRegistrations(t.Context()); err != nil {
+				// The worker's minute sweep (and, after an epoch change, the
+				// claim's own retirement of the old realm).
+				if _, err = q.SweepRegistrations(t.Context(), false); err != nil {
+					t.Fatal(err)
+				}
+				if _, err = q.Claim(t.Context(), h.DatabaseNow(), 10); err != nil {
 					t.Fatal(err)
 				}
 				if n := scalar(t, h, `SELECT count(*) FROM live_activity_registration_index WHERE NOT revoked`); n != 0 {
@@ -113,23 +108,18 @@ func TestLiveActivityAuthorityLifecycle(t *testing.T) {
 }
 
 func TestLiveActivitySnapshotLeaseAndRelease(t *testing.T) {
-	h := testkit.New(t)
-	seedBaby(t, h)
-	service := NewService(h.Security, familyResolver{h.Family}, topic)
-	if _, err := service.RegisterDevice(t.Context(), h.Owner, deviceRequest()); err != nil {
+	h, _, reg := workerHarness(t)
+	workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("owner"), deviceRequest()); err != nil {
 		t.Fatal(err)
 	}
-	claims, err := NewQueue(h.LiveActivity).Claim(t.Context(), time.Now(), 10)
+	claims, err := NewQueue(h.Maintenance).Claim(t.Context(), h.DatabaseNow(), 10)
 	if err != nil || len(claims) == 0 {
-		t.Fatal(err)
-	}
-	guard, err := security.NewLiveActivitySnapshotGuard(h.Security, h.Runtime)
-	if err != nil {
 		t.Fatal(err)
 	}
 	subject := SubjectFromClaim(claims[0])
 	var escaped pgx.Tx
-	if err = guard.WithLiveActivitySnapshot(t.Context(), subject, func(tx pgx.Tx, g access.Grant) error {
+	if err = h.Authority.WithLiveActivitySnapshot(t.Context(), subject, func(tx pgx.Tx, g access.Grant) error {
 		escaped = tx
 		var readonly string
 		if err := tx.QueryRow(t.Context(), `SHOW transaction_read_only`).Scan(&readonly); err != nil {
@@ -151,7 +141,7 @@ func TestLiveActivitySnapshotLeaseAndRelease(t *testing.T) {
 	if _, err = h.Family.ChangeRole(ctx, h.Owner, h.CommandID(), h.Caregiver.AccountID, "viewer"); err != nil {
 		t.Fatal(err)
 	}
-	for _, field := range []string{"lease", "version", "account", "device", "family", "baby", "kind", "dirty", "deadline", "session"} {
+	for _, field := range []string{"lease", "version", "account", "device", "family", "baby", "kind", "dirty", "deadline"} {
 		t.Run(field, func(t *testing.T) {
 			bad := subject
 			switch field {
@@ -177,10 +167,8 @@ func TestLiveActivitySnapshotLeaseAndRelease(t *testing.T) {
 				bad.DirtyVersion++
 			case "deadline":
 				bad.LeaseDeadline = bad.LeaseDeadline.Add(time.Second)
-			case "session":
-				bad.SessionID = h.Caregiver.SessionID
 			}
-			if err := guard.WithLiveActivitySnapshot(t.Context(), bad, func(pgx.Tx, access.Grant) error { t.Error("forged claim authorized"); return nil }); err == nil {
+			if err := h.Authority.WithLiveActivitySnapshot(t.Context(), bad, func(pgx.Tx, access.Grant) error { t.Error("forged claim authorized"); return nil }); err == nil {
 				t.Fatal("forged claim accepted")
 			}
 		})
@@ -188,7 +176,7 @@ func TestLiveActivitySnapshotLeaseAndRelease(t *testing.T) {
 	if _, err = h.Migrator.Exec(t.Context(), `UPDATE live_activity_delivery SET lease_deadline=clock_timestamp()-interval '1 second' WHERE job_id=$1`, subject.JobID); err != nil {
 		t.Fatal(err)
 	}
-	if err = guard.WithLiveActivitySnapshot(t.Context(), subject, func(pgx.Tx, access.Grant) error { t.Error("expired lease authorized"); return nil }); err == nil {
+	if err = h.Authority.WithLiveActivitySnapshot(t.Context(), subject, func(pgx.Tx, access.Grant) error { t.Error("expired lease authorized"); return nil }); err == nil {
 		t.Fatal("expired lease accepted")
 	}
 }

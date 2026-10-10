@@ -1,6 +1,7 @@
 import Foundation
 import Observation
 import SwiftData
+import UIKit
 import BabyCore
 import BabyStore
 import BabyUI
@@ -29,6 +30,10 @@ final class AppEnvironment {
     /// store to purge and to gate sync against, and there is no honest
     /// stand-in for one.
     private(set) var familyModel: FamilySettingsViewModel?
+    /// Where `AppDelegate` hands APNs callbacks. Only the production graph
+    /// has them; the UI-test families have no server to give a token to.
+    @ObservationIgnored private(set) var push: PushTokenRegistrar?
+    @ObservationIgnored private(set) var wake: BackgroundWakeHandler?
     /// Registers ActivityKit push tokens with the built-in server, from launch
     /// and without any UI. Nil for UI-test families and a store that would
     /// not open.
@@ -235,19 +240,37 @@ final class AppEnvironment {
         self.storeFailure = nil
         // The Keychain access group matches the App Group so the widget and
         // App Intents read one set of session items, not three.
-        let (familyModel, liveActivityPush) = Self.makeFamilyModel(store: store)
+        let (familyModel, graph) = Self.makeFamilyModel(store: store)
+        push = graph?.push
+        wake = graph?.wake
         familyModel.onAccountDeleted = { [askConversations] accountID in
             do { try askConversations.removeIdentity(.account(accountID)) }
             catch { AppLog.store.error("Ask account cleanup failed: \(error.localizedDescription, privacy: .private)") }
         }
-        // Local only — no request is made until `RootView` starts syncing,
-        // and a device with no family restores nothing.
+        // Local only. No request is made until `RootView` starts syncing, or
+        // a background push asks for its one pull. A device with no family
+        // restores nothing.
         familyModel.restoreSession()
         self.familyModel = familyModel
-        self.liveActivityPush = liveActivityPush
+        // A restored family asks APNs for the token now rather than at the
+        // first activation: it is the launch's fingerprint check that needs it.
+        if case .shared = familyModel.mode, push != nil {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+        #if DEBUG
+        // Registration on a simulator without a family, which never registers
+        // otherwise: SpringBoard asks apsd for a per-app token. It does not
+        // make `xcrun simctl push` reach the delegate. On iOS 26.5 the
+        // simulator delivers a content-available push as a background fetch,
+        // which UIKit never routes to `didReceiveRemoteNotification`.
+        if arguments.contains("-uiTestRegisterForPushes") {
+            UIApplication.shared.registerForRemoteNotifications()
+        }
+        #endif
+        self.liveActivityPush = graph?.liveActivityPush
         // After the restore, so the first evaluation sees the family session.
         // It probes the server and registers on its own; nothing here waits.
-        if let liveActivityPush {
+        if let liveActivityPush = graph?.liveActivityPush {
             Task { await liveActivityPush.launch() }
         }
         switch familyModel.mode {
@@ -325,14 +348,20 @@ final class AppEnvironment {
     /// The production graph — or, for a UI test that asks for it, a signed-in
     /// owner — or a signed-in caregiver with no family yet — whose family
     /// server lives in memory (`UITestFamily`).
-    private static func makeFamilyModel(store: BabyStore) -> (FamilySettingsViewModel, LiveActivityPushDriver?) {
+    ///
+    /// The graph comes back only for the production model: it alone registers
+    /// for pushes, background and Live Activity alike.
+    private static func makeFamilyModel(store: BabyStore) -> (FamilySettingsViewModel, FamilySyncComposition.Graph?) {
         #if DEBUG
         if UITestFamily.isHomeSyncNeedsSignInRequested { return (UITestFamily.makeHomeSyncNeedsSignIn(store: store), nil) }
         if UITestFamily.isRequested { return (UITestFamily.makeOwnerFamily(store: store), nil) }
         if UITestFamily.isNoFamilyRequested { return (UITestFamily.makeNoFamily(store: store), nil) }
         #endif
-        let graph = FamilySyncComposition.makeApp(store: store, keychainAccessGroup: BabySchema.appGroupID)
-        return (graph.model, graph.liveActivityPush)
+        let graph = FamilySyncComposition.makeGraph(
+            store: store, keychainAccessGroup: BabySchema.appGroupID,
+            registerForRemoteNotifications: { UIApplication.shared.registerForRemoteNotifications() }
+        )
+        return (graph.model, graph)
     }
 
     #if DEBUG

@@ -3,9 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
-	"errors"
+	"fmt"
 	"net"
 	"os"
 	"os/exec"
@@ -14,9 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"babytracker/server/internal/recovery"
-	"babytracker/server/internal/security"
-	"babytracker/server/internal/security/localstore"
+	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
+	"babytracker/server/internal/authority/authoritytest"
+	"babytracker/server/internal/testpg"
 )
 
 func TestCapabilitiesIsNonMutatingAndMachineReadable(t *testing.T) {
@@ -27,7 +26,7 @@ func TestCapabilitiesIsNonMutatingAndMachineReadable(t *testing.T) {
 	}, &output); err != nil {
 		t.Fatal(err)
 	}
-	if output.String() != "security-authority-v1\n" {
+	if output.String() != "postgres-authority-v1\n" {
 		t.Fatalf("capabilities=%q", output.String())
 	}
 }
@@ -67,7 +66,7 @@ func TestOperatorCompositionRejectsDirectSecretWithoutDisclosure(t *testing.T) {
 	}
 }
 
-func TestOperatorCompositionRejectsHostedModeBeforeOpeningLocalAuthority(t *testing.T) {
+func TestOperatorCompositionRejectsHostedModeBeforeOpeningTheDatabase(t *testing.T) {
 	fixture := loadOperatorCLIFixture(t)
 	directory := t.TempDir()
 	policy := writeAdminSecret(t, directory, "ownership-policy", "owner-policy-test-v1")
@@ -77,50 +76,14 @@ func TestOperatorCompositionRejectsHostedModeBeforeOpeningLocalAuthority(t *test
 		"BT_OPERATOR_ID":                       fixture.OperatorID,
 		"BT_OPERATOR_OWNERSHIP_POLICY_ID_FILE": policy,
 		"BT_OPERATOR_CONFIRMATION_KEY_FILE":    key,
-		// Deliberately unusable local paths: hosted mode must fail before any
-		// local authority store can be opened.
-		"BT_SECURITY_LEDGER_DIR": filepath.Join(directory, "missing-ledger"),
-		"BT_LEDGER_HEAD_DIR":     filepath.Join(directory, "missing-head"),
+		// Deliberately unusable: hosted mode must fail before any database
+		// is opened.
+		"BT_DATABASE_URL": "postgres://unused@127.0.0.1:1/unused",
 	}
 	_, _, err := loadOperatorCommands(t.Context(), func(name string) string { return values[name] }, fixture.Examples[0].PrepareArgs)
 	if err == nil || err.Error() != "hosted_adapter_unavailable" {
 		t.Fatalf("hosted operator composition error=%v", err)
 	}
-}
-
-func TestOperatorCommandsRequireRecoveryReconcileBeforeActivation(t *testing.T) {
-	fixture := loadOperatorCLIFixture(t)
-	service, _ := newOperatorCLIService(t, fixture)
-	reconcileFailure := errors.New("recovery reconcile failed")
-	gate := &fakeOperatorCommandGate{reconcileErr: reconcileFailure}
-	if commands, err := activateOperatorCommands(t.Context(), gate, service); !errors.Is(err, reconcileFailure) || commands != nil || gate.reconciles != 1 {
-		t.Fatalf("commands=%v reconciles=%d err=%v", commands, gate.reconciles, err)
-	}
-
-	gate = &fakeOperatorCommandGate{}
-	commands, err := activateOperatorCommands(t.Context(), gate, service)
-	if err != nil || commands == nil || gate.reconciles != 1 {
-		t.Fatalf("commands=%v reconciles=%d err=%v", commands, gate.reconciles, err)
-	}
-	if commands != service {
-		t.Fatal("activation replaced the typed operator service")
-	}
-}
-
-type fakeOperatorCommandGate struct {
-	reconciles, checks int
-	reconcileErr       error
-	checkErr           error
-}
-
-func (gate *fakeOperatorCommandGate) Reconcile(context.Context) error {
-	gate.reconciles++
-	return gate.reconcileErr
-}
-
-func (gate *fakeOperatorCommandGate) Check(context.Context) error {
-	gate.checks++
-	return gate.checkErr
 }
 
 func writeAdminSecret(t *testing.T, directory, name, value string) string {
@@ -135,435 +98,244 @@ func writeAdminSecret(t *testing.T, directory, name, value string) string {
 	return path
 }
 
-func TestSecurityInitAndEpochRotation(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(name string) string { return values[name] }
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	var output bytes.Buffer
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, getenv, &output); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), instance) || !strings.Contains(output.String(), "epoch=1") {
-		t.Fatalf("unsafe or incomplete init output: %q", output.String())
-	}
-	store, durable, err := openStores(getenv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	actorKey, err := recovery.LoadActorIDPepperFile(values["BT_ACTOR_ID_PEPPER_FILE"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := durable.ValidateActorIDKey(t.Context(), instance, actorKey); err != nil {
-		t.Fatalf("security init did not persist actor commitment: %v", err)
-	}
-	_ = store
-	output.Reset()
-	if err := run(t.Context(), []string{"recovery", "rotate-epoch", "--expected-epoch", "1", "--expected-revision", "0", "--reason-code", "database_restore", "--confirm-instance", instance}, getenv, &output); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "epoch=2") || !strings.Contains(output.String(), "result=rotated") {
-		t.Fatalf("rotation output: %q", output.String())
-	}
-	if err := run(t.Context(), []string{"recovery", "rotate-epoch", "--expected-epoch", "1", "--expected-revision", "0", "--reason-code", "database_restore", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("stale epoch rotation was accepted")
-	}
-}
-
-func TestSecurityInitPersistsActorCommitment(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(name string) string { return values[name] }
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	_, durable, err := openStores(getenv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	key, err := recovery.LoadActorIDPepperFile(values["BT_ACTOR_ID_PEPPER_FILE"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := durable.ValidateActorIDKey(t.Context(), instance, key); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestSecurityVerifyRequiresOriginalActorKeyAndSidecar(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(name string) string { return values[name] }
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); err != nil {
-		t.Fatalf("valid actor key failed verification: %v", err)
-	}
-
-	sidecarPath := filepath.Join(head, "actor-id-key.json")
-	originalSidecar, err := os.ReadFile(sidecarPath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	requireActorKeyFailure := func(name string) {
-		t.Helper()
-		if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); !errors.Is(err, recovery.ErrActorIDKeyMismatch) {
-			t.Fatalf("%s verification error=%v", name, err)
-		}
-	}
-
-	if err := os.WriteFile(sidecarPath, []byte(`{"version":"v1","instance_id":"123e4567-e89b-42d3-a456-426614174000","commitment":"ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"}`+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	requireActorKeyFailure("replaced sidecar")
-	if err := os.WriteFile(sidecarPath, originalSidecar, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Remove(sidecarPath); err != nil {
-		t.Fatal(err)
-	}
-	requireActorKeyFailure("missing sidecar")
-	if err := os.WriteFile(sidecarPath, originalSidecar, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	originalPepper := values["BT_ACTOR_ID_PEPPER_FILE"]
-	values["BT_ACTOR_ID_PEPPER_FILE"] = filepath.Join(t.TempDir(), "missing-pepper")
-	requireActorKeyFailure("missing pepper")
-	replacementPepper := filepath.Join(t.TempDir(), "actor-id-pepper")
-	if err := os.WriteFile(replacementPepper, []byte(strings.Repeat("f", 64)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	values["BT_ACTOR_ID_PEPPER_FILE"] = replacementPepper
-	requireActorKeyFailure("replaced pepper")
-	values["BT_ACTOR_ID_PEPPER_FILE"] = originalPepper
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); err != nil {
-		t.Fatalf("restored actor key failed verification: %v", err)
-	}
-}
-
-func TestSecurityVerifyPreservesNonChainErrors(t *testing.T) {
-	initialize := func(t *testing.T) (map[string]string, func(string) string, string) {
-		t.Helper()
-		ledger, head := t.TempDir(), t.TempDir()
-		values := actorKeyAdminEnvironment(t, ledger, head)
-		getenv := func(name string) string { return values[name] }
-		const instance = "123e4567-e89b-42d3-a456-426614174000"
-		if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err != nil {
-			t.Fatal(err)
-		}
-		return values, getenv, head
-	}
-
-	t.Run("canceled context", func(t *testing.T) {
-		_, getenv, _ := initialize(t)
-		ctx, cancel := context.WithCancel(t.Context())
-		cancel()
-		if err := run(ctx, []string{"security", "verify"}, getenv, &bytes.Buffer{}); !errors.Is(err, context.Canceled) {
-			t.Fatalf("error=%v", err)
-		}
-	})
-
-	t.Run("missing recovery state", func(t *testing.T) {
-		_, getenv, head := initialize(t)
-		if err := os.Remove(filepath.Join(head, "identity.json")); err != nil {
-			t.Fatal(err)
-		}
-		if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("error=%v", err)
-		}
-	})
-
-	t.Run("corrupt recovery state", func(t *testing.T) {
-		_, getenv, head := initialize(t)
-		if err := os.WriteFile(filepath.Join(head, "identity.json"), []byte("{}\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); err == nil || err.Error() != "recovery_state_corrupt" {
-			t.Fatalf("error=%v", err)
-		}
-	})
-}
-
-func TestSecurityInitRejectsMalformedIdentityWithoutArtifactsAndCanRetry(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(name string) string { return values[name] }
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", "not-a-uuid", "--epoch", "1", "--confirm-instance", "not-a-uuid"}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("malformed recovery identity initialized")
-	}
-	for _, path := range []string{filepath.Join(head, "head.json"), filepath.Join(head, "identity.json"), filepath.Join(head, "actor-id-key.json")} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("failed initialization left artifact %s: %v", path, err)
-		}
-	}
-	if matches, err := filepath.Glob(filepath.Join(ledger, "generation-*")); err != nil || len(matches) != 0 {
-		t.Fatalf("failed initialization left ledger artifacts=%v err=%v", matches, err)
-	}
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err != nil {
-		t.Fatalf("corrected retry failed: %v", err)
-	}
-}
-
-func TestSecurityInitRetriesAfterPartialGenesisWrite(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	store, err := localstore.Open(ledger, head)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := store.InitializeEmpty(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := os.Stat(filepath.Join(head, "identity.json")); !os.IsNotExist(err) {
-		t.Fatalf("partial fixture unexpectedly has identity: %v", err)
-	}
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, func(key string) string { return values[key] }, &bytes.Buffer{}); err != nil {
-		t.Fatalf("partial-genesis retry failed: %v", err)
-	}
-	durable, err := recovery.NewStore(head, store.Fence)
-	if err != nil {
-		t.Fatal(err)
-	}
-	state, err := durable.Load(t.Context())
-	if err != nil || state.InstanceID != instance || state.Epoch != 1 || state.TrustedHead != (security.Head{Generation: 1}) {
-		t.Fatalf("recovered state=%+v err=%v", state, err)
-	}
-}
-
-func TestSecurityInitRequiresActorPepperWithoutCreatingArtifacts(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := map[string]string{"BT_SECURITY_LEDGER_DIR": ledger, "BT_LEDGER_HEAD_DIR": head}
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, func(key string) string { return values[key] }, &bytes.Buffer{}); err == nil {
-		t.Fatal("security init accepted a missing actor pepper")
-	}
-	for _, path := range []string{filepath.Join(head, "head.json"), filepath.Join(head, "identity.json"), filepath.Join(head, "actor-id-key.json")} {
-		if _, err := os.Stat(path); !os.IsNotExist(err) {
-			t.Fatalf("missing-secret init left artifact %s: %v", path, err)
-		}
-	}
-}
-
-func TestSecurityBindActorKeyOnlyOnEmptyOlderAuthority(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	stores, err := localstore.Open(ledger, head)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := stores.InitializeEmpty(t.Context()); err != nil {
-		t.Fatal(err)
-	}
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	durable, err := recovery.NewVerifiedStore(head, stores.Fence, stores.Ledger, stores.Heads)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := durable.Initialize(t.Context(), recovery.State{InstanceID: instance, Epoch: 1, TrustedHead: security.Head{Generation: 1}}); err != nil {
-		t.Fatal(err)
-	}
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(key string) string { return values[key] }
-	var output bytes.Buffer
-	if err := run(t.Context(), []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("security init implicitly bound an accepted older authority")
-	}
-	if _, err := os.Stat(filepath.Join(head, "actor-id-key.json")); !os.IsNotExist(err) {
-		t.Fatalf("security init created sidecar for older authority: %v", err)
-	}
-	if err := run(t.Context(), []string{"security", "bind-actor-key", "--instance-id", instance, "--confirm-instance", instance}, getenv, &output); err != nil {
-		t.Fatal(err)
-	}
-	if !strings.Contains(output.String(), "result=bound") {
-		t.Fatalf("bind output=%q", output.String())
-	}
-	actorKey, err := recovery.LoadActorIDPepperFile(values["BT_ACTOR_ID_PEPPER_FILE"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := durable.ValidateActorIDKey(t.Context(), instance, actorKey); err != nil {
-		t.Fatal(err)
-	}
-	if state, err := durable.Load(t.Context()); err != nil || state.InstanceID != instance || state.Epoch != 1 {
-		t.Fatalf("older identity changed: state=%+v err=%v", state, err)
-	}
-}
-
-func TestOlderBinaryIgnoresSidecarButCannotRewriteIt(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(key string) string { return values[key] }
-	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	arguments := []string{"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}
-	if err := run(t.Context(), arguments, getenv, &bytes.Buffer{}); err != nil {
-		t.Fatal(err)
-	}
-	_, durable, err := openStores(getenv)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := durable.Load(t.Context()); err != nil {
-		t.Fatalf("legacy identity reader rejected sidecar: %v", err)
-	}
-	replacement := filepath.Join(t.TempDir(), "replacement")
-	if err := os.WriteFile(replacement, []byte(strings.Repeat("f", 64)+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	replacementKey, err := recovery.LoadActorIDPepperFile(replacement)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := durable.ValidateActorIDKey(t.Context(), instance, replacementKey); err == nil || !strings.Contains(err.Error(), "actor_id_key_mismatch") {
-		t.Fatalf("replacement init error=%v", err)
-	}
-}
-
-func actorKeyAdminEnvironment(t *testing.T, ledger, head string) map[string]string {
+// adminEnvironment is the migrate service's environment: the migrator
+// credential and the actor-ID key file.
+func adminEnvironment(t *testing.T, databaseURL string, actorKey byte) map[string]string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "actor-id-pepper")
-	if err := os.WriteFile(path, []byte("000102030405060708090a0b0c0d0e0f101112131415161718191a1b1c1d1e1f\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	return map[string]string{
-		"BT_SECURITY_LEDGER_DIR":  ledger,
-		"BT_LEDGER_HEAD_DIR":      head,
-		"BT_ACTOR_ID_PEPPER_FILE": path,
-	}
+	directory := t.TempDir()
+	pepper := writeAdminSecret(t, directory, "actor-id-pepper", strings.Repeat(fmt.Sprintf("%02x", actorKey), 32))
+	return map[string]string{"BT_DATABASE_URL": databaseURL, "BT_ACTOR_ID_PEPPER_FILE": pepper, "BT_MODE": "self_hosted"}
 }
 
-func TestEpochRotationRejectsUnsafeIntegerFlagsBeforeOpeningStores(t *testing.T) {
+func runAdmin(t *testing.T, values map[string]string, arguments ...string) (string, error) {
+	t.Helper()
+	var output bytes.Buffer
+	err := run(t.Context(), arguments, func(name string) string { return values[name] }, &output)
+	return output.String(), err
+}
+
+func actorKeyOf(value byte) [32]byte {
+	var key [32]byte
+	for index := range key {
+		key[index] = value
+	}
+	return key
+}
+
+func TestAuthorityInitBindsServerStateOnce(t *testing.T) {
+	f := testpg.New(t)
 	const instance = "123e4567-e89b-42d3-a456-426614174000"
-	for _, arguments := range [][]string{
-		{"recovery", "rotate-epoch", "--expected-epoch", "9007199254740992", "--expected-revision", "0", "--reason-code", "database_restore", "--confirm-instance", instance},
-		{"recovery", "rotate-epoch", "--expected-epoch", "1", "--expected-revision", "9007199254740992", "--reason-code", "database_restore", "--confirm-instance", instance},
+	values := adminEnvironment(t, f.Owner.Config().ConnString(), 0x05)
+	for name, arguments := range map[string][]string{
+		"epoch 2":              {"authority", "init", "--instance-id", instance, "--epoch", "2", "--confirm-instance", instance},
+		"unconfirmed":          {"authority", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", "223e4567-e89b-42d3-a456-426614174000"},
+		"uppercase instance":   {"authority", "init", "--instance-id", strings.ToUpper(instance), "--epoch", "1", "--confirm-instance", strings.ToUpper(instance)},
+		"nil instance":         {"authority", "init", "--instance-id", "00000000-0000-0000-0000-000000000000", "--epoch", "1", "--confirm-instance", "00000000-0000-0000-0000-000000000000"},
+		"extra argument":       {"authority", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance, "extra"},
+		"unknown subcommand":   {"authority", "bind-actor-key"},
+		"retired security":     {"security", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance},
+		"retired reconcile":    {"security", "reconcile"},
+		"retired epoch rotate": {"recovery", "rotate-epoch", "--expected-epoch", "1", "--reason-code", "database_restore", "--confirm-instance", instance},
 	} {
-		if err := run(t.Context(), arguments, func(string) string { t.Fatal("unsafe flags reached durable stores"); return "" }, &bytes.Buffer{}); err == nil {
-			t.Fatalf("unsafe integer flags accepted: %v", arguments)
+		if _, err := runAdmin(t, values, arguments...); err == nil {
+			t.Fatalf("%s accepted", name)
 		}
 	}
+	var rows int
+	if err := f.Owner.QueryRow(t.Context(), "SELECT count(*) FROM server_state").Scan(&rows); err != nil || rows != 0 {
+		t.Fatalf("refused init wrote server_state: rows=%d err=%v", rows, err)
+	}
+	init := []string{"authority", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance}
+	if output, err := runAdmin(t, values, init...); err != nil || output != "instance_id="+instance+" epoch=1 result=initialized\n" {
+		t.Fatalf("init output=%q err=%v", output, err)
+	}
+	if output, err := runAdmin(t, values, init...); err != nil || output != "instance_id="+instance+" epoch=1 result=unchanged\n" {
+		t.Fatalf("idempotent init output=%q err=%v", output, err)
+	}
+	other := "223e4567-e89b-42d3-a456-426614174000"
+	if _, err := runAdmin(t, values, "authority", "init", "--instance-id", other, "--epoch", "1", "--confirm-instance", other); err == nil ||
+		err.Error() != "server_identity_mismatch" {
+		t.Fatalf("re-identifying init err=%v", err)
+	}
+	if _, err := runAdmin(t, adminEnvironment(t, f.Owner.Config().ConnString(), 0x06), init...); err == nil || err.Error() != "actor_id_key_mismatch" {
+		t.Fatalf("re-keying init err=%v", err)
+	}
+	state, err := authority.LoadServerState(t.Context(), f.Runtime)
+	if err != nil || state.Check(instance, 1, actorKeyOf(0x05)) != nil {
+		t.Fatalf("server_state=%+v err=%v", state, err)
+	}
+	// The runtime login can read server_state but never write it.
+	if _, err := f.Runtime.Exec(t.Context(), "UPDATE server_state SET recovery_epoch=2"); err == nil {
+		t.Fatal("runtime rewrote server_state")
+	}
+	// No pepper, no init.
+	delete(values, "BT_ACTOR_ID_PEPPER_FILE")
+	if _, err := runAdmin(t, values, init...); err == nil {
+		t.Fatal("init without the actor-ID key accepted")
+	}
 }
 
-func TestSecurityVerifyWalksCommittedDescendant(t *testing.T) {
-	ledger, head := t.TempDir(), t.TempDir()
-	values := actorKeyAdminEnvironment(t, ledger, head)
-	getenv := func(name string) string { return values[name] }
-	store, err := localstore.Open(ledger, head)
-	if err != nil {
-		t.Fatal(err)
+// A server_state row a fixture (or an older install) wrote without a
+// commitment is bound by init, once.
+func TestAuthorityInitBindsCommitmentOfMatchingRow(t *testing.T) {
+	f := authoritytest.New(t)
+	values := adminEnvironment(t, f.DB.Owner.Config().ConnString(), 0x07)
+	init := []string{"authority", "init", "--instance-id", f.InstanceID, "--epoch", "1", "--confirm-instance", f.InstanceID}
+	if output, err := runAdmin(t, values, init...); err != nil || !strings.HasSuffix(output, "result=bound\n") {
+		t.Fatalf("bind output=%q err=%v", output, err)
 	}
-	durable, err := recovery.NewVerifiedStore(head, store.Fence, store.Ledger, store.Heads)
-	if err != nil {
-		t.Fatal(err)
+	if output, err := runAdmin(t, values, init...); err != nil || !strings.HasSuffix(output, "result=unchanged\n") {
+		t.Fatalf("rebind output=%q err=%v", output, err)
 	}
-	instance := "123e4567-e89b-42d3-a456-426614174000"
-	actorKey, err := recovery.LoadActorIDPepperFile(values["BT_ACTOR_ID_PEPPER_FILE"])
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := durable.InitializeAuthorityWithActorIDKey(t.Context(), store, recovery.State{InstanceID: instance, Epoch: 1, TrustedHead: security.Head{Generation: 1}}, actorKey); err != nil {
-		t.Fatal(err)
-	}
-	event := security.Event{Version: "v1", Generation: 1, Revision: 1, PreviousHash: strings.Repeat("0", 64),
-		CommandID: "30000000-0000-4000-8000-000000000001", CommandHash: strings.Repeat("a", 64),
-		ActorAccountID: "10000000-0000-4000-8000-000000000001", Kind: "account_registered", At: "2026-09-20T12:00:00Z",
-		Effects: []security.Effect{{Kind: "account_registered", AccountID: "10000000-0000-4000-8000-000000000001", IdentityKey: "opaque", Status: "active"}}}
-	encoded, err := security.EncodeEvent(event)
-	if err != nil {
-		t.Fatal(err)
-	}
-	candidate := security.Candidate{CommandID: event.CommandID, Prior: security.Head{Generation: 1}, EventJSON: encoded, EventHash: sha256.Sum256(encoded)}
-	if err := store.Ledger.AppendCandidate(t.Context(), candidate); err != nil {
-		t.Fatal(err)
-	}
-	live := security.Head{Generation: 1, Revision: 1, EventHash: candidate.EventHash}
-	if swapped, err := store.Heads.CompareAndSwap(t.Context(), candidate.Prior, live); err != nil || !swapped {
-		t.Fatalf("commit descendant swapped=%v err=%v", swapped, err)
-	}
-	var output bytes.Buffer
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &output); err != nil {
-		t.Fatalf("valid descendant rejected: %v", err)
-	}
-	if !strings.Contains(output.String(), "revision=1 result=verified") {
-		t.Fatalf("verification output=%q", output.String())
-	}
-	output.Reset()
-	if err := run(t.Context(), []string{"recovery", "rotate-epoch", "--expected-epoch", "1", "--expected-revision", "1", "--reason-code", "database_restore", "--confirm-instance", instance}, getenv, &output); err != nil {
-		t.Fatalf("verified descendant rotation failed: %v", err)
-	}
-	rotated, err := durable.Load(t.Context())
-	if err != nil || rotated.Epoch != 2 || rotated.TrustedHead != live {
-		t.Fatalf("rotated manifest=%+v err=%v", rotated, err)
-	}
+}
 
-	files, err := filepath.Glob(filepath.Join(ledger, "generation-*", "*.json"))
-	if err != nil || len(files) != 1 {
-		t.Fatalf("ledger files=%v err=%v", files, err)
+func TestAuthorityVerifyChecksActorKeyAndEveryChain(t *testing.T) {
+	f := authoritytest.New(t)
+	values := adminEnvironment(t, f.DB.Owner.Config().ConnString(), 0x05)
+	// The fixture's server_state row has no commitment yet: unbound.
+	if _, err := runAdmin(t, values, "authority", "verify"); err == nil || err.Error() != "actor_id_key_mismatch" {
+		t.Fatalf("verify before init: %v", err)
 	}
-	data, err := os.ReadFile(files[0])
+	if _, err := runAdmin(t, values, "authority", "init", "--instance-id", f.InstanceID, "--epoch", "1", "--confirm-instance", f.InstanceID); err != nil {
+		t.Fatal(err)
+	}
+	// Two accounts with real audit rows (one each, from a family command).
+	owner := f.Account(t)
+	device := f.Device(t, owner)
+	session, _, _ := f.Session(t, owner, device, "account", "", "")
+	principal := access.Principal{AccountID: owner, DeviceID: device, SessionID: session, RecoveryEpoch: authoritytest.RecoveryEpoch, SecurityRevision: 1, Scope: "account", SessionScope: "account"}
+	created, err := f.Service.CreateFamily(t.Context(), authority.CreateFamily{CommandID: authoritytest.NewID(t), OwnerAccountID: owner, Principal: principal, FamilyID: authoritytest.NewID(t), DisplayName: "Family"})
 	if err != nil {
 		t.Fatal(err)
 	}
-	changed := bytes.Replace(data, []byte("opaque"), []byte("broken"), 1)
-	if err := os.WriteFile(files[0], changed, 0o600); err != nil {
+	output, err := runAdmin(t, values, "authority", "verify")
+	if err != nil || !strings.HasPrefix(output, "instance_id="+f.InstanceID+" epoch=1 ") || !strings.HasSuffix(output, " failed=0 result=verified\n") {
+		t.Fatalf("verify output=%q err=%v", output, err)
+	}
+	// A replaced actor-ID key is refused before any chain is read.
+	if _, err := runAdmin(t, adminEnvironment(t, f.DB.Owner.Config().ConnString(), 0x09), "authority", "verify"); err == nil || err.Error() != "actor_id_key_mismatch" {
+		t.Fatalf("replaced pepper verify err=%v", err)
+	}
+	// A configured instance or epoch other than server_state's is refused.
+	values["BT_RECOVERY_EPOCH"] = "2"
+	if _, err := runAdmin(t, values, "authority", "verify"); err == nil || err.Error() != "server_identity_mismatch" {
+		t.Fatalf("other epoch verify err=%v", err)
+	}
+	delete(values, "BT_RECOVERY_EPOCH")
+	// A tampered audit row fails its own scope closed and is named.
+	f.Exec(t, `UPDATE security_audit_events SET payload = payload || '{"tampered":true}'::jsonb WHERE scope='family' AND scope_id=$1`, created.FamilyID)
+	output, err = runAdmin(t, values, "authority", "verify")
+	if err == nil || !strings.Contains(err.Error(), "1 scopes failed closed") ||
+		!strings.Contains(output, "failed scope=family id="+created.FamilyID+"\n") || !strings.HasSuffix(output, " failed=1 result=failed\n") {
+		t.Fatalf("tampered verify output=%q err=%v", output, err)
+	}
+	if failed := f.Exec(t, `UPDATE families SET updated_at=updated_at WHERE id=$1 AND chain_failed`, created.FamilyID); failed != 1 {
+		t.Fatal("tampered family not failed closed")
+	}
+	if _, err := runAdmin(t, values, "authority", "verify", "--all"); err == nil {
+		t.Fatal("verify accepted a flag")
+	}
+}
+
+// Epoch rotation after a database restore is monotonic, confirmed and
+// fenced by the expected epoch; every session issued before it then fails
+// epoch_changed.
+func TestAuthorityRotateEpochIsMonotonicAndInvalidatesSessions(t *testing.T) {
+	f := authoritytest.New(t)
+	values := adminEnvironment(t, f.DB.Owner.Config().ConnString(), 0x05)
+	if _, err := runAdmin(t, values, "authority", "init", "--instance-id", f.InstanceID, "--epoch", "1", "--confirm-instance", f.InstanceID); err != nil {
 		t.Fatal(err)
 	}
-	output.Reset()
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &output); err == nil || err.Error() != "trusted recovery manifest mismatch" || output.Len() != 0 {
-		t.Fatalf("corrupt committed event verified: err=%v output=%q hash=%s", err, output.String(), hex.EncodeToString(candidate.EventHash[:]))
+	account := f.Account(t)
+	device := f.Device(t, account)
+	_, access1, _ := f.Session(t, account, device, "account", "", "")
+	rotate := func(expected string, extra ...string) (string, error) {
+		arguments := append([]string{"authority", "rotate-epoch", "--expected-epoch", expected, "--reason-code", "database_restore", "--confirm-instance", f.InstanceID}, extra...)
+		return runAdmin(t, values, arguments...)
 	}
-	if err := run(t.Context(), []string{"recovery", "rotate-epoch", "--expected-epoch", "2", "--expected-revision", "1", "--reason-code", "database_restore", "--confirm-instance", instance}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("corrupt committed descendant rotated recovery epoch")
+	for name, arguments := range map[string][]string{
+		"wrong reason":     {"authority", "rotate-epoch", "--expected-epoch", "1", "--reason-code", "operator_choice", "--confirm-instance", f.InstanceID},
+		"unsafe epoch":     {"authority", "rotate-epoch", "--expected-epoch", "9007199254740991", "--reason-code", "database_restore", "--confirm-instance", f.InstanceID},
+		"zero epoch":       {"authority", "rotate-epoch", "--expected-epoch", "0", "--reason-code", "database_restore", "--confirm-instance", f.InstanceID},
+		"missing instance": {"authority", "rotate-epoch", "--expected-epoch", "1", "--reason-code", "database_restore"},
+		"retired revision": {"authority", "rotate-epoch", "--expected-epoch", "1", "--expected-revision", "0", "--reason-code", "database_restore", "--confirm-instance", f.InstanceID},
+		"another instance": {"authority", "rotate-epoch", "--expected-epoch", "1", "--reason-code", "database_restore", "--confirm-instance", "223e4567-e89b-42d3-a456-426614174000"},
+	} {
+		if _, err := runAdmin(t, values, arguments...); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
 	}
-	unchanged, err := durable.Load(t.Context())
-	if err != nil || unchanged.Epoch != 2 || unchanged.TrustedHead != live {
-		t.Fatalf("corrupt rotation changed manifest=%+v err=%v", unchanged, err)
+	if output, err := rotate("1"); err != nil || output != "instance_id="+f.InstanceID+" epoch=2 result=rotated\n" {
+		t.Fatalf("rotate output=%q err=%v", output, err)
 	}
-	if err := os.WriteFile(files[0], data, 0o600); err != nil {
-		t.Fatal(err)
+	if _, err := rotate("1"); err == nil || err.Error() != "server_identity_mismatch" {
+		t.Fatalf("stale rotation err=%v", err)
 	}
-	if err := os.Remove(files[0]); err != nil {
-		t.Fatal(err)
+	if output, err := rotate("2"); err != nil || !strings.Contains(output, " epoch=3 ") {
+		t.Fatalf("second rotation output=%q err=%v", output, err)
 	}
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("missing/gapped committed event verified")
+	state, err := authority.LoadServerState(t.Context(), f.Pool)
+	if err != nil || state.RecoveryEpoch != 3 || state.Check(f.InstanceID, 3, actorKeyOf(0x05)) != nil {
+		t.Fatalf("rotated state=%+v err=%v", state, err)
 	}
-	if err := os.WriteFile(files[0], data, 0o600); err != nil {
-		t.Fatal(err)
-	}
-	headPath := filepath.Join(head, "head.json")
-	headData, err := os.ReadFile(headPath)
+	// The node restarted with the rotated epoch refuses the old session.
+	rotated, err := authority.New(authority.Options{Pool: f.Pool, Now: func() time.Time { return f.Now }, InstanceID: f.InstanceID, RecoveryEpoch: 3,
+		TokenKeys: f.TokenKeys, Allowed: authoritytest.Allowed})
 	if err != nil {
 		t.Fatal(err)
 	}
-	generationMismatch := []byte(`{"generation":2,"revision":1,"event_hash":"` + hex.EncodeToString(candidate.EventHash[:]) + `"}` + "\n")
-	if err := os.WriteFile(headPath, generationMismatch, 0o600); err != nil {
+	digest := authoritytest.TokenDigest(f.TokenKeys.Current, "access", access1)
+	if _, err := rotated.Authenticate(t.Context(), []authority.KeyedDigest{{KeyID: f.TokenKeys.Current.ID, Sum: digest}}); authority.CodeOf(err) != "epoch_changed" {
+		t.Fatalf("pre-rotation session after rotation: %v", err)
+	}
+}
+
+func TestAuthorityFamilyRevisionRunsBehindTheReadinessGate(t *testing.T) {
+	f := authoritytest.New(t)
+	if _, err := runAdmin(t, adminEnvironment(t, f.DB.Owner.Config().ConnString(), 0x05),
+		"authority", "init", "--instance-id", f.InstanceID, "--epoch", "1", "--confirm-instance", f.InstanceID); err != nil {
 		t.Fatal(err)
 	}
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("generation-mismatched chain verified")
+	owner := f.Account(t)
+	family := f.Family(t, owner)
+	f.Exec(t, `UPDATE families SET audit_seq=41 WHERE id=$1`, family)
+	values := operatorRuntimeEnvironment(t, f.Pool.Config().ConnString(), f.InstanceID, 0x05)
+	output, err := runAdmin(t, values, "authority", "family-revision", "--family-id", family)
+	if err != nil || output != "family_id="+family+" revision=41\n" {
+		t.Fatalf("family revision output=%q err=%v", output, err)
 	}
-	if err := os.WriteFile(headPath, headData, 0o600); err != nil {
-		t.Fatal(err)
+	if _, err := runAdmin(t, values, "authority", "family-revision"); err == nil {
+		t.Fatal("family revision without --family-id accepted")
 	}
-	identityPath := filepath.Join(head, "identity.json")
-	identityData, err := os.ReadFile(identityPath)
-	if err != nil {
-		t.Fatal(err)
+	// A node that is not ready (another actor-ID key) answers nothing.
+	if _, err := runAdmin(t, operatorRuntimeEnvironment(t, f.Pool.Config().ConnString(), f.InstanceID, 0x09),
+		"authority", "family-revision", "--family-id", family); err == nil || err.Error() != "actor_id_key_mismatch" {
+		t.Fatalf("unready family revision err=%v", err)
 	}
-	if err := os.Remove(identityPath); err != nil {
-		t.Fatal(err)
+	if _, err := runAdmin(t, values, "authority", "family-revision", "--family-id", authoritytest.NewID(t)); err == nil {
+		t.Fatal("unknown family revision answered")
 	}
-	if err := run(t.Context(), []string{"security", "verify"}, getenv, &bytes.Buffer{}); err == nil {
-		t.Fatal("missing trusted manifest verified")
-	}
-	if err := os.WriteFile(identityPath, identityData, 0o600); err != nil {
-		t.Fatal(err)
+}
+
+// operatorRuntimeEnvironment is the server's runtime configuration in
+// development mode (direct key values), as operator commands load it.
+func operatorRuntimeEnvironment(t *testing.T, runtimeURL, instance string, actorKey byte) map[string]string {
+	t.Helper()
+	directory := t.TempDir()
+	return map[string]string{
+		"BT_MODE": "development", "BT_DATABASE_URL": runtimeURL, "BT_PUBLIC_ORIGIN": "https://sync.example.test",
+		"BT_SERVER_INSTANCE_ID": instance, "BT_RECOVERY_EPOCH": "1", "BT_APPLE_AUDIENCE": "test", "BT_TRUSTED_PROXY_CIDRS": "127.0.0.1/32",
+		"BT_SESSION_SIGNING_KEY_FILE": writeAdminSecret(t, directory, "session", strings.Repeat("02", 32)),
+		"BT_IDENTITY_KEY_ID":          "identity.v1", "BT_IDENTITY_PEPPER": strings.Repeat("01", 32),
+		"BT_SESSION_TOKEN_KEY_ID":     "session.v1",
+		"BT_DEVICE_CONTINUITY_KEY_ID": "device.v1", "BT_DEVICE_CONTINUITY_PEPPER": strings.Repeat("03", 32),
+		"BT_APPLE_NOTIFICATION_KEY_ID": "notification.v1", "BT_APPLE_NOTIFICATION_PEPPER": strings.Repeat("04", 32),
+		"BT_INVITATION_KEY_ID": "invitation.v1", "BT_INVITATION_PEPPER": strings.Repeat("07", 32),
+		"BT_PAGE_TOKEN_KEY_ID": "page.v1", "BT_PAGE_TOKEN_KEY_FILE": writeAdminSecret(t, directory, "page", strings.Repeat("08", 32)),
+		"BT_ACTOR_ID_PEPPER": strings.Repeat(fmt.Sprintf("%02x", actorKey), 32), "BT_RATE_LIMIT_PEPPER": strings.Repeat("06", 32),
+		// The server's configuration always names the maintenance
+		// credential (decision D3); the operator runtime never opens it.
+		"BT_RECOVERY_MAINTENANCE_DATABASE_URL_FILE": writeAdminSecret(t, directory, "maintenance-database-url", "postgres://maintenance@127.0.0.1:1/unused"),
 	}
 }
 
@@ -600,5 +372,27 @@ func TestAdminUnavailableDatabaseFailsPromptly(t *testing.T) {
 	}
 	if string(output) != "open database: database_unavailable\n" {
 		t.Fatalf("unexpected/unsafe admin error: %s", output)
+	}
+}
+
+// migrate and the authority commands refuse an environment written for the
+// file ledger, naming each retired setting, before opening any database.
+func TestMigrateAndAuthorityCommandsRejectRetiredSettings(t *testing.T) {
+	const instance = "123e4567-e89b-42d3-a456-426614174000"
+	for _, retired := range []string{"BT_SECURITY_LEDGER_DIR", "BT_LEDGER_HEAD_DIR", "BT_PROJECTOR_DATABASE_URL_FILE", "BT_HOSTED_PROVIDER_ID"} {
+		values := adminEnvironment(t, "postgres://unused@127.0.0.1:1/unused", 0x05)
+		values[retired] = "/var/lib/babytracker/retired"
+		for _, arguments := range [][]string{
+			{"migrate"},
+			{"authority", "init", "--instance-id", instance, "--epoch", "1", "--confirm-instance", instance},
+			{"authority", "verify"},
+			{"authority", "rotate-epoch", "--expected-epoch", "1", "--reason-code", "database_restore", "--confirm-instance", instance},
+			{"authority", "family-revision", "--family-id", instance},
+		} {
+			_, err := runAdmin(t, values, arguments...)
+			if err == nil || !strings.Contains(err.Error(), retired+" is retired: PostgreSQL is the only security authority") {
+				t.Fatalf("%v with %s: %v", arguments, retired, err)
+			}
+		}
 	}
 }

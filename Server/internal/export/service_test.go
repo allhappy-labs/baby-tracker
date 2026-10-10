@@ -2,34 +2,30 @@ package export_test
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
 	"testing"
 	"time"
 
-	"babytracker/server/internal/access"
 	"babytracker/server/internal/export"
-	"babytracker/server/internal/family"
 	"babytracker/server/internal/protocol"
 	"babytracker/server/internal/testkit"
 )
 
-type resolver struct{ family *family.Service }
-
-func (r resolver) Current(ctx context.Context, p access.Principal) (string, error) {
-	v, err := r.family.Current(ctx, p)
-	return v.ID, err
+func newExportServices(t *testing.T, h *testkit.Harness) (*export.Service, *export.Worker) {
+	t.Helper()
+	return newExportServicesAt(t, h, h.DatabaseNow)
 }
 
-func newExportServices(t *testing.T, h *testkit.Harness) (*export.Service, *export.Worker) {
+// newExportServicesAt is newExportServices on the service clock now.
+func newExportServicesAt(t *testing.T, h *testkit.Harness, now func() time.Time) (*export.Service, *export.Worker) {
 	t.Helper()
 	var key [32]byte
 	for i := range key {
 		key[i] = 0x5a
 	}
-	s, w, err := export.New(export.Options{Security: h.Security, Resolver: resolver{h.Family}, Identity: h.Info,
-		Runtime: h.Runtime, WorkerPool: h.Maintenance, Keys: map[string][32]byte{"test.v1": key}, ActiveKeyID: "test.v1", Now: time.Now})
+	s, w, err := export.New(export.Options{Authority: h.Authority, Identity: h.Info,
+		Runtime: h.Runtime, WorkerPool: h.Maintenance, Keys: map[string][32]byte{"test.v1": key}, ActiveKeyID: "test.v1", Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -43,14 +39,6 @@ func request(id string) protocol.CreateExportRequest {
 
 func TestOwnerExportCreateWorkerDownloadAndExpiry(t *testing.T) {
 	h := testkit.New(t)
-	head, err := h.Security.Head(t.Context())
-	if err != nil {
-		t.Fatal(err)
-	}
-	if _, err := h.Migrator.Exec(t.Context(), `SELECT app.update_server_state($1,$2,$3,$4,$5)`,
-		h.Info.InstanceID, h.Info.RecoveryEpoch, head.Generation, head.Revision, head.EventHash[:]); err != nil {
-		t.Fatal(err)
-	}
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "baby.json")); err != nil {
 		t.Fatal(err)
 	}
@@ -103,6 +91,21 @@ func TestOwnerExportCreateWorkerDownloadAndExpiry(t *testing.T) {
 		if err != nil || at.Format("2006-01-02T15:04:05.000000Z") != event.At {
 			t.Fatalf("noncanonical audit time %q: %v", event.At, err)
 		}
+	}
+	// The audit section is the family's own chain, seq 1 through the family
+	// audit seq the archive was captured at, with no gap: family_created,
+	// then the caregiver's invitation and its redemption.
+	revision, err := h.Authority.FamilyRevision(t.Context(), h.FamilyID)
+	if err != nil || archive.SecurityRevision != revision || uint64(len(archive.Audit)) != revision || len(archive.Audit) < 3 {
+		t.Fatalf("archive revision=%d audit=%d family revision=%d err=%v", archive.SecurityRevision, len(archive.Audit), revision, err)
+	}
+	for index, event := range archive.Audit {
+		if event.Revision != uint64(index+1) || event.Kind == "" || event.ActorAccountID == "" {
+			t.Fatalf("audit[%d]=%+v", index, event)
+		}
+	}
+	if archive.Audit[0].Kind != "family_created" || archive.Audit[0].ActorAccountID != h.Owner.AccountID {
+		t.Fatalf("first audit event=%+v", archive.Audit[0])
 	}
 	if err := s.Download(t.Context(), h.Caregiver, created.ExportID, &bytes.Buffer{}); err == nil {
 		t.Fatal("caregiver downloaded export")
@@ -177,5 +180,33 @@ func TestWorkerInvalidatesReadyArchiveWhenRequesterIsNoLongerOwner(t *testing.T)
 	}
 	if state != "failed" || header != nil || chunks != 0 {
 		t.Fatalf("material survives transfer: state=%s header=%v chunks=%d", state, header != nil, chunks)
+	}
+}
+
+// An ownership change committed after the export was requested fails the
+// job before anything is read: the worker rechecks the job's subject against
+// the authority, not the request's principal.
+func TestWorkerFailsQueuedExportAfterOwnershipTransfer(t *testing.T) {
+	h := testkit.New(t)
+	s, w := newExportServices(t, h)
+	created, _, err := s.Create(t.Context(), h.Owner, request("30000000-0000-4000-8000-000000001905"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.Family.Transfer(t.Context(), h.Owner, h.CommandID(), h.Caregiver.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	if err := w.RunOnce(t.Context(), 1); err != nil {
+		t.Fatal(err)
+	}
+	var state, code string
+	var header []byte
+	var chunks int
+	if err := h.Maintenance.QueryRow(t.Context(), `SELECT state,coalesce(last_code,''),header,(SELECT count(*) FROM public.export_chunks WHERE export_id=$1)
+		FROM public.export_jobs WHERE id=$1`, created.ExportID).Scan(&state, &code, &header, &chunks); err != nil {
+		t.Fatal(err)
+	}
+	if state != "failed" || code != "export_authorization_changed" || header != nil || chunks != 0 {
+		t.Fatalf("job after transfer: state=%s code=%s header=%v chunks=%d", state, code, header != nil, chunks)
 	}
 }

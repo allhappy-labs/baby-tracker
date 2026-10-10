@@ -58,10 +58,14 @@ struct PendingInvitationRow: View {
 struct UnavailableInvitationSheet: View {
     let invitation: PendingInvitation
     let onRevoke: () -> Void
-    @Environment(\.dismiss) private var dismiss
+    /// Closes the sheet. Presented with `fittedSheet`, so the presenter's
+    /// own state is what takes it down.
+    let onClose: () -> Void
 
     var body: some View {
-        NavigationStack {
+        VStack(spacing: 0) {
+            SheetHeader(PendingInvitationCopy.unavailableTitle, cancelTitle: PendingInvitationCopy.close,
+                        cancelIdentifier: "invite.close", onCancel: onClose)
             ScrollView {
                 VStack(alignment: .leading, spacing: 16) {
                     Label(
@@ -78,7 +82,7 @@ struct UnavailableInvitationSheet: View {
                         .accessibilityIdentifier("invite.unavailable")
                     Button(role: .destructive) {
                         onRevoke()
-                        dismiss()
+                        onClose()
                     } label: {
                         Text(InviteSheetCopy.revoke).frame(maxWidth: .infinity, minHeight: 44)
                     }
@@ -87,17 +91,7 @@ struct UnavailableInvitationSheet: View {
                 }
                 .padding()
             }
-            .navigationTitle(PendingInvitationCopy.unavailableTitle)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(PendingInvitationCopy.close) { dismiss() }
-                        .accessibilityIdentifier("invite.close")
-                }
-            }
+            .scrollBounceBehavior(.basedOnSize)
         }
-        .sheetHeight(320)
     }
 }

@@ -1,12 +1,12 @@
 package limits
 
 import (
+	"bytes"
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
-	"encoding/json"
 	"errors"
+	"log/slog"
 	"net"
 	"net/http"
 	"net/netip"
@@ -53,30 +53,49 @@ func IsRetryable(err error) bool {
 }
 
 type Options struct {
-	Repository *Repository
-	Pepper     [32]byte
-	Now        func() time.Time
+	Pepper [32]byte
+	Now    func() time.Time
+	// MaxVerifiedEntries bounds the buckets keyed by server-verified IDs;
+	// 0 means DefaultMaxVerifiedEntries.
+	MaxVerifiedEntries int
+	// MaxIPEntriesPerScope bounds each IP-keyed scope's buckets; 0 means
+	// DefaultMaxIPEntriesPerScope.
+	MaxIPEntriesPerScope int
+	// Logger receives at most one line a minute per full or evicting pool;
+	// nil keeps only the counters (Stats).
+	Logger *slog.Logger
 }
 
 type Service struct {
-	repository rateRepository
-	pepper     [32]byte
-	now        func() time.Time
+	store  rateStore
+	pepper [32]byte
+	now    func() time.Time
 }
 
-type rateRepository interface {
-	take(context.Context, []byte, time.Time) (Decision, error)
-}
-
+// New returns the in-memory limiter. It has no database dependency: no
+// phone-path rate limit survives a restart (see the Phase 3 rate-limit ruling).
 func New(options Options) (Limiter, error) {
-	if options.Repository == nil || options.Now == nil || options.Pepper == ([32]byte{}) {
+	if options.Now == nil || options.Pepper == ([32]byte{}) || options.MaxVerifiedEntries < 0 || options.MaxIPEntriesPerScope < 0 {
 		return nil, &safeError{code: CodeInvalidLimit}
 	}
-	return newLimiter(options.Repository, options.Pepper, options.Now), nil
+	store := newMemoryStore(options.MaxVerifiedEntries, options.MaxIPEntriesPerScope)
+	store.logger = options.Logger
+	return newLimiter(store, options.Pepper, options.Now), nil
 }
 
-func newLimiter(repository rateRepository, pepper [32]byte, now func() time.Time) *Service {
-	return &Service{repository: repository, pepper: pepper, now: now}
+// Stats reports the in-memory store's capacity events: refusals by the full
+// verified-key pool and evictions per IP scope.
+func (service *Service) Stats() Stats {
+	if service != nil {
+		if store, ok := service.store.(*memoryStore); ok {
+			return store.stats()
+		}
+	}
+	return Stats{IPEvictions: map[string]uint64{}}
+}
+
+func newLimiter(store rateStore, pepper [32]byte, now func() time.Time) *Service {
+	return &Service{store: store, pepper: pepper, now: now}
 }
 
 func (service *Service) Take(ctx context.Context, scope, key string, policy Policy) (Decision, error) {
@@ -84,15 +103,15 @@ func (service *Service) Take(ctx context.Context, scope, key string, policy Poli
 }
 
 func (service *Service) TakeMany(ctx context.Context, charges []Charge) (Decision, error) {
-	if service == nil || service.repository == nil || service.now == nil || service.pepper == ([32]byte{}) {
+	if service == nil || service.store == nil || service.now == nil || service.pepper == ([32]byte{}) {
 		return Decision{}, &safeError{code: CodeInvalidLimit}
 	}
 	now := service.now().UTC().Truncate(time.Microsecond)
-	payload, err := prepareCharges(charges, service.pepper, now)
+	prepared, err := prepareCharges(charges, service.pepper, now)
 	if err != nil {
 		return Decision{}, err
 	}
-	decision, err := service.repository.take(ctx, payload, now)
+	decision, err := service.store.take(ctx, prepared, now)
 	if err != nil {
 		return Decision{}, &safeError{code: CodeLimitUnavailable, retryable: true, cause: err}
 	}
@@ -103,20 +122,32 @@ func (service *Service) TakeMany(ctx context.Context, charges []Charge) (Decisio
 	return decision, nil
 }
 
-type wireCharge struct {
-	Scope       string `json:"scope"`
-	KeyDigest   string `json:"key_digest"`
-	Cost        int    `json:"cost"`
-	Limit       int    `json:"limit"`
-	WindowStart string `json:"window_start"`
-	WindowEnd   string `json:"window_end"`
+// Peek is the decision TakeMany would return for charges, with no bucket
+// created, charged or evicted.
+func (service *Service) Peek(ctx context.Context, charges []Charge) (Decision, error) {
+	if service == nil || service.store == nil || service.now == nil || service.pepper == ([32]byte{}) {
+		return Decision{}, &safeError{code: CodeInvalidLimit}
+	}
+	now := service.now().UTC().Truncate(time.Microsecond)
+	prepared, err := prepareCharges(charges, service.pepper, now)
+	if err != nil {
+		return Decision{}, err
+	}
+	decision, err := service.store.peek(ctx, prepared, now)
+	if err != nil {
+		return Decision{}, &safeError{code: CodeLimitUnavailable, retryable: true, cause: err}
+	}
+	return decision, nil
 }
 
-func prepareCharges(charges []Charge, pepper [32]byte, now time.Time) ([]byte, error) {
+// prepareCharges validates a request's charges and keys each one by
+// HMAC(pepper, scope || 0 || normalized key), so no raw key reaches the store.
+// The result is sorted by (scope, digest) and holds no duplicate bucket.
+func prepareCharges(charges []Charge, pepper [32]byte, now time.Time) ([]preparedCharge, error) {
 	if len(charges) < 1 || len(charges) > maximumCharges || pepper == ([32]byte{}) || now.IsZero() {
 		return nil, &safeError{code: CodeInvalidLimit}
 	}
-	result := make([]wireCharge, 0, len(charges))
+	result := make([]preparedCharge, 0, len(charges))
 	for _, charge := range charges {
 		if _, exists := defaultPolicies[charge.Scope]; !exists || charge.Cost < 1 || charge.Cost > maximumValue ||
 			charge.Policy.Count < 1 || charge.Policy.Count > PolicyMaximum(charge.Scope) ||
@@ -137,38 +168,44 @@ func prepareCharges(charges []Charge, pepper [32]byte, now time.Time) ([]byte, e
 		_, _ = mac.Write([]byte(charge.Scope))
 		_, _ = mac.Write([]byte{0})
 		_, _ = mac.Write([]byte(normalized))
-		result = append(result, wireCharge{
-			Scope: charge.Scope, KeyDigest: hex.EncodeToString(mac.Sum(nil)), Cost: charge.Cost, Limit: charge.Policy.Count,
-			WindowStart: windowStart.Format(time.RFC3339Nano), WindowEnd: windowEnd.Format(time.RFC3339Nano),
-		})
+		prepared := preparedCharge{scope: charge.Scope, cost: charge.Cost, limit: charge.Policy.Count, windowStart: windowStart, windowEnd: windowEnd}
+		copy(prepared.digest[:], mac.Sum(nil))
+		result = append(result, prepared)
 	}
 	sort.Slice(result, func(left, right int) bool {
-		if result[left].Scope != result[right].Scope {
-			return result[left].Scope < result[right].Scope
+		if result[left].scope != result[right].scope {
+			return result[left].scope < result[right].scope
 		}
-		return result[left].KeyDigest < result[right].KeyDigest
+		return bytes.Compare(result[left].digest[:], result[right].digest[:]) < 0
 	})
 	for index := 1; index < len(result); index++ {
-		if result[index-1].Scope == result[index].Scope && result[index-1].KeyDigest == result[index].KeyDigest {
+		if result[index-1].scope == result[index].scope && result[index-1].digest == result[index].digest {
 			return nil, &safeError{code: CodeInvalidLimit}
 		}
 	}
-	payload, err := json.Marshal(result)
-	if err != nil {
-		return nil, &safeError{code: CodeInvalidLimit, cause: err}
-	}
-	return payload, nil
+	return result, nil
 }
 
 var uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
+// normalizeKey canonicalizes a bucket key. A client address is keyed by
+// itself for IPv4 and by its /64 for IPv6, one subscriber's allocation, so a
+// single /64 cannot mint 2^64 keys.
 func normalizeKey(scope, key string) (string, error) {
-	if strings.HasSuffix(scope, "-ip") {
+	switch scopeKeyClasses[scope] {
+	case keyIP:
 		address, err := netip.ParseAddr(key)
 		if err != nil || address.Zone() != "" {
 			return "", &safeError{code: CodeInvalidLimit}
 		}
-		return address.Unmap().String(), nil
+		address = address.Unmap()
+		if address.Is6() {
+			address = netip.PrefixFrom(address, 64).Masked().Addr()
+		}
+		return address.String(), nil
+	case keyVerified:
+	default:
+		return "", &safeError{code: CodeInvalidLimit}
 	}
 	canonical := strings.ToLower(key)
 	if !uuidPattern.MatchString(canonical) {

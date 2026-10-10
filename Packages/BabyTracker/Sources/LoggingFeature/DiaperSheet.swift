@@ -9,14 +9,10 @@ import BabyUI
 public enum DiaperSheetCopy {
     public static let title = LoggingL10n.text("Diaper")
     public static let cancelLabel = LoggingL10n.text("Cancel")
-    public static let timeLabel = LoggingL10n.text("Time")
-    public static let detailHeader = LoggingL10n.text("Details")
     public static let consistencyLabel = LoggingL10n.text("Consistency")
     public static let consistencyPrompt = LoggingL10n.text("Seedy, runny, firm")
     public static let colorLabel = LoggingL10n.text("Colour")
     public static let colorPrompt = LoggingL10n.text("Mustard, green, dark")
-    public static let noteLabel = LoggingL10n.text("Note")
-    public static let notePrompt = LoggingL10n.text("Optional")
 }
 
 /// Edit mode's state and writes: the diaper's fields as a draft, saved in one
@@ -158,29 +154,29 @@ public final class DiaperEditModel {
     }
 }
 
-/// Two taps: open, choose. Saves immediately — no confirmation screen.
-/// `.dry` is deliberately absent from logging; only edit mode offers it.
+/// Two taps: open, choose. Saves immediately, at the Time row's date and
+/// time — no confirmation screen. `.dry` is deliberately absent from
+/// logging; only edit mode offers it.
 ///
-/// Edit mode (`editing:` an entry's id) is the same sheet with the entry's
-/// values: its time with the date at the top, the choices as a selection
-/// rather than a save, Dry as a fourth choice so no recorded value is lost
-/// (ruling H-R3), and Save and Delete at the bottom.
+/// Edit mode (`editing:` an entry's id) is the same panel with the entry's
+/// values: the choices as a selection rather than a save, Dry as a fourth
+/// choice so no recorded value is lost (ruling H-R3), and Save and Delete
+/// at the bottom.
 public struct DiaperSheet: View {
     let store: BabyStore
     let babyID: UUID
     let onDone: () -> Void
 
-    /// Present in edit mode only. Create mode keeps its own `@State` below
-    /// and never touches a model.
+    /// Present in edit mode only. New mode keeps its own `@State` below.
     @State private var editModel: DiaperEditModel?
     /// `onDone` runs once even when a delete is followed by the revision
     /// bump that marks the entry gone.
     @State private var isFinished = false
 
     @State private var when: Date
-    /// Collapsed, and never on the critical path: the fast path is still
-    /// open, choose — two taps, and the disclosure is below both of them.
+    /// Edit mode's Details: open when the entry already has one.
     @State private var isShowingDetail = false
+    /// New mode's details, written with the choice that saves.
     @State private var consistency = ""
     @State private var color = ""
     @State private var note = ""
@@ -191,11 +187,6 @@ public struct DiaperSheet: View {
     /// correctly called it clipping: text that has to shrink to fit has not
     /// scaled, it has been overruled.
     @Environment(\.dynamicTypeSize) private var typeSize
-    /// How the choices are laid out. Only the width decides that, so the
-    /// taller stated height it asks for cannot feed back into the choice.
-    @State private var choiceLayout: ChoiceLayout = .row
-
-    private enum ChoiceLayout { case row, grid, stacked }
 
     public init(store: BabyStore, babyID: UUID, editing diaperID: UUID? = nil, onDone: @escaping () -> Void) {
         self.store = store
@@ -233,7 +224,8 @@ public struct DiaperSheet: View {
     /// saved behind a banner that said the save had failed, so tapping the
     /// same button again logged a SECOND diaper. The fast path's change log is
     /// unchanged: one `.create`, with or without the disclosure open.
-    private func log(_ contents: DiaperContents) throws {
+    static func log(_ contents: DiaperContents, at when: Date, store: BabyStore, babyID: UUID,
+                    consistency: String = "", color: String = "", note: String = "") throws {
         _ = try store.logDiaper(
             contents,
             for: babyID,
@@ -262,7 +254,6 @@ public struct DiaperSheet: View {
     private var choices: some View {
         if typeSize.isAccessibilitySize {
             stackedChoices
-                .onAppear { choiceLayout = .stacked }
         } else {
             ViewThatFits(in: .horizontal) {
                 EqualWidthRow(spacing: 10) {
@@ -270,7 +261,6 @@ public struct DiaperSheet: View {
                         choice(contents, stacked: true)
                     }
                 }
-                .onAppear { choiceLayout = .row }
                 if offered.count == 4 {
                     VStack(spacing: 10) {
                         EqualWidthRow(spacing: 10) {
@@ -284,10 +274,8 @@ public struct DiaperSheet: View {
                             }
                         }
                     }
-                    .onAppear { choiceLayout = .grid }
                 }
                 stackedChoices
-                    .onAppear { choiceLayout = .stacked }
             }
         }
     }
@@ -297,16 +285,6 @@ public struct DiaperSheet: View {
             ForEach(offered, id: \.self) { contents in
                 choice(contents, stacked: false)
             }
-        }
-    }
-
-    /// What the choices add to the stated height over one row: a second row
-    /// of two, or a stack of three or four.
-    private var choiceLayoutExtra: CGFloat {
-        switch choiceLayout {
-        case .row: 0
-        case .grid: 78
-        case .stacked: offered.count == 4 ? 184 : 110
         }
     }
 
@@ -324,7 +302,8 @@ public struct DiaperSheet: View {
                 return
             }
             do {
-                try log(contents)
+                try Self.log(contents, at: when, store: store, babyID: babyID,
+                             consistency: consistency, color: color, note: note)
                 errorReporter.clear()
                 onDone()
             } catch {
@@ -352,65 +331,11 @@ public struct DiaperSheet: View {
         // told apart by colour as well as by its stronger stroke.
         .buttonStyle(.tracker(isSelected ? Palette.diaper : Palette.secondaryText,
                               emphasis: isSelected ? .primary : .secondary))
-        // A stated sheet height that comes up short must not be absorbed by
-        // squashing the three choices — they are the point of the sheet.
+        // A sheet that comes up short scrolls rather than squashing the
+        // choices — they are the point of the sheet.
         .fixedSize(horizontal: false, vertical: true)
         .accessibilityAddTraits(editModel != nil && isSelected ? .isSelected : [])
         .accessibilityIdentifier("diaper.\(contents.rawValue)")
-    }
-
-    /// The two optional fields as one grouped card, the way Settings and every
-    /// iOS 26 form draws them: a label on the left, the field on the right, a
-    /// hairline between. `.roundedBorder` drew them as black wells on a dark
-    /// sheet — low contrast, and the look of iOS 6.
-    private var detailFields: some View {
-        VStack(spacing: 0) {
-            detailRow(DiaperSheetCopy.consistencyLabel, text: field(\.consistency, else: $consistency), prompt: DiaperSheetCopy.consistencyPrompt, identifier: "diaper.consistency")
-            Divider().padding(.leading, 16)
-            detailRow(DiaperSheetCopy.colorLabel, text: field(\.color, else: $color), prompt: DiaperSheetCopy.colorPrompt, identifier: "diaper.colour")
-            Divider().padding(.leading, 16)
-            detailRow(DiaperSheetCopy.noteLabel, text: field(\.note, else: $note), prompt: DiaperSheetCopy.notePrompt, identifier: "diaper.note")
-        }
-        .background(.white.opacity(0.08), in: .rect(cornerRadius: 22, style: .continuous))
-    }
-
-    /// The edit model's field in edit mode, the sheet's own state otherwise.
-    private func field(_ keyPath: ReferenceWritableKeyPath<DiaperEditModel, String>, else own: Binding<String>) -> Binding<String> {
-        guard let editModel else { return own }
-        return Binding(get: { editModel[keyPath: keyPath] }, set: { editModel[keyPath: keyPath] = $0 })
-    }
-
-    /// Label beside field at the ordinary sizes; label above field at the
-    /// accessibility ones, where "Consistency" alone is wider than half the
-    /// card and one of the two had to be cut.
-    private func detailRow(_ title: String, text: Binding<String>, prompt: String, identifier: String) -> some View {
-        let label = Text(title)
-            .foregroundStyle(Palette.primaryText)
-        let field = TextField(title, text: text, prompt: Text(prompt))
-            .foregroundStyle(Palette.primaryText)
-            // Outside a Form the field's title is not rendered at all, so
-            // VoiceOver read the prompt's examples and never said what the
-            // field was for.
-            .accessibilityLabel(title)
-            .accessibilityIdentifier(identifier)
-        return Group {
-            if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 4) {
-                    label
-                    field
-                }
-                .padding(.vertical, 10)
-            } else {
-                HStack(spacing: 12) {
-                    // The label keeps its full width; the field takes what is
-                    // left and scrolls its own text.
-                    label.fixedSize().layoutPriority(1)
-                    field.multilineTextAlignment(.trailing)
-                }
-            }
-        }
-        .padding(.horizontal, 16)
-        .frame(minHeight: 48)
     }
 
     /// The icon set's contents glyph for wet, dirty and mixed. Dry has no
@@ -426,97 +351,58 @@ public struct DiaperSheet: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            scrollingAtAccessibilitySizes(VStack(spacing: 14) {
-                // Edit mode's title row: the entry's own time, with its date.
-                if let editModel {
-                    EditTimeRow(
-                        date: Binding(get: { editModel.when }, set: { editModel.when = $0 }),
-                        latest: editModel.latestAllowedDate,
-                        identifier: "diaper.time",
-                        stacksAtAccessibilitySizes: true
-                    )
-                }
-
-                // One row where the words fit, not three stacked slabs.
-                // Stacked full-width buttons at 64pt each, in a sheet sized for
-                // a row, pushed the first one under the navigation bar, where
-                // its fill drew over the title and the word "Diaper" rendered
-                // on top of "Wet" — so a stack asks for a taller sheet below.
-                //
-                // Still tap-to-save rather than a select-then-confirm radio:
-                // this sheet's whole point is two taps — open, choose — and a
-                // radio would add a third at the moment a parent has one hand
-                // free.
+            // The same panel as every other entry. New mode has no footer: a
+            // choice saves, with the Time row's value. Edit mode's choices
+            // select, and Save writes.
+            EntryPanel(title: DiaperSheetCopy.title, icon: .diaper, tint: Palette.diaper,
+                       canSave: editModel?.canSave ?? false, identifierPrefix: "diaper",
+                       onCancel: onDone, onSave: saveAction, onDelete: deleteAction) {
+                // One row where the words fit, not three stacked slabs. Still
+                // tap-to-save rather than select-then-confirm: two taps — open,
+                // choose — while a parent has one hand free.
                 choices
-                    .padding(.top, 8)
 
-                if editModel == nil {
-                    DatePicker(DiaperSheetCopy.timeLabel, selection: $when, displayedComponents: [.hourAndMinute])
-                        .padding(.top, 10)
+                // The same dated row logging and editing: a change remembered
+                // the morning after belongs to the day before.
+                PanelSection {
+                    EditTimeRow(date: timeBinding, latest: editModel?.latestAllowedDate ?? store.now,
+                                identifier: "diaper.time")
                 }
 
-                DisclosureGroup(isExpanded: $isShowingDetail) {
-                    detailFields
-                        .padding(.top, 6)
-                } label: {
-                    // On the label, because that is the actionable row — a
-                    // minHeight on the group itself would be measured across
-                    // the fields once it is open.
-                    Text(DiaperSheetCopy.detailHeader)
-                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                        .accessibilityIdentifier("diaper.details")
-                }
-
-            }
-            .padding(20))
-            .frame(maxHeight: .infinity, alignment: .top)
-            .editFooter(
-                isPresented: editModel != nil,
-                canSave: editModel?.canSave ?? false,
-                identifierPrefix: "diaper",
-                onSave: save,
-                onDelete: delete
-            )
-            // Grows when the disclosure opens, because the measurement is of
-            // what the content would like to be rather than of what the sheet
-            // gave it. The `Spacer` that used to hold the bottom open is gone
-            // with it — it was filling space this no longer allocates.
-            // Two heights, because this sheet has two sizes: the disclosure
-            // doubles as the difference between them. At `.medium` the
-            // collapsed sheet was 40% empty and the expanded one still was.
-            // Stacked, the three choices are about 110 pt taller than a row.
-            // Edit mode moves the time row to the top and adds the footer.
-            .sheetHeight((isShowingDetail ? 470 : 300) + choiceLayoutExtra + (editModel == nil ? 0 : EditFooter.height))
-            .navigationTitle(DiaperSheetCopy.title)
-            .editTitle(isPresented: editModel != nil, icon: .diaper, tint: Palette.diaper, label: DiaperSheetCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(DiaperSheetCopy.cancelLabel, action: onDone)
+                // Opened, the sheet grows with it; the choice still saves
+                // what is typed here.
+                DetailsSection(isExpanded: $isShowingDetail, identifier: "diaper.details") {
+                    DetailFieldRow(DiaperSheetCopy.consistencyLabel, text: field(\.consistency, else: $consistency),
+                                   prompt: DiaperSheetCopy.consistencyPrompt, identifier: "diaper.consistency")
+                    DetailFieldRow(DiaperSheetCopy.colorLabel, text: field(\.color, else: $color),
+                                   prompt: DiaperSheetCopy.colorPrompt, identifier: "diaper.colour")
+                    DetailFieldRow(EditChromeCopy.note, text: field(\.note, else: $note), identifier: "diaper.note")
                 }
             }
             .editLifecycle(isPresented: editModel != nil, revision: store.revision,
                            isGone: editModel?.isGone ?? false, reload: { editModel?.reload() }, onGone: finish)
-        }
     }
 
-    /// In edit mode at the accessibility sizes the sheet is full height
-    /// and its content can still be taller than the screen — the time row,
-    /// four stacked choices and Details over the footer. Without a scroll
-    /// view the VStack overflowed upwards, and the time row ran under the
-    /// navigation bar with its label cut to "D…" (History redesign, Task 7,
-    /// `ax5-diaper-edit`). Create mode and the smaller sizes keep the
-    /// plain, stated-height layout.
-    @ViewBuilder
-    private func scrollingAtAccessibilitySizes(_ content: some View) -> some View {
-        if editModel != nil, typeSize.isAccessibilitySize {
-            ScrollView { content }
-        } else {
-            content
-        }
+    /// The edit model's field in edit mode, the sheet's own state otherwise.
+    private func field(_ keyPath: ReferenceWritableKeyPath<DiaperEditModel, String>, else own: Binding<String>) -> Binding<String> {
+        guard let editModel else { return own }
+        return Binding(get: { editModel[keyPath: keyPath] }, set: { editModel[keyPath: keyPath] = $0 })
+    }
+
+    /// Edit mode only: in new mode a choice saves, and nothing deletes.
+    private var saveAction: (() -> Void)? {
+        guard editModel != nil else { return nil }
+        return { save() }
+    }
+
+    private var deleteAction: (() -> Void)? {
+        guard editModel != nil else { return nil }
+        return { delete() }
+    }
+
+    /// The edit model's time in edit mode, the sheet's own otherwise.
+    private var timeBinding: Binding<Date> {
+        if let editModel { Bindable(editModel).when } else { $when }
     }
 
     // MARK: - Edit mode

@@ -20,6 +20,7 @@ const (
 	SurfaceLive         Surface = "live"
 	SurfaceExport       Surface = "export"
 	SurfaceLiveActivity Surface = "live-activity"
+	SurfacePushToken    Surface = "push-token"
 )
 
 func RequiredCapabilities(surface Surface) []string {
@@ -42,10 +43,12 @@ func RequiredCapabilities(surface Surface) []string {
 		return []string{CapabilityRecordsV1, CapabilityImportResolverV1}
 	case SurfaceLive:
 		return []string{CapabilityRecordsV1, CapabilityLiveHintsV1}
-	case SurfaceLiveActivity:
-		return []string{CapabilityLiveActivityPushV1}
 	case SurfaceExport:
 		return []string{CapabilityExportV1}
+	case SurfaceLiveActivity:
+		return []string{CapabilityLiveActivityPushV1}
+	case SurfacePushToken:
+		return []string{CapabilityPushTokenV1}
 	default:
 		return nil
 	}
@@ -280,6 +283,50 @@ type SyncResponse struct {
 	HighWater              Cursor          `json:"high_water"`
 	NextPageToken          *string         `json:"next_page_token"`
 	SkippedOptionalCursors []Cursor        `json:"-"`
+	// EncodedChanges, when non-nil, replaces Changes on the wire: each item
+	// is one change already encoded (EncodeChange around a stored entity),
+	// written verbatim. It takes precedence: when both are set, Changes is
+	// ignored. nil means "not encoded", so an empty encoded page must be a
+	// non-nil empty slice (make(..., 0)) to be written as [] rather than
+	// fall back to Changes (null when nil, as before).
+	EncodedChanges []json.RawMessage `json:"-"`
+}
+
+// MarshalJSON writes the v1 sync response with its usual field order. The
+// changes array is EncodedChanges when it is non-nil, else Changes. The
+// output is always HTML-escaped (json.Marshal), whatever SetEscapeHTML the
+// outer encoder uses: an encoder with escaping off still gets \u003c here.
+func (response SyncResponse) MarshalJSON() ([]byte, error) {
+	if response.EncodedChanges == nil {
+		type plain SyncResponse
+		return json.Marshal(plain(response))
+	}
+	return json.Marshal(struct {
+		ServerInstanceID string            `json:"server_instance_id"`
+		RecoveryEpoch    uint64            `json:"recovery_epoch"`
+		Outcomes         []Outcome         `json:"outcomes"`
+		Changes          []json.RawMessage `json:"changes"`
+		HighWater        Cursor            `json:"high_water"`
+		NextPageToken    *string           `json:"next_page_token"`
+	}{response.ServerInstanceID, response.RecoveryEpoch, response.Outcomes, response.EncodedChanges, response.HighWater, response.NextPageToken})
+}
+
+// EncodeChange encodes one journal change around an entity that is already
+// encoded (a stored care wire), byte-identical to json.Marshal of the
+// JournalChange holding that entity decoded. Changes are never optional.
+func EncodeChange(cursor Cursor, kind, entityID string, version uint64, actorAccountID, deviceID, operation, acceptedAt string, entity json.RawMessage) (json.RawMessage, error) {
+	return json.Marshal(struct {
+		Cursor              Cursor          `json:"cursor"`
+		EntityKind          string          `json:"entity_kind"`
+		EntityID            string          `json:"entity_id"`
+		EntityVersion       uint64          `json:"entity_version"`
+		ActorAccountID      string          `json:"actor_account_id"`
+		DeviceID            string          `json:"device_id"`
+		Operation           string          `json:"operation"`
+		AcceptedAt          string          `json:"accepted_at"`
+		Optional            bool            `json:"optional"`
+		SnapshotOrTombstone json.RawMessage `json:"snapshot_or_tombstone"`
+	}{cursor, kind, entityID, version, actorAccountID, deviceID, operation, acceptedAt, false, entity})
 }
 
 // IncrementalPageEncodedBytes measures the exact v1 incremental page envelope
@@ -295,6 +342,13 @@ func IncrementalPageEncodedBytes(server ServerInfo, familyID string, highWater u
 	}{server.InstanceID, server.RecoveryEpoch, changes, Cursor{ServerInstanceID: server.InstanceID, RecoveryEpoch: server.RecoveryEpoch, FamilyID: familyID, Sequence: highWater}, nextPageToken}
 	raw, _ := json.Marshal(wire)
 	return len(raw) + 1
+}
+
+// IncrementalPageEncodedBytesRaw is IncrementalPageEncodedBytes for a page
+// of changeCount encoded changes totalling changeBytes: the empty envelope,
+// the changes and the commas between them.
+func IncrementalPageEncodedBytesRaw(server ServerInfo, familyID string, highWater uint64, changeBytes, changeCount int, nextPageToken *string) int {
+	return IncrementalPageEncodedBytes(server, familyID, highWater, []JournalChange{}, nextPageToken) + changeBytes + max(changeCount-1, 0)
 }
 
 func (response *SyncResponse) UnmarshalJSON(raw []byte) error {
@@ -340,6 +394,30 @@ type SnapshotResponse struct {
 	HighWater        Cursor            `json:"high_water"`
 	Entities         []CanonicalEntity `json:"entities"`
 	NextPageToken    *string           `json:"next_page_token"`
+	// EncodedEntities, when non-nil, replaces Entities on the wire: each item
+	// is one stored entity wire, written verbatim. It takes precedence: when
+	// both are set, Entities is ignored. nil means "not encoded", so an empty
+	// encoded page must be a non-nil empty slice to be written as [].
+	EncodedEntities []json.RawMessage `json:"-"`
+}
+
+// MarshalJSON writes the v1 snapshot response with its usual field order.
+// The entities array is EncodedEntities when it is non-nil, else Entities.
+// The output is always HTML-escaped (json.Marshal), whatever SetEscapeHTML
+// the outer encoder uses.
+func (response SnapshotResponse) MarshalJSON() ([]byte, error) {
+	if response.EncodedEntities == nil {
+		type plain SnapshotResponse
+		return json.Marshal(plain(response))
+	}
+	return json.Marshal(struct {
+		ServerInstanceID string            `json:"server_instance_id"`
+		RecoveryEpoch    uint64            `json:"recovery_epoch"`
+		SnapshotID       string            `json:"snapshot_id"`
+		HighWater        Cursor            `json:"high_water"`
+		Entities         []json.RawMessage `json:"entities"`
+		NextPageToken    *string           `json:"next_page_token"`
+	}{response.ServerInstanceID, response.RecoveryEpoch, response.SnapshotID, response.HighWater, response.EncodedEntities, response.NextPageToken})
 }
 
 const (
@@ -354,6 +432,12 @@ func SnapshotPageEncodedBytes(server ServerInfo, snapshotID string, highWater Cu
 		HighWater: highWater, Entities: entities, NextPageToken: nextPageToken}
 	raw, _ := json.Marshal(response)
 	return len(raw) + 1
+}
+
+// SnapshotPageEncodedBytesRaw is SnapshotPageEncodedBytes for a page of
+// entityCount stored entity wires totalling entityBytes.
+func SnapshotPageEncodedBytesRaw(server ServerInfo, snapshotID string, highWater Cursor, entityBytes, entityCount int, nextPageToken *string) int {
+	return SnapshotPageEncodedBytes(server, snapshotID, highWater, []CanonicalEntity{}, nextPageToken) + entityBytes + max(entityCount-1, 0)
 }
 
 func (response *SnapshotResponse) UnmarshalJSON(raw []byte) error {

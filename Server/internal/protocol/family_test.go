@@ -77,7 +77,7 @@ func TestRecoveryCapabilitiesAreRouteSpecificAndAdvertised(t *testing.T) {
 	if got, want := RecoveryCapabilities(), []string{CapabilityRecoveryV1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("recovery capabilities=%v want=%v", got, want)
 	}
-	if got, want := ServerCapabilities(), []string{CapabilityIdentityV1, CapabilityFamilyLifecycleV1, CapabilityRecoveryV1, CapabilityRecordsV1, CapabilitySnapshotV1, CapabilityTimerCommandsV1, CapabilityImportResolverV1, CapabilityLiveHintsV1, CapabilityExportV1}; !reflect.DeepEqual(got, want) {
+	if got, want := ServerCapabilities(), []string{CapabilityIdentityV1, CapabilityFamilyLifecycleV1, CapabilityRecoveryV1, CapabilityRecordsV1, CapabilitySnapshotV1, CapabilityTimerCommandsV1, CapabilityImportResolverV1, CapabilityLiveHintsV1, CapabilityExportV1, CapabilityPushTokenV1}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("server capabilities=%v want=%v", got, want)
 	}
 	request := &ConfirmedCommandRequest{RequestMeta: RequestMeta{ProtocolVersion: "v1", Capabilities: []string{CapabilityRecoveryV1}},

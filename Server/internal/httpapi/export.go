@@ -4,43 +4,88 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"strconv"
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	familyexport "babytracker/server/internal/export"
 	"babytracker/server/internal/family"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
 )
 
-func exportPrincipal(w http.ResponseWriter, r *http.Request, options Options) (access.Principal, bool) {
+// exportRefusal is an export route's own refusal, held until after
+// authentication (Admit); it is written with writeExportCode.
+type exportRefusal string
+
+func (r exportRefusal) Error() string { return string(r) }
+
+// exportPrincipal authorizes an export request in one pooled statement with
+// no transaction (RequestAuthorizer.AuthorizeRequest), in the legacy order:
+// readiness and the credential (before any database work), then, after
+// authentication (Admit), the session's scope, the headers, the IP and the
+// rate limit, and the route's own refusal (its query, body or request);
+// then family policy, where the legacy service's family read stood. The
+// export service runs its guarded transaction afterwards.
+func exportPrincipal(w http.ResponseWriter, r *http.Request, options Options, refusal string) (access.Principal, bool) {
 	w.Header().Set("Cache-Control", "no-store")
-	p, ok := authenticateSyncFamilyRequest(w, r, options)
+	digests, ok := syncCredential(w, r, options)
 	if !ok {
 		return access.Principal{}, false
 	}
-	if p.Scope != "family" || p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
-		writeExportCode(w, r, options, "access_expired")
+	if options.RequestAuthorizer == nil {
+		writeExportCode(w, r, options, "service_unavailable")
 		return access.Principal{}, false
+	}
+	_, headerRefusal := syncHeaders(r, protocol.SurfaceExport, options)
+	admitted := false
+	p, g, err := options.RequestAuthorizer.AuthorizeRequest(r.Context(), authority.Request{Digests: digests, Admit: func(p access.Principal) error {
+		if err := admitExport(r, options, p, headerRefusal, refusal); err != nil {
+			return err
+		}
+		admitted = true
+		return nil
+	}}, "read")
+	if err != nil {
+		writeExportRequestError(w, r, options, err, admitted)
+		return access.Principal{}, false
+	}
+	if g.FamilyID != p.SessionFamilyID {
+		// The legacy family read's check (owner_required); the grant is the
+		// session's family for every session Admit lets through.
+		writeExportError(w, r, options, familyexport.ErrOwnerRequired)
+		return access.Principal{}, false
+	}
+	return p, true
+}
+
+// admitExport is the export routes' Admit: every check the legacy handler
+// made between authentication and the service's family read. The rate limit
+// is charged here, before the route's own refusal and before family policy,
+// where the legacy handler charged it; it is in memory and never blocks.
+func admitExport(r *http.Request, options Options, p access.Principal, headerRefusal, refusal string) error {
+	if p.Scope != "family" || p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
+		return exportRefusal("access_expired")
 	}
 	if options.ExportService == nil {
-		writeExportCode(w, r, options, "service_unavailable")
-		return access.Principal{}, false
+		// Export is off on this node (cfg.Export.Enabled): a signed-in
+		// family member is told so after the credential, as before.
+		return exportRefusal("service_unavailable")
 	}
-	if _, ok := validateSyncHeaders(w, r, protocol.SurfaceExport, options); !ok {
-		return access.Principal{}, false
+	if headerRefusal != "" {
+		return syncRefusal(headerRefusal)
 	}
 	if options.Limiter == nil || options.ClientIPResolver == nil {
-		writeExportCode(w, r, options, "service_unavailable")
-		return access.Principal{}, false
+		return exportRefusal("service_unavailable")
 	}
 	address, err := options.ClientIPResolver.Resolve(r.RemoteAddr, r.Header)
 	if err != nil {
-		writeExportCode(w, r, options, "invalid_request")
-		return access.Principal{}, false
+		return exportRefusal("invalid_request")
 	}
 	charges := []limits.Charge{
 		{Scope: limits.ScopeExportAccount, Key: p.AccountID, Cost: 1, Policy: options.ExportAccountPolicy},
@@ -51,42 +96,84 @@ func exportPrincipal(w http.ResponseWriter, r *http.Request, options Options) (a
 	}
 	decision, err := options.Limiter.TakeMany(r.Context(), charges)
 	if err != nil {
-		writeExportFault(w, r, options, "service_unavailable", err)
-		return access.Principal{}, false
+		// The limiter's error stays the fault line's cause.
+		return fmt.Errorf("%w: %w", exportRefusal("service_unavailable"), err)
 	}
 	if !decision.Allowed {
-		writeSyncRateLimited(w, r, options, decision)
-		return access.Principal{}, false
+		return rateLimited{decision}
 	}
-	return p, true
+	if refusal != "" {
+		return exportRefusal(refusal)
+	}
+	return nil
+}
+
+// writeExportRequestError writes an export authorization's refusal as the
+// legacy handler wrote it: its own refusals with writeExportFault, a header
+// refusal with writeSyncFault, a rate-limit denial with writeSyncRateLimited,
+// an authentication refusal (before Admit) as the sync routes write it, and
+// a family-policy refusal (after Admit) as the service's family read was
+// written (writeExportError). The error is each 5xx's logged cause.
+func writeExportRequestError(w http.ResponseWriter, r *http.Request, options Options, err error, admitted bool) {
+	var own exportRefusal
+	var refusal syncRefusal
+	var limited rateLimited
+	switch {
+	case errors.As(err, &own):
+		writeExportFault(w, r, options, string(own), err)
+	case errors.As(err, &refusal):
+		writeSyncFault(w, r, options, string(refusal), err)
+	case errors.As(err, &limited):
+		writeSyncRateLimited(w, r, options, limited.decision)
+	case admitted:
+		writeExportError(w, r, options, err)
+	default:
+		writeSyncFamilyFault(w, r, options, auth.Code(err), err)
+	}
+}
+
+// exportCreateRefusal is a create request's refusal ("" when acceptable):
+// its query, its bounded body, the decode, the route capabilities and the
+// request's own fields, in the legacy order.
+func exportCreateRefusal(r *http.Request, options Options) (protocol.CreateExportRequest, string) {
+	var input protocol.CreateExportRequest
+	if r.URL.RawQuery != "" {
+		return input, "invalid_request"
+	}
+	body, oversized, err := boundedBody(r, 4<<10)
+	if oversized {
+		return input, "body_too_large"
+	}
+	if err != nil {
+		return input, "invalid_request"
+	}
+	if err := protocol.DecodeRequest(bytes.NewReader(body), 4<<10, &input); err != nil {
+		return input, protocol.ErrorCodeOf(err)
+	}
+	if err := protocol.ValidateRouteCapabilities(protocol.SurfaceExport, input.Capabilities, input.Capabilities, advertisedCapabilities(options)); err != nil {
+		return input, protocol.ErrorCodeOf(err)
+	}
+	if !familyexport.ValidCreateRequest(input) {
+		return input, "invalid_request"
+	}
+	return input, ""
+}
+
+// exportIDRefusal is a status or download request's refusal ("" when
+// acceptable): a query, or an export ID that is not a UUID.
+func exportIDRefusal(r *http.Request) (string, string) {
+	id := r.PathValue("id")
+	if r.URL.RawQuery != "" || !protocol.ValidUUID(id) {
+		return id, "invalid_request"
+	}
+	return id, ""
 }
 
 func exportCreateHandler(options Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := exportPrincipal(w, r, options)
+		input, refusal := exportCreateRefusal(r, options)
+		p, ok := exportPrincipal(w, r, options, refusal)
 		if !ok {
-			return
-		}
-		if r.URL.RawQuery != "" {
-			writeExportCode(w, r, options, "invalid_request")
-			return
-		}
-		body, oversized, err := boundedBody(r, 4<<10)
-		if oversized {
-			writeExportCode(w, r, options, "body_too_large")
-			return
-		}
-		if err != nil {
-			writeExportCode(w, r, options, "invalid_request")
-			return
-		}
-		var input protocol.CreateExportRequest
-		if err := protocol.DecodeRequest(bytes.NewReader(body), 4<<10, &input); err != nil {
-			writeExportCode(w, r, options, protocol.ErrorCodeOf(err))
-			return
-		}
-		if err := protocol.ValidateRouteCapabilities(protocol.SurfaceExport, input.Capabilities, input.Capabilities, advertisedCapabilities(options)); err != nil {
-			writeExportCode(w, r, options, protocol.ErrorCodeOf(err))
 			return
 		}
 		status, created, err := options.ExportService.Create(r.Context(), p, input)
@@ -104,13 +191,9 @@ func exportCreateHandler(options Options) http.HandlerFunc {
 
 func exportStatusHandler(options Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := exportPrincipal(w, r, options)
+		id, refusal := exportIDRefusal(r)
+		p, ok := exportPrincipal(w, r, options, refusal)
 		if !ok {
-			return
-		}
-		id := r.PathValue("id")
-		if r.URL.RawQuery != "" || !protocol.ValidUUID(id) {
-			writeExportCode(w, r, options, "invalid_request")
 			return
 		}
 		status, err := options.ExportService.Status(r.Context(), p, id)
@@ -137,13 +220,9 @@ func (writer *exportDownloadWriter) Write(data []byte) (int, error) {
 
 func exportDownloadHandler(options Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		p, ok := exportPrincipal(w, r, options)
+		id, refusal := exportIDRefusal(r)
+		p, ok := exportPrincipal(w, r, options, refusal)
 		if !ok {
-			return
-		}
-		id := r.PathValue("id")
-		if r.URL.RawQuery != "" || !protocol.ValidUUID(id) {
-			writeExportCode(w, r, options, "invalid_request")
 			return
 		}
 		status, err := options.ExportService.Status(r.Context(), p, id)

@@ -1519,6 +1519,29 @@ struct FamilySyncEngineLiveTests {
         #expect(joiner.lastSyncReason == .liveHint)
     }
 
+    /// A socket that opens after the launch sync owes its own catch-up, which
+    /// is still running when activation has already returned. Anything that
+    /// reads the status straight after launch (the live-server relaunch step)
+    /// must wait for it rather than assume the engine is idle.
+    @Test func aConnectAfterActivationLeavesItsCatchUpInFlight() async throws {
+        let (family, _, _, joiner) = try await joined()
+        let before = family.joinerTransport.syncCalls
+
+        family.joinerTransport.holdNext = true
+        joiner.liveConnected()
+        while !family.joinerTransport.isHolding { await Task.yield() }
+        #expect(joiner.isBusy)
+        #expect(joiner.status == .syncing)
+
+        family.joinerTransport.release()
+        try await until { await !joiner.isBusy }
+        #expect(family.joinerTransport.syncCalls == before + 1)
+        guard case .upToDate = joiner.status else {
+            Issue.record("catch-up ended \(joiner.status)")
+            return
+        }
+    }
+
     /// A refused socket token is one HTTP sync, which renews; then the socket
     /// dials again with whatever token the renewal left.
     @Test func aRefusedSocketRenewsThroughOneSyncAndRedials() async throws {

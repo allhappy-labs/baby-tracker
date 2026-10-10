@@ -54,12 +54,12 @@ func TestMissingContinuityIsDeniedForExistingInstallation(t *testing.T) {
 	originalDevice := client.principal.DeviceID
 	originalCredential := client.deviceCredential
 	before := fixture.h.DeviceCount(t, client.principal.AccountID)
-	journalBefore := fixture.h.Count(t, "mutation_journal", fixture.h.FamilyID)
+	journalBefore := int(fixture.h.FamilySequence(t))
 	client.deviceCredential = ""
 	if err := client.ReauthenticateWithContinuity(); !errors.Is(err, errDeviceContinuityRequired) {
 		t.Fatalf("err=%v", err)
 	}
-	if client.principal.DeviceID != originalDevice || fixture.h.DeviceCount(t, client.principal.AccountID) != before || fixture.h.Count(t, "mutation_journal", fixture.h.FamilyID) != journalBefore {
+	if client.principal.DeviceID != originalDevice || fixture.h.DeviceCount(t, client.principal.AccountID) != before || int(fixture.h.FamilySequence(t)) != journalBefore {
 		t.Fatal("missing client continuity allocated or selected another device")
 	}
 	client.deviceCredential = strings.Repeat("A", 43)
@@ -86,7 +86,7 @@ func TestOrdinaryRecordReceiptRecoversAcrossContinuity(t *testing.T) {
 		t.Fatal(err)
 	}
 	replayed, err := client.SyncExact(raw)
-	if err != nil || len(replayed.Outcomes) != 1 || replayed.Outcomes[0].OriginalStatus == nil || *replayed.Outcomes[0].OriginalStatus != "applied" || fixture.h.Count(t, "babies", fixture.h.FamilyID) != 1 {
+	if err != nil || len(replayed.Outcomes) != 1 || replayed.Outcomes[0].OriginalStatus == nil || *replayed.Outcomes[0].OriginalStatus != "applied" || fixture.h.CareCount(t, "baby", fixture.h.FamilyID) != 1 {
 		t.Fatalf("replay=%+v err=%v", replayed, err)
 	}
 }
@@ -251,8 +251,29 @@ func (fixture *protocolFixture) postAuth(path string, input, output any) error {
 	return json.NewDecoder(response.Body).Decode(output)
 }
 
+// refreshReceipts counts the recovery receipts of one refresh attempt, read
+// as the table owner inside an authority transaction (receipts are
+// authority-only under RLS).
+func refreshReceipts(t *testing.T, f *protocolFixture, attempt string) int {
+	t.Helper()
+	tx, err := f.h.Migrator.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	var receipts int
+	if _, err = tx.Exec(t.Context(), `SELECT set_config('app.authority','1',true)`); err == nil {
+		err = tx.QueryRow(t.Context(), "SELECT count(*) FROM refresh_receipts WHERE attempt_id=$1", attempt).Scan(&receipts)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return receipts
+}
+
 // TestRecoveryBlackBoxFaultMatrix exercises the HTTP contract around the real
-// authority CAS and projection, not an HTTP handler pretending a commit occurred.
+// authority refresh transaction, not an HTTP handler pretending a commit
+// occurred.
 func TestRecoveryBlackBoxFaultMatrix(t *testing.T) {
 	for _, point := range []string{"before_authority_commit", "after_authority_commit", "after_projection"} {
 		t.Run(point, func(t *testing.T) {
@@ -278,21 +299,15 @@ func TestRecoveryBlackBoxFaultMatrix(t *testing.T) {
 			if response.StatusCode != 503 {
 				t.Fatalf("actual %s boundary fault status=%d, want 503", point, response.StatusCode)
 			}
-			var receipts int
-			if err := f.h.Migrator.QueryRow(t.Context(), "SELECT count(*) FROM refresh_recovery_receipts WHERE attempt_id=$1", attempt).Scan(&receipts); err != nil {
-				t.Fatal(err)
-			}
+			// The refresh is one authority transaction: before its commit nothing
+			// is written; after it the child and its receipt are committed and
+			// the lost reply is recovered by the exact retry, with no repair step.
 			want := 0
-			if point == "after_projection" {
+			if point != "before_authority_commit" {
 				want = 1
 			}
-			if receipts != want {
-				t.Fatalf("%s receipts before repair=%d want=%d", point, receipts, want)
-			}
-			// Startup reconciliation is the production repair path after committed
-			// authority with an interrupted projection.
-			if err := f.h.Security.Reconcile(t.Context()); err != nil {
-				t.Fatal(err)
+			if receipts := refreshReceipts(t, f, attempt); receipts != want {
+				t.Fatalf("%s receipts after the fault=%d want=%d", point, receipts, want)
 			}
 			f.startServer()
 			var first, second protocol.RecoverableRefreshResponse
@@ -305,8 +320,8 @@ func TestRecoveryBlackBoxFaultMatrix(t *testing.T) {
 			if first.AccessToken != second.AccessToken || first.RefreshToken != second.RefreshToken || first.ReauthenticateAt != second.ReauthenticateAt || first.RefreshAttemptID != attempt || second.RefreshAttemptID != attempt {
 				t.Fatal("recovery changed exact child, attempt or deadline")
 			}
-			if err := f.h.Migrator.QueryRow(t.Context(), "SELECT count(*) FROM refresh_recovery_receipts WHERE attempt_id=$1", attempt).Scan(&receipts); err != nil || receipts != 1 {
-				t.Fatalf("receipt count=%d err=%v", receipts, err)
+			if receipts := refreshReceipts(t, f, attempt); receipts != 1 {
+				t.Fatalf("receipt count=%d", receipts)
 			}
 			if err := owner.adoptSession(second.SessionResponse); err != nil {
 				t.Fatal(err)
@@ -317,7 +332,7 @@ func TestRecoveryBlackBoxFaultMatrix(t *testing.T) {
 			if _, err := f.Caregiver().Sync(nil); err != nil {
 				t.Fatal(err)
 			}
-			if f.h.Count(t, "babies", f.h.FamilyID) != 1 {
+			if f.h.CareCount(t, "baby", f.h.FamilyID) != 1 {
 				t.Fatal("ordinary owner write not persisted exactly once")
 			}
 		})

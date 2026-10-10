@@ -54,6 +54,15 @@ public final class FamilySyncHTTPClient: FamilySyncTransport, @unchecked Sendabl
     private func send<T: Decodable>(
         _ type: T.Type, _ method: String, _ url: URL, body: (some Encodable)?, capabilities: [String]
     ) async throws -> T {
+        try JSONDecoder().decode(type, from: await send(method, url, body: body, capabilities: capabilities))
+    }
+
+    /// The one request path: headers, the bearer token, and a single retry
+    /// with credentials a renewal just verified. Answers the success body
+    /// undecoded, because a `204` has none.
+    private func send(
+        _ method: String, _ url: URL, body: (some Encodable)?, capabilities: [String]
+    ) async throws -> Data {
         var request = URLRequest(url: url)
         request.httpMethod = method
         var credentials = await tokens.currentSessionCredentials()
@@ -75,7 +84,7 @@ public final class FamilySyncHTTPClient: FamilySyncTransport, @unchecked Sendabl
         for attempt in 0...1 {
             let (data, response) = try await session.data(for: request)
             guard let http = response as? HTTPURLResponse else { throw SyncErrorCode.serviceUnavailable }
-            if (200..<300).contains(http.statusCode) { return try JSONDecoder().decode(type, from: data) }
+            if (200..<300).contains(http.statusCode) { return data }
             let code = Self.code(from: data)
             if http.statusCode == 401, let used = credentials {
                 if attempt == 0, let retryCredentials,
@@ -93,5 +102,18 @@ public final class FamilySyncHTTPClient: FamilySyncTransport, @unchecked Sendabl
 
     static func code(from data: Data) -> String? {
         ServerErrorEnvelope.decode(data)
+    }
+}
+
+/// `push-token-v1`: the device's APNs token, through the same request path as
+/// sync — the family session's token and the same one renewal retry. Both
+/// routes answer `204` with no body.
+extension FamilySyncHTTPClient: PushTokenTransport {
+    public func putPushToken(_ request: PushTokenRequest) async throws {
+        _ = try await send("PUT", url("devices/push-token"), body: request, capabilities: request.capabilities)
+    }
+
+    public func deletePushToken() async throws {
+        _ = try await send("DELETE", url("devices/push-token"), body: nil as Never?, capabilities: [PushTokenRequest.capability])
     }
 }

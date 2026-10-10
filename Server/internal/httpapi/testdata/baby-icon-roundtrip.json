@@ -1,0 +1,7 @@
+{
+  "request": "{\"protocol_version\":\"v1\",\"capabilities\":[\"records-v1\"],\"cursor\":null,\"mutations\":[{\"mutation_id\":\"01000000-0000-4000-8000-000000000001\",\"entity_id\":\"10000000-0000-4000-8000-000000000001\",\"entity_kind\":\"baby\",\"operation\":\"create\",\"payload_version\":1,\"observed_entity_version\":0,\"client_mutation_time\":\"2026-09-20T12:34:56.123456Z\",\"import_id\":null,\"payload\":{\"name\":\"Icon baby\",\"birth_date\":\"2026-01-12\",\"sort_order\":1,\"icon\":\"girl.2\"}}],\"page_token\":null}",
+  "outcome_payload": "{\"name\":\"Icon baby\",\"birth_date\":\"2026-01-12\",\"sort_order\":1,\"icon\":\"girl.2\"}",
+  "pulled_payload": "{\"name\":\"Icon baby\",\"birth_date\":\"2026-01-12\",\"sort_order\":1,\"icon\":\"girl.2\"}",
+  "snapshot_payload": "{\"name\":\"Icon baby\",\"birth_date\":\"2026-01-12\",\"sort_order\":1,\"icon\":\"girl.2\"}",
+  "updated_payload": "{\"name\":\"Renamed baby\",\"birth_date\":\"2026-01-12\",\"sort_order\":1,\"icon\":\"girl.2\"}"
+}

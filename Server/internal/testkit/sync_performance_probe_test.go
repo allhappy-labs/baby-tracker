@@ -39,16 +39,12 @@ func TestSyntheticSyncPerformanceProbe(t *testing.T) {
 		t.Skip("opt-in synthetic performance probe")
 	}
 	h := New(t)
-	repo, err := limits.NewRepository(h.Runtime)
-	if err != nil {
-		t.Fatal(err)
-	}
-	limiter, err := limits.New(limits.Options{Repository: repo, Pepper: [32]byte{1}, Now: func() time.Time { return h.Now }})
+	limiter, err := limits.New(limits.Options{Pepper: [32]byte{1}, Now: func() time.Time { return h.Now }})
 	if err != nil {
 		t.Fatal(err)
 	}
 	policies := limits.DefaultPolicies()
-	handler := httpapi.New(httpapi.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Readiness: perfReady{}, Gate: h.Security,
+	handler := httpapi.New(httpapi.Options{Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Readiness: perfReady{},
 		InstanceID: h.Info.InstanceID, RecoveryEpoch: 1, CanonicalOrigin: h.Info.CanonicalOrigin, Capabilities: h.Info.Capabilities,
 		SyncLimits: &h.Limits, SessionService: h.Auth, FamilyService: h.Family, SyncService: h.Service, Limiter: limiter,
 		SyncMutationDevicePolicy: policies[limits.ScopeSyncMutationDevice], SyncMutationAccountPolicy: policies[limits.ScopeSyncMutationAccount], SyncMutationFamilyPolicy: policies[limits.ScopeSyncMutationFamily],
@@ -84,7 +80,7 @@ func TestSyntheticSyncPerformanceProbe(t *testing.T) {
 				families[i].cursor = protocol.Cursor{ServerInstanceID: h.Info.InstanceID, RecoveryEpoch: 1, FamilyID: families[i].id, Sequence: 1}
 			}
 		}
-		head, e := h.Security.Head(t.Context())
+		revision, e := h.Authority.FamilyRevision(t.Context(), h.FamilyID)
 		if e != nil {
 			t.Fatal(e)
 		}
@@ -172,7 +168,7 @@ func TestSyntheticSyncPerformanceProbe(t *testing.T) {
 					t.Fatal(e)
 				}
 				sort.Slice(elapsed, func(i, j int) bool { return elapsed[i] < elapsed[j] })
-				t.Logf("PERF families=%d ledger_revision=%d concurrency=%d mode=%s requests=%d p50_ms=%.3f p95_ms=%.3f qps=%.2f wall_s=%.3f", familyCount, head.Revision, concurrency, mode, len(elapsed), float64(elapsed[len(elapsed)/2])/float64(time.Millisecond), float64(elapsed[(len(elapsed)*95-1)/100])/float64(time.Millisecond), float64(len(elapsed))/wall.Seconds(), wall.Seconds())
+				t.Logf("PERF families=%d family_revision=%d concurrency=%d mode=%s requests=%d p50_ms=%.3f p95_ms=%.3f qps=%.2f wall_s=%.3f", familyCount, revision, concurrency, mode, len(elapsed), float64(elapsed[len(elapsed)/2])/float64(time.Millisecond), float64(elapsed[(len(elapsed)*95-1)/100])/float64(time.Millisecond), float64(len(elapsed))/wall.Seconds(), wall.Seconds())
 				h.Now = h.Now.Add(15 * time.Second) // Keep default quota windows realistic without expiring synthetic access tokens.
 			}
 		}

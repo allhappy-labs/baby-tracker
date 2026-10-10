@@ -12,11 +12,11 @@ DECLARE
     secret text;
     manifest_absent boolean := to_regclass('public.schema_privilege_manifest') IS NULL;
 BEGIN
-    FOREACH principal_name IN ARRAY ARRAY['baby_tracker_runtime', 'baby_tracker_maintenance', 'baby_tracker_projector', 'baby_tracker_apple_revoker', 'baby_tracker_live_activity', 'baby_tracker_migrator', 'baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_projector_app', 'baby_tracker_apple_revoker_app', 'baby_tracker_live_activity_app'] LOOP
+    FOREACH principal_name IN ARRAY ARRAY['baby_tracker_runtime', 'baby_tracker_maintenance', 'baby_tracker_migrator', 'baby_tracker_app', 'baby_tracker_export_app'] LOOP
         SELECT * INTO principal FROM pg_roles WHERE rolname = principal_name;
         IF FOUND THEN
             -- Group attributes/memberships were checked by init-roles.sql.
-            IF principal_name NOT IN ('baby_tracker_runtime', 'baby_tracker_maintenance', 'baby_tracker_projector', 'baby_tracker_apple_revoker', 'baby_tracker_live_activity') AND (
+            IF principal_name NOT IN ('baby_tracker_runtime', 'baby_tracker_maintenance') AND (
                NOT principal.rolcanlogin OR NOT principal.rolinherit OR principal.rolsuper
                OR principal.rolcreatedb OR principal.rolcreaterole OR principal.rolreplication
                OR principal.rolbypassrls OR principal.rolconfig IS NOT NULL
@@ -25,10 +25,7 @@ BEGIN
                    SELECT FROM pg_auth_members m JOIN pg_roles parent ON parent.oid = m.roleid
                    WHERE m.member = principal.oid AND
                      (NOT ((principal_name = 'baby_tracker_app' AND parent.rolname = 'baby_tracker_runtime')
-                        OR (principal_name = 'baby_tracker_export_app' AND parent.rolname = 'baby_tracker_maintenance')
-                        OR (principal_name = 'baby_tracker_projector_app' AND parent.rolname = 'baby_tracker_projector')
-                        OR (principal_name = 'baby_tracker_apple_revoker_app' AND parent.rolname = 'baby_tracker_apple_revoker')
-                        OR (principal_name = 'baby_tracker_live_activity_app' AND parent.rolname = 'baby_tracker_live_activity'))
+                        OR (principal_name = 'baby_tracker_export_app' AND parent.rolname = 'baby_tracker_maintenance'))
                       OR m.admin_option OR NOT m.inherit_option OR NOT m.set_option)
                )) THEN
                 RAISE EXCEPTION 'incompatible existing application principal' USING ERRCODE = '42501';
@@ -37,7 +34,7 @@ BEGIN
             -- Inspect grants to both the LOGIN and its runtime group; effective privilege helpers
             -- would also see legitimate PUBLIC/runtime-group grants. Reject
             -- before changing ownership/ACLs, and let the transaction roll back.
-            IF principal_name IN ('baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_projector_app', 'baby_tracker_apple_revoker_app', 'baby_tracker_live_activity_app', 'baby_tracker_runtime', 'baby_tracker_maintenance', 'baby_tracker_projector', 'baby_tracker_apple_revoker', 'baby_tracker_live_activity') AND (
+            IF principal_name IN ('baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_runtime', 'baby_tracker_maintenance') AND (
                 EXISTS (
                     SELECT FROM pg_catalog.pg_database d
                     WHERE d.datname = current_database() AND (
@@ -53,7 +50,7 @@ BEGIN
                       AND (n.nspowner = principal.oid OR EXISTS (
                           SELECT FROM pg_catalog.aclexplode(n.nspacl) acl
                           WHERE acl.grantee = principal.oid AND (
-                              principal_name IN ('baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_projector_app', 'baby_tracker_apple_revoker_app', 'baby_tracker_live_activity_app')
+                              principal_name IN ('baby_tracker_app', 'baby_tracker_export_app')
                               OR (manifest_absent AND NOT (acl.privilege_type='USAGE' AND n.nspname IN ('public','app')))
                           )
                       ))
@@ -65,20 +62,18 @@ BEGIN
                           c.relowner = principal.oid OR EXISTS (
                               SELECT FROM pg_catalog.aclexplode(c.relacl) acl
                               WHERE acl.grantee = principal.oid
-                                AND (principal_name IN ('baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_projector_app', 'baby_tracker_apple_revoker_app', 'baby_tracker_live_activity_app') OR
+                                AND (principal_name IN ('baby_tracker_app', 'baby_tracker_export_app') OR
                                   (manifest_absent AND NOT (
                                     (principal_name='baby_tracker_runtime' AND n.nspname='public' AND c.relkind IN ('r','p')
                                       AND c.relname IN ('accounts','families','memberships') AND acl.privilege_type IN ('SELECT','INSERT','UPDATE','DELETE'))
                                     OR (principal_name='baby_tracker_runtime' AND n.nspname='public'
                                       AND c.relname IN ('schema_migrations','server_state') AND acl.privilege_type='SELECT')
-                                    OR (principal_name='baby_tracker_projector' AND n.nspname='public'
-                                      AND c.relname='security_projection_head' AND acl.privilege_type='SELECT')
                                   )))
                           ) OR EXISTS (
                               SELECT FROM pg_catalog.pg_attribute a,
                                   LATERAL pg_catalog.aclexplode(a.attacl) acl
                               WHERE a.attrelid = c.oid AND acl.grantee = principal.oid
-                                AND (principal_name IN ('baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_projector_app', 'baby_tracker_apple_revoker_app', 'baby_tracker_live_activity_app') OR manifest_absent)
+                                AND (principal_name IN ('baby_tracker_app', 'baby_tracker_export_app') OR manifest_absent)
                           )
                       )
                 ) OR EXISTS (
@@ -96,12 +91,10 @@ BEGIN
                         p.proowner = principal.oid OR EXISTS (
                             SELECT FROM pg_catalog.aclexplode(p.proacl) acl
                             WHERE acl.grantee = principal.oid
-                              AND (principal_name IN ('baby_tracker_app', 'baby_tracker_export_app', 'baby_tracker_projector_app', 'baby_tracker_apple_revoker_app', 'baby_tracker_live_activity_app') OR
+                              AND (principal_name IN ('baby_tracker_app', 'baby_tracker_export_app') OR
                                 (manifest_absent AND NOT (
                                   (principal_name='baby_tracker_runtime' AND p.oid IN (
                                     to_regprocedure('app.current_account_id()'),to_regprocedure('app.current_family_id()')))
-                                  OR (principal_name='baby_tracker_projector' AND p.oid =
-                                    to_regprocedure('app.project_security_event(bigint,bigint,bytea,bytea,uuid,uuid,bytea,jsonb,jsonb,bytea)'))
                                 )))
                         ))
                 ) OR EXISTS (
@@ -120,32 +113,20 @@ BEGIN
         ELSE
             EXECUTE format('CREATE ROLE %I LOGIN INHERIT NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS', principal_name);
         END IF;
-        IF principal_name IN ('baby_tracker_runtime', 'baby_tracker_maintenance', 'baby_tracker_projector', 'baby_tracker_apple_revoker', 'baby_tracker_live_activity') THEN
+        IF principal_name IN ('baby_tracker_runtime', 'baby_tracker_maintenance') THEN
             CONTINUE;
         END IF;
-        -- Schema-7 compatibility may be deployed before the hosted worker
-        -- secret is configured. Keep the distinct LOGIN passwordless (and
-        -- therefore unable to authenticate); a later idempotent bootstrap
-        -- installs its password as soon as the secret is mounted.
-        IF principal_name = 'baby_tracker_apple_revoker_app'
-           AND pg_stat_file('/run/secrets/apple_revocation_password', true) IS NULL THEN
-            CONTINUE;
-        END IF;
+        -- The export login may be deployed before its secret is configured:
+        -- it stays passwordless (and therefore unable to authenticate) until
+        -- a later idempotent bootstrap finds the secret mounted.
         IF principal_name = 'baby_tracker_export_app'
            AND pg_stat_file('/run/secrets/export_password', true) IS NULL THEN
-            CONTINUE;
-        END IF;
-        IF principal_name = 'baby_tracker_live_activity_app'
-           AND pg_stat_file('/run/secrets/live_activity_password', true) IS NULL THEN
             CONTINUE;
         END IF;
         BEGIN
             secret := pg_read_file(CASE principal_name
                 WHEN 'baby_tracker_migrator' THEN '/run/secrets/migrator_password'
-                WHEN 'baby_tracker_projector_app' THEN '/run/secrets/projector_password'
-                WHEN 'baby_tracker_apple_revoker_app' THEN '/run/secrets/apple_revocation_password'
                 WHEN 'baby_tracker_export_app' THEN '/run/secrets/export_password'
-                WHEN 'baby_tracker_live_activity_app' THEN '/run/secrets/live_activity_password'
                 ELSE '/run/secrets/runtime_password' END, 0, 16385);
         EXCEPTION WHEN OTHERS THEN
             RAISE EXCEPTION 'application credential file could not be read';
@@ -167,19 +148,13 @@ END
 $$;
 GRANT baby_tracker_runtime TO baby_tracker_app;
 GRANT baby_tracker_maintenance TO baby_tracker_export_app;
-GRANT baby_tracker_projector TO baby_tracker_projector_app;
-GRANT baby_tracker_apple_revoker TO baby_tracker_apple_revoker_app;
-GRANT baby_tracker_live_activity TO baby_tracker_live_activity_app;
 DO $$
 DECLARE
     expected record;
 BEGIN
     FOR expected IN SELECT * FROM (VALUES
         ('baby_tracker_runtime'::text, 'baby_tracker_app'::text),
-        ('baby_tracker_maintenance'::text, 'baby_tracker_export_app'::text),
-        ('baby_tracker_projector'::text, 'baby_tracker_projector_app'::text),
-        ('baby_tracker_apple_revoker'::text, 'baby_tracker_apple_revoker_app'::text),
-        ('baby_tracker_live_activity'::text, 'baby_tracker_live_activity_app'::text)
+        ('baby_tracker_maintenance'::text, 'baby_tracker_export_app'::text)
     ) AS pairs(group_name, login_name)
     LOOP
         IF NOT (
@@ -197,7 +172,7 @@ END
 $$;
 ALTER DATABASE babytracker OWNER TO baby_tracker_migrator;
 REVOKE ALL ON DATABASE babytracker FROM PUBLIC;
-GRANT CONNECT ON DATABASE babytracker TO baby_tracker_runtime, baby_tracker_maintenance, baby_tracker_projector, baby_tracker_apple_revoker, baby_tracker_live_activity;
+GRANT CONNECT ON DATABASE babytracker TO baby_tracker_runtime, baby_tracker_maintenance;
 ALTER SCHEMA public OWNER TO baby_tracker_migrator;
 REVOKE CREATE ON SCHEMA public FROM PUBLIC;
 
@@ -216,13 +191,7 @@ BEGIN
         privileges text NOT NULL,
         PRIMARY KEY (principal, object_kind, object_identity)
     ) ON COMMIT DROP;
-    FOREACH principal_name IN ARRAY CASE WHEN compatible_version >= 28
-        THEN ARRAY['baby_tracker_runtime','baby_tracker_maintenance','baby_tracker_projector','baby_tracker_apple_revoker','baby_tracker_live_activity']
-        WHEN compatible_version >= 19
-        THEN ARRAY['baby_tracker_runtime','baby_tracker_maintenance','baby_tracker_projector','baby_tracker_apple_revoker']
-        WHEN compatible_version >= 7
-        THEN ARRAY['baby_tracker_runtime','baby_tracker_projector','baby_tracker_apple_revoker']
-        ELSE ARRAY['baby_tracker_runtime','baby_tracker_projector'] END LOOP
+    FOREACH principal_name IN ARRAY ARRAY['baby_tracker_runtime','baby_tracker_maintenance'] LOOP
         INSERT INTO observed_privileges
         SELECT principal_name, 'table', identity, privileges FROM (
             SELECT n.nspname || '.' || c.relname AS identity,

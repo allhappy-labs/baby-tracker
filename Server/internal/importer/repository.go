@@ -99,7 +99,7 @@ func (s *Service) response(ctx context.Context, tx pgx.Tx, p access.Principal, f
 		}
 	}
 	if v.mapped {
-		rows, e := tx.Query(ctx, `SELECT local_baby_id::text,shared_baby_id::text FROM import_baby_mappings WHERE family_id=$1 AND import_id=$2 ORDER BY local_baby_id`, family, v.id)
+		rows, e := tx.Query(ctx, `SELECT local_baby_id::text,shared_baby_id::text FROM import_baby_mappings WHERE family_id=$1 AND import_id=$2 ORDER BY import_baby_mappings.local_baby_id`, family, v.id)
 		if e != nil {
 			return out, e
 		}
@@ -128,7 +128,7 @@ func (s *Service) response(ctx context.Context, tx pgx.Tx, p access.Principal, f
 	if after == "" {
 		after = "00000000-0000-0000-0000-000000000000"
 	}
-	rows, e := tx.Query(ctx, `SELECT conflict_id::text,kind,local_baby_id::text,record_id::text,candidate_baby_ids::text[],candidate_versions FROM import_conflicts WHERE family_id=$1 AND import_id=$2 AND decision_choice IS NULL AND (NOT $3 OR record_id IS NOT NULL) AND conflict_id>$4::uuid ORDER BY conflict_id LIMIT $5`, family, v.id, v.mapped, after, s.limits.SyncPageSize+1)
+	rows, e := tx.Query(ctx, `SELECT conflict_id::text,kind,local_baby_id::text,record_id::text,candidate_baby_ids::text[],candidate_versions FROM import_conflicts WHERE family_id=$1 AND import_id=$2 AND decision_choice IS NULL AND (NOT $3 OR record_id IS NOT NULL) AND import_conflicts.conflict_id>$4::uuid ORDER BY import_conflicts.conflict_id LIMIT $5`, family, v.id, v.mapped, after, s.limits.SyncPageSize+1)
 	if e != nil {
 		return out, e
 	}

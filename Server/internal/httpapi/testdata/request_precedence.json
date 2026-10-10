@@ -1,0 +1,857 @@
+{
+  "export: account with no family": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: bad export id": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: bad request id": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: body over the limit": {
+    "status": 413,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"body_too_large\",\"message\":\"Export request is too large\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: caregiver's export": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"owner_required\",\"message\":\"Owner access is required\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: caregiver's export, account limit spent": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: caregiver's export, account limit spent, malformed body": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: create with a query": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: expired access token": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: export off, account with no family": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: export off, no credential": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: export off, removed caregiver": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: export off, unsupported protocol header": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family chain failed": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family chain failed, account limit spent": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active, account limit spent": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active, bad request id": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active, caregiver": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active, download": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family not active, status": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: family recovery session": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: forwarded address unreadable": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: forwarded address unreadable, removed caregiver": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: forwarded address unreadable, unsupported protocol header": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: limiter error": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: limiter error, malformed body": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: limiter error, unsupported protocol header": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: malformed bearer": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: no credential, malformed body": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: no entitlement": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: no entitlement, bad request id": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: node not ready": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: removed caregiver, malformed body": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: status with a query": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid export request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: unknown download": {
+    "status": 404,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"export_not_found\",\"message\":\"Export was not found\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: unknown export": {
+    "status": 404,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"export_not_found\",\"message\":\"Export was not found\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: unrefreshed account session": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: unsupported protocol header, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "export: wrong capability": {
+    "status": 409,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_capability\",\"message\":\"Unsupported capability\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: account with no family, malformed body": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"family_scope_required\",\"message\":\"Family access is required\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: another member's import": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"import_access_denied\",\"message\":\"Import request could not be completed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: bad import id": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: bad status query": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: body over the limit": {
+    "status": 413,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"body_too_large\",\"message\":\"Request body is too large\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: conflict with a malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: expired access token, malformed body": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family chain failed": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family chain failed, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family chain failed, pull limit spent": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family not active": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"membership_revoked\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family not active, bad status query": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family not active, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family not active, pull limit spent": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"membership_revoked\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family not active, resolve": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"membership_revoked\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family recovery session": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"family_scope_required\",\"message\":\"Family access is required\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: family recovery session, malformed body": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"family_scope_required\",\"message\":\"Family access is required\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: limiter error": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: limiter error, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: malformed bearer": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: missing capability": {
+    "status": 409,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_capability\",\"message\":\"Unsupported capability\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: no credential, malformed body": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: no entitlement": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"entitlement_required\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: no entitlement, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: no import service, account with no family": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"family_scope_required\",\"message\":\"Family access is required\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: no import service, removed caregiver": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: no import service, unsupported protocol header": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: node not ready, malformed body": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: removed caregiver, bad import id": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: removed caregiver, malformed body": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: resolve with a query": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: unknown import": {
+    "status": 404,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"import_not_found\",\"message\":\"Import request could not be completed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: unrefreshed account session, malformed body": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: unsupported protocol header, malformed body": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: viewer's import": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"read_only_caregiver\",\"message\":\"This caregiver has view-only access\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "import: viewer's import, pull limit spent": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: IP limit spent": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60}}\n"
+  },
+  "live: account with no family": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: device limit spent": {
+    "status": 429,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "Retry-After": "60"
+    },
+    "body": "{\"error\":{\"code\":\"rate_limited\",\"message\":\"Rate limit exceeded\",\"request_id\":\"-\",\"retryable\":true,\"retry_after_seconds\":60},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: expired access token": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: family chain failed": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: family chain failed, device limit spent": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: family not active": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"membership_revoked\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: family not active, device limit spent": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"membership_revoked\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: family not active, unsupported protocol header": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: family recovery session": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: forwarded address unreadable, removed caregiver": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false}}\n"
+  },
+  "live: limiter error": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: limiter error, unsupported protocol header": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: malformed bearer": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: missing capability": {
+    "status": 409,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_capability\",\"message\":\"Unsupported capability\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: no credential": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: no entitlement": {
+    "status": 403,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"entitlement_required\",\"message\":\"Access denied\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: no entitlement, unsupported protocol header": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: node not ready": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: removed caregiver, unsupported protocol header": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"session_revoked\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: token in the query": {
+    "status": 503,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"service_unavailable\",\"message\":\"Service is unavailable\",\"request_id\":\"-\",\"retryable\":true},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: unrefreshed account session, unsupported protocol header": {
+    "status": 401,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8",
+      "WWW-Authenticate": "Bearer"
+    },
+    "body": "{\"error\":{\"code\":\"access_expired\",\"message\":\"Authentication failed\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: unsupported protocol header": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"unsupported_protocol\",\"message\":\"Unsupported protocol\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  },
+  "live: viewer without a socket": {
+    "status": 400,
+    "headers": {
+      "Cache-Control": "no-store",
+      "Content-Type": "application/json; charset=utf-8"
+    },
+    "body": "{\"error\":{\"code\":\"invalid_request\",\"message\":\"Invalid request\",\"request_id\":\"-\",\"retryable\":false},\"server_instance_id\":\"50000000-0000-4000-8000-000000000001\",\"recovery_epoch\":1}\n"
+  }
+}

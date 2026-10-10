@@ -2,7 +2,6 @@ package httpapi
 
 import (
 	"babytracker/server/internal/access"
-	"babytracker/server/internal/family"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
 	"context"
@@ -41,13 +40,12 @@ func TestImportHTTPStrictNegotiationAndStaleSessionBeforeRate(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			p := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", DeviceID: "21000000-0000-4000-8000-000000000001", Scope: "family", SessionScope: "family", SessionFamilyID: "30000000-0000-4000-8000-000000000001"}
 			calls := 0
-			opts := familyHandlerOptions(t, p, familyServiceStub{current: func(context.Context, access.Principal) (family.FamilyView, error) {
-				id := p.SessionFamilyID
-				if tc.stale {
-					id = "30000000-0000-4000-8000-000000000002"
-				}
-				return family.FamilyView{ID: id}, nil
-			}}, func([]limits.Charge) { calls++ })
+			opts := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { calls++ })
+			if tc.stale {
+				// Family policy granted a family other than the session's.
+				opts.RequestAuthorizer = requestAuthorizerStub{principal: p, grant: &access.Grant{AccountID: p.AccountID,
+					FamilyID: "30000000-0000-4000-8000-000000000002", Role: "owner"}}
+			}
 			l := protocol.DefaultLimits()
 			opts.SyncLimits = &l
 			stub := &importServiceStub{}

@@ -1,16 +1,35 @@
 package httpapi
 
 import (
+	"errors"
 	"net/http"
 	"time"
 
+	"babytracker/server/internal/access"
 	"babytracker/server/internal/auth"
-	"babytracker/server/internal/family"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
 	"babytracker/server/internal/realtime"
 )
 
+// liveHandler serves GET /v1/live. Its database work is one pooled
+// statement with no transaction (RequestAuthorizer.AuthorizeRequest), after
+// everything that needs none: readiness (cached), the IP attempt limit (in
+// memory), the bearer token's digests and the headers. The header refusal is
+// held and returned by Admit, after authentication, so a bad credential
+// still answers 401 first, as the legacy handler's order had it; family
+// policy follows it, then the device, account and family attempt limits
+// (Charge). The socket checks and the upgrade are unchanged.
+//
+// The hub's invalidation mark is taken before the authorization read, so a
+// revocation that commits after the read and reaches the hub before Bind
+// never yields a bound connection: before the reservation, ReserveAfter
+// refuses it (503, retryable; the next attempt meets the revocation itself);
+// after it, Bind refuses and the upgraded socket is closed 1008. Nothing has
+// read the socket yet, so the client's first ping goes unanswered and it
+// handles the close like any failed upgrade (a retryable backoff); its next
+// attempt meets the revocation itself.
 func liveHandler(options Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
@@ -26,50 +45,58 @@ func liveHandler(options Options) http.HandlerFunc {
 			writeSyncFamilyCode(w, request, options, auth.Code(err))
 			return
 		}
-		principal, err := options.SessionService.Authenticate(request.Context(), token)
+		digests, err := options.SessionService.AccessDigests(token)
 		if err != nil {
 			writeSyncFamilyCode(w, request, options, auth.Code(err))
 			return
 		}
-		if principal.Scope != "family" || principal.SessionScope != "family" || !protocol.ValidUUID(principal.SessionFamilyID) {
-			writeSyncFamilyCode(w, request, options, "access_expired")
-			return
-		}
-		if _, ok := validateSyncHeaders(w, request, protocol.SurfaceLive, options); !ok {
-			return
-		}
-		if options.FamilyService == nil || options.LiveFamilyAuthorizer == nil || options.LiveHub == nil {
+		if options.RequestAuthorizer == nil {
 			writeSyncFamilyCode(w, request, options, "service_unavailable")
 			return
 		}
-		view, err := options.FamilyService.Current(request.Context(), principal)
-		if err != nil || view.ID != principal.SessionFamilyID {
-			if err == nil {
-				writeSyncFamilyCode(w, request, options, "access_expired")
-			} else {
-				writeSyncFamilyError(w, request, options, err)
-			}
-			return
+		_, refusal := syncHeaders(request, protocol.SurfaceLive, options)
+		if refusal == "" && options.LiveHub == nil {
+			refusal = "service_unavailable" // after the headers, as before
 		}
-		grant, err := options.LiveFamilyAuthorizer.Authorize(request.Context(), principal, view.ID, "read")
+		mark := options.LiveHub.InvalidationMark()
+		principal, grant, err := options.RequestAuthorizer.AuthorizeRequest(request.Context(), authority.Request{Digests: digests,
+			Admit: func(p access.Principal) error {
+				// Every session that is not a refreshed family session is
+				// refused here, so family policy never sees a recovery or
+				// account session (and never answers recovery_only).
+				if p.Scope != "family" || p.SessionScope != "family" || !protocol.ValidUUID(p.SessionFamilyID) {
+					return syncRefusal("access_expired")
+				}
+				if refusal != "" {
+					return syncRefusal(refusal)
+				}
+				return nil
+			},
+			Charge: func(p access.Principal, g access.Grant) error {
+				if g.FamilyID != p.SessionFamilyID {
+					// The legacy family read's check, before the charge; the
+					// grant is the session's family for every session Admit
+					// lets through.
+					return syncRefusal("access_expired")
+				}
+				decision, err := options.Limiter.TakeMany(request.Context(), []limits.Charge{
+					{Scope: limits.ScopeLiveAttemptDevice, Key: p.DeviceID, Cost: 1, Policy: options.LiveAttemptDevicePolicy},
+					{Scope: limits.ScopeLiveAttemptAccount, Key: p.AccountID, Cost: 1, Policy: options.LiveAttemptAccountPolicy},
+					{Scope: limits.ScopeLiveAttemptFamily, Key: g.FamilyID, Cost: 1, Policy: options.LiveAttemptFamilyPolicy},
+				})
+				if err != nil {
+					return limiterUnavailable(err)
+				}
+				if !decision.Allowed {
+					return rateLimited{decision}
+				}
+				return nil
+			}}, "read")
 		if err != nil {
-			writeSyncFamilyCode(w, request, options, family.Code(err))
+			writeRequestError(w, request, options, err)
 			return
 		}
-		decision, err := options.Limiter.TakeMany(request.Context(), []limits.Charge{
-			{Scope: limits.ScopeLiveAttemptDevice, Key: principal.DeviceID, Cost: 1, Policy: options.LiveAttemptDevicePolicy},
-			{Scope: limits.ScopeLiveAttemptAccount, Key: principal.AccountID, Cost: 1, Policy: options.LiveAttemptAccountPolicy},
-			{Scope: limits.ScopeLiveAttemptFamily, Key: grant.FamilyID, Cost: 1, Policy: options.LiveAttemptFamilyPolicy},
-		})
-		if err != nil {
-			writeSyncFamilyFault(w, request, options, "service_unavailable", err)
-			return
-		}
-		if !decision.Allowed {
-			writeSyncRateLimited(w, request, options, decision)
-			return
-		}
-		reservation, err := options.LiveHub.Reserve(request.Context(), principal, grant)
+		reservation, err := options.LiveHub.ReserveAfter(request.Context(), mark, principal, grant)
 		if err != nil {
 			if options.Logger != nil {
 				options.Logger.Warn("live reservation rejected", "error", err.Error())
@@ -96,8 +123,15 @@ func liveHandler(options Options) http.HandlerFunc {
 		if err != nil {
 			return
 		}
+		releaseUpgradeAdmission(request.Context())
 		defer connection.Abort()
 		cleanup, err := reservation.Bind(connection)
+		if errors.Is(err, realtime.ErrAuthorizationChanged) {
+			// Never bound: closed 1008 like a revoked connection, though a
+			// client still awaiting its first pong sees a failed upgrade.
+			_ = connection.Close(realtime.ClosePolicyViolation, "authorization changed")
+			return
+		}
 		if err != nil {
 			_ = connection.Close(realtime.CloseTryAgainLater, "capacity unavailable")
 			return

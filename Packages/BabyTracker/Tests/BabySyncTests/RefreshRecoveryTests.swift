@@ -743,9 +743,15 @@ final class RecoveryAuthProtocol: URLProtocol, @unchecked Sendable {
             }
         }
         let bytes = body
-        Task {
+        let request = self.request
+        // `@Sendable`, so the captures are checked by conformance: this
+        // double is `@unchecked Sendable`, and the URL loading system calls
+        // it from its own threads. Left to region analysis, the capture of
+        // `self` was refused or accepted depending on how the compiler
+        // batched this file (SendingClosureRisksDataRace on fresh builds).
+        Task { @Sendable in
             do {
-                let (status, data) = try await Self.handler!(request, bytes)
+                let (status, data) = try await RecoveryAuthProtocol.handler!(request, bytes)
                 let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
                 client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
                 client?.urlProtocol(self, didLoad: data)

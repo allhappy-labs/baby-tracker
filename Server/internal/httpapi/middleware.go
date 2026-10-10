@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"babytracker/server/internal/requestlog"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -46,10 +47,19 @@ func (w *trackedResponseWriter) Write(data []byte) (int, error) {
 func (w *trackedResponseWriter) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func withMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
+	return withRefusalLog(logger, newRefusalLog(logger, refusalLogInterval), next)
+}
+
+// withRefusalLog logs one "request completed" line per request, except for
+// responses a handler marked with requestlog.Aggregate (repeat over-limit
+// refusals): those are counted and summarized by refusals instead, so a
+// refusal flood cannot crowd every other line out of the log.
+func withRefusalLog(logger *slog.Logger, refusals *refusalLog, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := validOrNewRequestID(r.Header.Get("X-Request-ID"))
 		w.Header().Set("X-Request-ID", requestID)
-		request := r.WithContext(contextWithLogger(contextWithRequestID(r.Context(), requestID), logger))
+		markedCtx, aggregated := requestlog.WithMark(contextWithLogger(contextWithRequestID(r.Context(), requestID), logger))
+		request := r.WithContext(markedCtx)
 		bodyLimit := maxRequestBodyBytes
 		if request.URL.Path == "/v1/sync" {
 			bodyLimit = 4 << 20
@@ -59,6 +69,7 @@ func withMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 		started := time.Now()
 
 		defer func() {
+			panicked := false
 			if recovered := recover(); recovered != nil {
 				// The value is named by type only: a panic message can carry
 				// anything the handler was holding.
@@ -66,6 +77,7 @@ func withMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 					slog.String("request_id", requestID), slog.String("route", normalizedRoute(request.Pattern)),
 					slog.String("panic_type", fmt.Sprintf("%T", recovered)))
 				if !tracked.hijacked {
+					panicked = true
 					writeError(tracked, http.StatusInternalServerError, "internal_error", "Internal server error", requestID, true)
 				}
 			}
@@ -74,6 +86,10 @@ func withMiddleware(logger *slog.Logger, next http.Handler) http.Handler {
 				status = http.StatusOK
 			}
 			route := normalizedRoute(request.Pattern)
+			if aggregated() && !panicked {
+				refusals.add(route, status)
+				return
+			}
 			logger.Info("request completed",
 				slog.String("request_id", requestID),
 				slog.String("method", request.Method),

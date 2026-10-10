@@ -193,54 +193,45 @@ public struct MeasurementSheet: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    field("Weight (kg)", text: $model.weight, field: .weight)
-                    field("Length / height (cm)", text: $model.length, field: .length)
-                    if !model.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                        Picker(LoggingL10n.text("Measured position"), selection: $model.lengthPosition) {
-                            Text(LoggingL10n.text("Choose position")).tag(Optional<LengthPosition>.none)
-                            Text(LoggingL10n.text("Lying down")).tag(Optional(LengthPosition.lying))
-                            Text(LoggingL10n.text("Standing up")).tag(Optional(LengthPosition.standing))
-                        }
-                        .accessibilityIdentifier("measurement.position")
-                        validation(.position)
-                    }
-                    field("Head circumference (cm)", text: $model.head, field: .head)
-                } footer: {
-                    Text(LoggingL10n.text("Enter at least one positive value. For length or height, choose the measured position."))
-                }
-                Section {
-                    DatePicker(LoggingL10n.text("Date and time"), selection: $model.when,
-                        in: ...model.latestAllowedDate, displayedComponents: [.date, .hourAndMinute])
-                        .environment(\.timeZone, TimeZone(identifier: model.timeZoneID) ?? .current)
-                        .accessibilityIdentifier("measurement.time")
-                    validation(.date)
-                    if !model.isEditing {
-                        Button(LoggingL10n.text("Save")) {
-                            if model.save() { onDone() }
-                        }
-                        .disabled(!model.canSave)
-                        .accessibilityIdentifier("measurement.save")
-                    }
-                }
-                if let error = model.errorMessage {
-                    Section { Text(error).foregroundStyle(.red).accessibilityIdentifier("measurement.error") }
-                }
+            EntryPanel(title: title, icon: BabyIcon.growth, tint: Palette.growth, canSave: model.canSave,
+                       identifierPrefix: "measurement", onCancel: onDone,
+                       onSave: save, onDelete: deleteAction) {
+                fields
             }
-            // Edit mode's Save and Delete, as on every other edit sheet.
-            .editFooter(isPresented: model.isEditing, canSave: model.canSave, identifierPrefix: "measurement",
-                        onSave: { if model.save() { onDone() } }, onDelete: delete)
-            .navigationTitle(title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(LoggingL10n.text("Cancel"), action: onDone)
+    }
+
+    @ViewBuilder
+    private var fields: some View {
+        PanelSection {
+            field("Weight (kg)", text: $model.weight, field: .weight)
+            field("Length / height (cm)", text: $model.length, field: .length)
+            if !model.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                // Outside a Form a menu picker shows no label: the row
+                // names it.
+                LabeledContent(LoggingL10n.text("Measured position")) {
+                    Picker(LoggingL10n.text("Measured position"), selection: $model.lengthPosition) {
+                        Text(LoggingL10n.text("Choose position")).tag(Optional<LengthPosition>.none)
+                        Text(LoggingL10n.text("Lying down")).tag(Optional(LengthPosition.lying))
+                        Text(LoggingL10n.text("Standing up")).tag(Optional(LengthPosition.standing))
+                    }
+                    .labelsHidden()
+                    .accessibilityIdentifier("measurement.position")
                 }
+                validation(.position)
             }
+            field("Head circumference (cm)", text: $model.head, field: .head)
+        } footer: {
+            Text(LoggingL10n.text("Enter at least one positive value. For length or height, choose the measured position."))
+        }
+        PanelSection {
+            // In the check-in's own zone, so the day it shows is the
+            // day the date validation checks.
+            EditTimeRow(date: $model.when, latest: model.latestAllowedDate, identifier: "measurement.time")
+                .environment(\.timeZone, TimeZone(identifier: model.timeZoneID) ?? .current)
+            validation(.date)
+        }
+        if let error = model.errorMessage {
+            PanelSection { Text(error).foregroundStyle(.red).accessibilityIdentifier("measurement.error") }
         }
     }
 
@@ -256,6 +247,16 @@ public struct MeasurementSheet: View {
             validation(field)
         }
     }
+    private func save() {
+        if model.save() { onDone() }
+    }
+
+    /// Delete only for a check-in already logged.
+    private var deleteAction: (() -> Void)? {
+        guard model.isEditing else { return nil }
+        return delete
+    }
+
     private func delete() {
         if performEdit(model.delete, failure: ErrorBannerCopy.deleteFailed(what: ErrorSubject.entry),
                        reporter: errorReporter) { onDone() }

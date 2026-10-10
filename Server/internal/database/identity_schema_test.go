@@ -1,89 +1,73 @@
 package database_test
 
 import (
-	"context"
-	"errors"
 	"sort"
 	"strings"
 	"testing"
+	"time"
 
 	"babytracker/server/internal/database"
 	"babytracker/server/internal/testpg"
-	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-var identityRuntimeFunctions = []string{
-	"app.consume_auth_challenge(bytea,text,uuid,timestamp with time zone)",
-	"app.create_auth_challenge(bytea,text,uuid,timestamp with time zone,timestamp with time zone)",
-	"app.lookup_access_session(text,bytea)",
-	"app.lookup_auth_identity(text,text,bytea)",
-	"app.lookup_device_binding(uuid,uuid,uuid,text)",
-	"app.lookup_refresh_session(text,bytea)",
-	"app.reserve_apple_notification(jsonb,text,bytea,uuid,timestamp with time zone)",
-	"app.stage_auth_material(uuid,bytea,bytea,bytea,timestamp with time zone)",
-	"app.take_rate_limits(jsonb,timestamp with time zone)",
-}
-
-var familyRuntimeFunctions = []string{
-	"app.current_account_profile(uuid)",
+// runtimeAppFunctions is every app function the runtime may execute at
+// schema 31: the tenant helpers and the authority definers. The schema-28
+// identity, family-material, refresh-recovery and export-audit functions are
+// gone with the projection (29), the legacy care helpers with the legacy
+// care storage (30), and the rate-limit definer with the database rate
+// limits (31; limits live in process memory). 32 adds the five Live
+// Activity registration definers.
+var runtimeAppFunctions = []string{
+	"app.fence_live_activity_installation(uuid,bigint,uuid,uuid,uuid,uuid,bigint,timestamp with time zone,boolean)",
+	"app.live_activity_authorized(uuid,bigint,boolean)",
+	"app.live_activity_claim_live(jsonb)",
+	"app.live_activity_registration_state(uuid,jsonb)",
+	"app.live_activity_session_binding(uuid,uuid,uuid,bigint)",
+	"app.authority_actor_label(uuid,uuid,boolean,timestamp with time zone)",
+	"app.authority_context()",
+	"app.current_account_id()",
+	"app.current_family_id()",
 	"app.family_actor_labels_high_water()",
+	"app.import_unfinished_session_count(uuid,timestamp with time zone)",
+	"app.integration_authority(uuid,bigint)",
 	"app.list_family_actor_labels(uuid,bigint,uuid,integer)",
-	"app.lookup_family_invitation(text)",
-	"app.stage_family_material(uuid,bytea,bytea,bytea,timestamp with time zone)",
+	membershipMayWriteSignature,
+	"app.request_authority(bytea[],uuid,boolean,bigint)",
 	"app.update_own_profile(uuid,uuid,text,timestamp with time zone)",
 }
 
+// identityTables are the schema-29 tables that hold sign-in, device and
+// session authority (rate_limit_buckets went with 000031).
 var identityTables = []string{
-	"account_identities", "apple_notification_dedup", "apple_revocation_jobs",
-	"auth_challenges", "auth_exchange_material", "devices", "rate_limit_buckets",
-	"refresh_recovery_receipts", "session_refresh_history", "sessions",
+	"account_identities", "apple_notifications", "auth_challenges", "devices", "refresh_receipts", "sessions",
 }
 
 var identityTableColumns = map[string][]string{
-	"refresh_recovery_receipts": {"server_instance_id", "recovery_epoch", "account_id", "device_id", "parent_session_id", "attempt_id", "child_session_id", "material_bytes", "projection_material_digest", "parent_key_id", "output_key_id", "continuity_key_id", "created_at", "effective_deadline", "refresh_expires_at"},
-	"account_identities":        {"provider", "identity_key_id", "identity_digest", "account_id", "identity_audience", "identity_subject", "apple_credential_id", "apple_credential_key_id", "apple_credential_purpose", "apple_credential_object_id", "material_missing", "created_at", "updated_at"},
-	"devices":                   {"id", "account_id", "server_instance_id", "canonical_origin", "installation_key_id", "installation_digest", "continuity_key_id", "continuity_digest", "binding_revoked_at", "created_at", "updated_at"},
-	"auth_challenges":           {"id", "token_digest", "canonical_origin", "server_instance_id", "expires_at", "consumed_at", "created_at"},
-	"auth_exchange_material":    {"command_id", "command_hash", "projection_material_digest", "material_kind", "account_id", "device_id", "session_id", "parent_session_id", "lineage_root_session_id", "server_instance_id", "canonical_origin", "token_key_id", "access_digest", "refresh_digest", "recovery_epoch", "security_revision", "scope", "family_id", "access_expires_at", "refresh_expires_at", "reauthenticate_at", "absolute_expires_at", "identity_provider", "identity_key_id", "identity_digest", "identity_audience", "identity_subject", "display_name", "profile_confirmed", "register_account", "register_device", "installation_key_id", "installation_digest", "continuity_key_id", "continuity_digest", "apple_credential_id", "apple_credential_key_id", "apple_credential_purpose", "apple_credential_object_id", "created_at", "expires_at", "projected_at", "recovery_material_bytes"},
-	"sessions":                  {"session_id", "account_id", "device_id", "lineage_root_session_id", "parent_session_id", "server_instance_id", "recovery_epoch", "security_revision", "scope", "family_id", "token_key_id", "access_digest", "refresh_digest", "access_expires_at", "refresh_expires_at", "reauthenticate_at", "absolute_expires_at", "status", "consumed_at", "revoked_at", "revoke_reason", "created_at", "updated_at"},
-	"session_refresh_history":   {"token_key_id", "refresh_digest", "session_id", "lineage_root_session_id", "consumed_at", "reuse_detected_at"},
-	"apple_notification_dedup":  {"notification_key_id", "notification_digest", "command_id", "received_at"},
-	"apple_revocation_jobs":     {"job_id", "account_id", "server_instance_id", "credential_purpose", "credential_object_id", "credential_reference_id", "credential_reference_key_id", "status", "attempts", "next_attempt_at", "created_at", "updated_at", "completed_at", "last_error_code", "deletion_operation_id", "deletion_command_id", "operation_version", "provider_revoked_at", "cleanup_started_at", "lease_owner", "lease_token", "lease_expires_at"},
-	"rate_limit_buckets":        {"scope", "key_digest", "window_start", "window_end", "count"},
+	"account_identities":  {"provider", "identity_key_id", "identity_digest", "account_id", "lifecycle_generation", "audience", "subject", "live", "created_at"},
+	"apple_notifications": {"notification_key_id", "notification_digest", "command_id", "received_at"},
+	"auth_challenges":     {"token_digest", "expires_at", "consumed_at", "created_at"},
+	"devices":             {"id", "account_id", "canonical_origin", "continuity_key_id", "continuity_digest", "created_at", "updated_at", "status", "revoked_at"},
+	"refresh_receipts": {"parent_id", "child_id", "attempt_id", "account_id", "device_id", "material", "material_digest", "created_at", "effective_deadline", "refresh_expires_at",
+		"child_scope", "child_family_id", "child_role"},
+	"sessions": {"access_digest", "id", "account_id", "device_id", "lineage_root_id", "parent_id", "lineage_started_at", "scope", "family_id", "role",
+		"recovery_epoch", "issued_seq", "token_key_id", "refresh_digest", "access_expires_at", "refresh_expires_at", "deadline_at", "status",
+		"consumed_at", "consumed_attempt_id", "child_id", "revoked_at", "revoke_reason", "created_at"},
 }
 
-// Dropping any reserved table/function or widening either application's
-// effective privilege set must fail the current exact schema-twenty-one readiness contract.
+// Dropping any reserved table/function or widening any application role's
+// effective privilege set must fail the exact schema-29 readiness contract.
 func TestIdentitySchemaHasExactApplicationPrivileges(t *testing.T) {
 	fixture := testpg.New(t)
-	if err := database.VerifyRoleSeparation(t.Context(), fixture.Runtime, fixture.Projector, 29); err != nil {
-		t.Fatalf("schema-twenty-one exact privilege snapshot rejected: %v", err)
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
+		t.Fatalf("schema-30 exact privilege snapshot rejected: %v", err)
 	}
-	var version int64
-	if err := fixture.Runtime.QueryRow(t.Context(), "SELECT current_version FROM schema_compatibility WHERE singleton").Scan(&version); err != nil || version != 29 {
-		t.Fatalf("schema version=%d err=%v", version, err)
-	}
-	rows, err := fixture.Owner.Query(t.Context(), `SELECT tablename FROM pg_tables
-		WHERE schemaname='public' AND tablename = ANY($1) ORDER BY tablename`, identityTables)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer rows.Close()
-	var tables []string
-	for rows.Next() {
-		var name string
-		if err := rows.Scan(&name); err != nil {
-			t.Fatal(err)
-		}
-		tables = append(tables, name)
-	}
-	sort.Strings(identityTables)
-	if !equalStrings(tables, identityTables) {
-		t.Fatalf("identity tables=%v want=%v", tables, identityTables)
+	present := tableSet(t, fixture, identityTables)
+	if !equalStrings(present, sortedCopy(identityTables)) {
+		t.Fatalf("identity tables=%v want=%v", present, identityTables)
 	}
 	var sequences []string
-	rows, err = fixture.Owner.Query(t.Context(), `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
+	rows, err := fixture.Owner.Query(t.Context(), `SELECT c.relname FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
 		WHERE n.nspname='public' AND c.relkind='S' ORDER BY c.relname`)
 	if err != nil {
 		t.Fatal(err)
@@ -99,7 +83,7 @@ func TestIdentitySchemaHasExactApplicationPrivileges(t *testing.T) {
 	if !equalStrings(sequences, []string{"family_actor_label_history_label_version_seq"}) {
 		t.Fatalf("public sequences=%v", sequences)
 	}
-	for _, role := range []string{"baby_tracker_runtime", "baby_tracker_projector"} {
+	for _, role := range []string{"baby_tracker_runtime", "baby_tracker_maintenance"} {
 		var usable, selectable bool
 		if err := fixture.Owner.QueryRow(t.Context(), `SELECT has_sequence_privilege($1,
 			'public.family_actor_label_history_label_version_seq','USAGE'),has_sequence_privilege($1,
@@ -119,97 +103,55 @@ func TestIdentitySchemaHasExactApplicationPrivileges(t *testing.T) {
 	if publicSequencePrivilege {
 		t.Fatal("PUBLIC has actor-label history sequence privileges")
 	}
-	for _, signature := range identityRuntimeFunctions {
+	for _, signature := range runtimeAppFunctions {
 		assertFunctionPrivilege(t, fixture.Runtime, signature, true)
-		assertFunctionPrivilege(t, fixture.Projector, signature, false)
+		assertFunctionPrivilege(t, fixture.Maintenance, signature, false)
 		assertPublicCannotExecute(t, fixture, signature)
 	}
-	projectorFunctions := []string{
-		"app.project_security_event(bigint,bigint,bytea,bytea,uuid,uuid,bytea,jsonb,jsonb,bytea)",
-		"app.update_server_state(uuid,bigint,bigint,bigint,bytea)",
-	}
-	for _, signature := range projectorFunctions {
-		assertFunctionPrivilege(t, fixture.Runtime, signature, false)
-		assertFunctionPrivilege(t, fixture.Projector, signature, true)
-		assertPublicCannotExecute(t, fixture, signature)
-	}
-	allRuntimeFunctions := append([]string{
-		"app.current_account_id()",
-		"app.current_family_id()",
-	}, identityRuntimeFunctions...)
-	allRuntimeFunctions = append(allRuntimeFunctions, familyRuntimeFunctions...)
-	allRuntimeFunctions = append(allRuntimeFunctions, "app.fence_live_activity_installation(uuid,bigint,uuid,uuid,uuid,uuid,bigint,timestamp with time zone,boolean)", "app.live_activity_session_binding(uuid,uuid,uuid,bigint)", "app.live_activity_claim_live(jsonb)", "app.live_activity_registration_subjects(uuid,integer)", "app.live_activity_registration_state(uuid,jsonb)")
-	allRuntimeFunctions = append(allRuntimeFunctions, "app.lookup_refresh_recovery_receipt(uuid,uuid)", "app.lookup_refresh_recovery_child(uuid)", "app.lookup_refresh_recovery_ack(uuid,uuid,uuid,bigint,uuid)", "app.ack_refresh_recovery_receipt(uuid,uuid,uuid,uuid,bigint,uuid)", "app.refresh_recovery_key_candidates()")
-	allRuntimeFunctions = append(allRuntimeFunctions, "app.export_family_audit(uuid)")
-	allRuntimeFunctions = append(allRuntimeFunctions, "app.session_lineage_started_at(uuid,uuid)")
-	allRuntimeFunctions = append(allRuntimeFunctions, recordRuntimeFunctions...)
-	allRuntimeFunctions = append(allRuntimeFunctions, snapshotRuntimeFunctions...)
-	allRuntimeFunctions = append(allRuntimeFunctions, "app.import_unfinished_session_count(uuid,timestamp with time zone)")
-	allRuntimeFunctions = append(allRuntimeFunctions, deliveryScheduleSignature)
-	allRuntimeFunctions = append(allRuntimeFunctions, membershipMayWriteSignature)
-	assertExactAppExecutables(t, fixture, "baby_tracker_runtime", allRuntimeFunctions)
-	assertExactAppExecutables(t, fixture, "baby_tracker_projector", projectorFunctions)
-	rows, err = fixture.Owner.Query(t.Context(), `SELECT object_identity FROM schema_privilege_manifest WHERE schema_version=5
-		AND principal='baby_tracker_runtime' AND object_kind='function'
-		EXCEPT SELECT object_identity FROM schema_privilege_manifest WHERE schema_version=4
-		AND principal='baby_tracker_runtime' AND object_kind='function' ORDER BY 1`)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var added []string
-	for rows.Next() {
-		var signature string
-		if err := rows.Scan(&signature); err != nil {
-			t.Fatal(err)
-		}
-		added = append(added, signature)
-	}
-	rows.Close()
-	if !equalStrings(added, identityRuntimeFunctions) {
-		t.Fatalf("schema-five runtime function delta=%v want exact nine=%v", added, identityRuntimeFunctions)
-	}
+	assertExactAppExecutables(t, fixture, "baby_tracker_runtime", runtimeAppFunctions)
+	// The maintenance group's five definers (000031): request_path_schema_test.go;
+	// its nine Live Activity worker definers (000032): live_activity_schema_test.go.
+	assertExactAppExecutables(t, fixture, "baby_tracker_maintenance", append([]string{
+		"app.ensure_audit_partitions(timestamp with time zone)", "app.forget_push_token(uuid,bytea)", "app.prune_push_tokens(integer)",
+		"app.purge_family_step(uuid,integer)", "app.push_targets(uuid[],uuid[])",
+	}, liveActivityWorkerFunctions...))
 }
 
 func TestIdentityTablesHaveExactColumnsAndCriticalIndexes(t *testing.T) {
 	fixture := testpg.New(t)
 	for table, want := range identityTableColumns {
 		t.Run(table, func(t *testing.T) {
-			rows, err := fixture.Owner.Query(t.Context(), `SELECT column_name FROM information_schema.columns
-				WHERE table_schema='public' AND table_name=$1 ORDER BY ordinal_position`, table)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var got []string
-			for rows.Next() {
-				var column string
-				if err := rows.Scan(&column); err != nil {
-					t.Fatal(err)
-				}
-				got = append(got, column)
-			}
-			rows.Close()
-			if !equalStrings(got, want) {
+			if got := tableColumns(t, fixture, table); !equalStrings(got, want) {
 				t.Fatalf("columns=%v want=%v", got, want)
 			}
 		})
 	}
-	for index, fragment := range map[string]string{
-		"auth_challenges_unconsumed_expiry_idx": "WHERE (consumed_at IS NULL)",
-		"sessions_access_digest_idx":            "UNIQUE INDEX sessions_access_digest_idx",
-		"sessions_refresh_digest_idx":           "UNIQUE INDEX sessions_refresh_digest_idx",
-		"sessions_account_status_idx":           "(account_id, status)",
-		"sessions_device_status_idx":            "(device_id, status)",
-		"sessions_lineage_status_idx":           "(lineage_root_session_id, status)",
-		"session_refresh_history_lineage_idx":   "(lineage_root_session_id)",
-		"rate_limit_buckets_expiry_idx":         "(window_end)",
+	for index, definition := range map[string]string{
+		"sessions_pkey":                       "UNIQUE INDEX sessions_pkey ON public.sessions USING btree (access_digest)",
+		"sessions_id_key":                     "UNIQUE INDEX sessions_id_key ON public.sessions USING btree (id)",
+		"sessions_refresh_digest_key":         "UNIQUE INDEX sessions_refresh_digest_key ON public.sessions USING btree (refresh_digest)",
+		"sessions_account_live_idx":           "(account_id) WHERE (status = 'active'::app.session_status)",
+		"sessions_device_live_idx":            "(device_id) WHERE (status = 'active'::app.session_status)",
+		"sessions_lineage_live_idx":           "(lineage_root_id) WHERE (status = 'active'::app.session_status)",
+		"sessions_family_live_idx":            "(family_id) WHERE (status = 'active'::app.session_status)",
+		"sessions_consumed_idx":               "(consumed_at) WHERE (status = 'consumed'::app.session_status)",
+		"account_identities_live_idx":         "UNIQUE INDEX account_identities_live_idx ON public.account_identities USING btree (provider, identity_key_id, identity_digest) WHERE live",
+		"account_identities_account_id_key":   "UNIQUE INDEX account_identities_account_id_key ON public.account_identities USING btree (account_id)",
+		"devices_active_account_device_idx":   "(account_id, id) WHERE (status = 'active'::app.device_status)",
+		"auth_challenges_pkey":                "UNIQUE INDEX auth_challenges_pkey ON public.auth_challenges USING btree (token_digest)",
+		"auth_challenges_expiry_idx":          "(expires_at)",
+		"refresh_receipts_device_attempt_idx": "(account_id, device_id, attempt_id)",
+		"refresh_receipts_child_id_key":       "UNIQUE INDEX refresh_receipts_child_id_key ON public.refresh_receipts USING btree (child_id)",
+		"apple_notifications_pkey":            "UNIQUE INDEX apple_notifications_pkey ON public.apple_notifications USING btree (notification_key_id, notification_digest)",
+		"apple_notifications_command_id_key":  "UNIQUE INDEX apple_notifications_command_id_key ON public.apple_notifications USING btree (command_id)",
 	} {
-		var definition string
+		var got string
 		if err := fixture.Owner.QueryRow(t.Context(), `SELECT indexdef FROM pg_indexes
-			WHERE schemaname='public' AND indexname=$1`, index).Scan(&definition); err != nil {
-			t.Fatal(err)
+			WHERE schemaname='public' AND indexname=$1`, index).Scan(&got); err != nil {
+			t.Fatalf("index %s: %v", index, err)
 		}
-		if !strings.Contains(definition, fragment) {
-			t.Fatalf("index %s=%q missing %q", index, definition, fragment)
+		if !strings.Contains(got, definition) {
+			t.Fatalf("index %s=%q missing %q", index, got, definition)
 		}
 	}
 	var profileRequired string
@@ -220,39 +162,114 @@ func TestIdentityTablesHaveExactColumnsAndCriticalIndexes(t *testing.T) {
 	if profileRequired != "NO:false" {
 		t.Fatalf("accounts.profile_required contract=%q", profileRequired)
 	}
-	var projectorDefinition string
-	if err := fixture.Owner.QueryRow(t.Context(), `SELECT pg_get_functiondef(
-		'app.project_security_event_v5(bigint,bigint,bytea,bytea,uuid,uuid,bytea,jsonb,jsonb,bytea)'::regprocedure)`).Scan(&projectorDefinition); err != nil {
+
+	// A refresh token digest names one session (Task 1 deferred minor).
+	ids := seedAuthorityFamilies(t, fixture)
+	now := time.Now().UTC().Truncate(time.Second)
+	insertSession := `INSERT INTO sessions(access_digest,id,account_id,device_id,lineage_root_id,lineage_started_at,scope,recovery_epoch,issued_seq,token_key_id,
+		refresh_digest,access_expires_at,refresh_expires_at,deadline_at,created_at)
+		VALUES ($1,$2,$3,$4,$2,$5,'account',1,1,'token.v1',$6,$5::timestamptz + interval '15 minutes',$5::timestamptz + interval '30 days',$5::timestamptz + interval '90 days',$5)`
+	if err := authorityExec(t.Context(), fixture.Owner, insertSession, authorityDigest(0xc1), "73000000-0000-4000-8000-000000000001", ids.accountA, ids.deviceA, now, authorityDigest(0xc2)); err != nil {
 		t.Fatal(err)
 	}
-	if strings.Contains(projectorDefinition, "family_bootstrapped") {
-		t.Fatal("historical schema-five projector contains the schema-six family_bootstrapped SQL case")
-	}
+	requireUniqueViolation(t, authorityExec(t.Context(), fixture.Owner, insertSession, authorityDigest(0xc3), "73000000-0000-4000-8000-000000000002", ids.accountA, ids.deviceA, now, authorityDigest(0xc2)), "sessions_refresh_digest_key")
 }
 
-// Granting direct DML would bypass validation and authority projection.
+// The identity tables are authority-only for every application role: the
+// runtime reaches them only inside an authority transaction (RLS), can never
+// TRUNCATE them, and DELETEs only the rows authority commands retire
+// (sessions, refresh receipts, challenges); the worker roles hold nothing.
 func TestIdentityTablesDenyRuntimeAndProjectorDirectDML(t *testing.T) {
 	fixture := testpg.New(t)
-	for _, pool := range []struct {
+	ids := seedAuthorityFamilies(t, fixture)
+	for _, table := range []string{"sessions", "refresh_receipts", "account_identities", "auth_challenges", "apple_notifications"} {
+		row := authorityOnlyRows(ids, 1)[table]
+		if err := authorityExec(t.Context(), fixture.Owner, row.sql, row.args...); err != nil {
+			t.Fatalf("seed %s: %v", table, err)
+		}
+	}
+	runtimeDeletes := map[string]bool{"sessions": true, "refresh_receipts": true, "auth_challenges": true}
+	for _, table := range identityTables {
+		if table == "devices" {
+			continue // devices are tenant-readable (TestAuthorityRLSShape)
+		}
+		t.Run("runtime/"+table, func(t *testing.T) {
+			var visible int
+			if err := fixture.Runtime.QueryRow(t.Context(), "SELECT count(*) FROM public."+table).Scan(&visible); err != nil || visible != 0 {
+				t.Fatalf("runtime outside authority sees %d rows err=%v", visible, err)
+			}
+			_, err := fixture.Runtime.Exec(t.Context(), "TRUNCATE public."+table)
+			assertSQLState(t, err, "42501")
+			deleted, err := fixture.Runtime.Exec(t.Context(), "DELETE FROM public."+table)
+			if runtimeDeletes[table] {
+				if err != nil || deleted.RowsAffected() != 0 {
+					t.Fatalf("runtime delete outside authority rows=%d err=%v", deleted.RowsAffected(), err)
+				}
+			} else {
+				assertSQLState(t, err, "42501")
+			}
+		})
+	}
+	for _, role := range []struct {
 		name string
-		exec func(context.Context, string, ...any) (pgconn.CommandTag, error)
-	}{{"runtime", fixture.Runtime.Exec}, {"projector", fixture.Projector.Exec}} {
+		pool *pgxpool.Pool
+	}{{"maintenance", fixture.Maintenance}} {
 		for _, table := range identityTables {
-			for _, statement := range []string{
-				"SELECT * FROM public." + table + " LIMIT 0",
-				"DELETE FROM public." + table,
-				"TRUNCATE public." + table,
-			} {
-				t.Run(pool.name+"/"+table+"/"+statement[:6], func(t *testing.T) {
-					_, err := pool.exec(t.Context(), statement)
-					var pgErr *pgconn.PgError
-					if !errors.As(err, &pgErr) || pgErr.Code != "42501" {
-						t.Fatalf("error=%v, want SQLSTATE 42501", err)
-					}
+			for _, statement := range []string{"SELECT * FROM public." + table + " LIMIT 0", "DELETE FROM public." + table, "TRUNCATE public." + table} {
+				t.Run(role.name+"/"+table+"/"+statement[:6], func(t *testing.T) {
+					_, err := role.pool.Exec(t.Context(), statement)
+					assertSQLState(t, err, "42501")
 				})
 			}
 		}
 	}
+}
+
+func tableColumns(t *testing.T, fixture *testpg.Fixture, table string) []string {
+	t.Helper()
+	rows, err := fixture.Owner.Query(t.Context(), `SELECT a.attname FROM pg_attribute a
+		WHERE a.attrelid=($1::text)::regclass AND a.attnum>0 AND NOT a.attisdropped ORDER BY a.attnum`, "public."+table)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var column string
+		if err := rows.Scan(&column); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, column)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return got
+}
+
+func tableSet(t *testing.T, fixture *testpg.Fixture, tables []string) []string {
+	t.Helper()
+	rows, err := fixture.Owner.Query(t.Context(), `SELECT tablename FROM pg_tables
+		WHERE schemaname='public' AND tablename = ANY($1) ORDER BY tablename`, tables)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer rows.Close()
+	var got []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			t.Fatal(err)
+		}
+		got = append(got, name)
+	}
+	return got
+}
+
+func sortedCopy(in []string) []string {
+	out := append([]string(nil), in...)
+	sort.Strings(out)
+	return out
 }
 
 func assertFunctionPrivilege(t *testing.T, query *pgxpool.Pool, signature string, want bool) {
@@ -298,9 +315,7 @@ func assertExactAppExecutables(t *testing.T, fixture *testpg.Fixture, role strin
 		}
 		got = append(got, signature)
 	}
-	want = append([]string(nil), want...)
-	sort.Strings(want)
-	if !equalStrings(got, want) {
+	if !equalStrings(got, sortedCopy(want)) {
 		t.Fatalf("%s app executables=%v want=%v", role, got, want)
 	}
 }

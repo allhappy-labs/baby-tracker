@@ -19,6 +19,11 @@ const (
 	CapabilityImportResolverV1   = "import-resolver-v1"
 	CapabilityLiveHintsV1        = "live-hints-v1"
 	CapabilityExportV1           = "export-v1"
+	// CapabilityPushTokenV1 is the device push-token route (PUT/DELETE
+	// /v1/devices/push-token), the one additive wire surface of the
+	// PostgreSQL authority redesign (owner decision D4). It is advertised
+	// only by a server with APNs wakes configured.
+	CapabilityPushTokenV1 = "push-token-v1"
 )
 
 var reservedCapabilities = []string{
@@ -41,6 +46,7 @@ var knownCapabilities = []string{
 	CapabilityImportResolverV1,
 	CapabilityLiveHintsV1,
 	CapabilityExportV1,
+	CapabilityPushTokenV1,
 }
 
 func ReservedCapabilities() []string { return slices.Clone(reservedCapabilities) }

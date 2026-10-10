@@ -52,8 +52,8 @@ func TestViewerMutationsRejectedAndCursorDoesNotAdvance(t *testing.T) {
 	}
 
 	sequenceBefore := fixture.h.FamilySequence(t)
-	journalBefore := fixture.h.Count(t, "mutation_journal", fixture.h.FamilyID)
-	diapersBefore := fixture.h.Count(t, "diaper_entries", fixture.h.FamilyID)
+	receiptsBefore := fixture.h.Count(t, "care_receipts", fixture.h.FamilyID)
+	diapersBefore := fixture.h.CareCount(t, "diaper", fixture.h.FamilyID)
 
 	_, err := fixture.Caregiver().Sync([]protocol.Mutation{mutation(t, "diaper.json", fixture.h.CommandID())})
 	detail := refusal(t, err)
@@ -69,10 +69,10 @@ func TestViewerMutationsRejectedAndCursorDoesNotAdvance(t *testing.T) {
 	if after := fixture.h.FamilySequence(t); after != sequenceBefore {
 		t.Errorf("family cursor advanced on a refused mutation: %d -> %d", sequenceBefore, after)
 	}
-	if after := fixture.h.Count(t, "mutation_journal", fixture.h.FamilyID); after != journalBefore {
-		t.Errorf("refused mutation left %d journal rows behind", after-journalBefore)
+	if after := fixture.h.Count(t, "care_receipts", fixture.h.FamilyID); after != receiptsBefore {
+		t.Errorf("refused mutation left %d receipts behind", after-receiptsBefore)
 	}
-	if after := fixture.h.Count(t, "diaper_entries", fixture.h.FamilyID); after != diapersBefore {
+	if after := fixture.h.CareCount(t, "diaper", fixture.h.FamilyID); after != diapersBefore {
 		t.Errorf("refused mutation wrote a diaper entry")
 	}
 
@@ -250,9 +250,9 @@ func TestViewOnlyInvitationCanBeRevoked(t *testing.T) {
 	}
 }
 
-/// An invitation may not confer ownership. A family has exactly one owner and
-/// it arrives by creating the family or by transfer, both of which name the
-/// account explicitly.
+// An invitation may not confer ownership. A family has exactly one owner and
+// it arrives by creating the family or by transfer, both of which name the
+// account explicitly.
 func TestInvitationCannotConferOwnership(t *testing.T) {
 	fixture := newProtocolFixture(t)
 	for _, role := range []string{"owner", "admin", "", "Viewer"} {

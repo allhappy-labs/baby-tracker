@@ -176,6 +176,88 @@ struct OnePartTimerSyncE2ETests {
         print("cross-phone sleep join proof: \(shapes.joined(separator: "; "))")
     }
 
+    /// A snapshot carrying running timers, applied by the client.
+    ///
+    /// Since the PostgreSQL authority redesign (Phase 2), snapshot pages serve
+    /// a running timer's stored wire verbatim. The decoder already stores the
+    /// start (and a running side's start) at whole microseconds (`.250000Z`),
+    /// but a running bottle's start and any part bounds stay exactly as the
+    /// phone sent them (`.750Z`), where the legacy snapshot re-rendered them
+    /// (`.750000Z`). The caregiver joins while the owner's sleep and bottle
+    /// timers run, so its join snapshot (`activateAsJoiner` → `takeSnapshot`)
+    /// is where both timers first reach it. Both must appear exactly as the
+    /// owner has them, also in a store built from a fresh snapshot alone, and
+    /// the joined timer must still work: the caregiver stops the bottle and
+    /// the owner gets the record.
+    @Test func aJoinersSnapshotCarriesRunningTimers() async throws {
+        guard let environment = E2EEnvironment.current() else { return }
+        var timers: (sleep: UUID, bottle: UUID)?
+        let race = try await Race(environment: environment) { owner, baby, clock in
+            // Fractions of a second, so no timestamp is a whole second.
+            clock.advance(by: 0.25)
+            let sleep = try owner.store.startSleep(for: baby)
+            clock.advance(by: 30.5)
+            let bottle = try owner.store.startPart(.bottle(.formula), for: baby)
+            try await owner.sync(.localWrite)
+            timers = (sleep.id, bottle.id)
+        }
+        defer { race.tearDown() }
+        let (owner, caregiver, baby, clock) = (race.owner, race.caregiver, race.babyID, race.clock)
+        let (sleepID, bottleID) = try #require(timers)
+        let joinPulls = caregiver.traffic.syncCursors
+
+        let fresh = try await caregiver.freshSnapshot()
+        // Nothing has written to the family since the join, so a fresh
+        // snapshot records the join snapshot's high water: the join's first
+        // pull must start exactly there, which only the snapshot can have set.
+        let snapshotCursor = try fresh.syncCursor()
+        let highWater = UInt64(try #require(snapshotCursor?.sequence, "the fresh snapshot recorded no high water"))
+        #expect(joinPulls.first.flatMap { $0 } == highWater, "the join pulled from \(joinPulls), not from the snapshot's high water \(highWater)")
+        var served: [String] = []
+        for id in [sleepID, bottleID] {
+            let sent = try #require(try owner.store.activeTimer(id: id), "the owner lost timer \(id)")
+            let base = try #require(try fresh.context.fetch(FetchDescriptor<CanonicalEntityBase>()).first { $0.entityID == id },
+                                    "the snapshot did not carry timer \(id)")
+            let wire = try #require(try JSONSerialization.jsonObject(with: base.payload) as? [String: Any])
+            let servedStart = try #require(wire["started_at"] as? String)
+            #expect(abs(try BabyStore.wireDate(servedStart).timeIntervalSince(sent.startedAt)) < 0.001,
+                    "the snapshot served started_at \(servedStart) for \(MutationFactory.wireTime(sent.startedAt))")
+            var line = "\(sent.kind.rawValue)=\(id) started_at=\(servedStart)"
+            if let sentBottle = sent.currentBottleStartedAt {
+                let sentBottleWire = MutationFactory.wireTime(sentBottle)
+                #expect(!sentBottleWire.hasSuffix(".000Z"), "the owner sent a whole second: \(sentBottleWire)")
+                let servedBottle = try #require(wire["current_bottle_started_at"] as? String)
+                #expect(servedBottle == sentBottleWire, "the snapshot served current_bottle_started_at \(servedBottle), the owner sent \(sentBottleWire)")
+                line += " current_bottle_started_at=\(servedBottle) (sent \(sentBottleWire))"
+            }
+            for (store, label) in [(caregiver.store, "the joined caregiver"), (fresh, "a fresh-snapshot store")] {
+                let applied = try #require(try store.activeTimer(id: id), "\(label) has no running timer \(id)")
+                #expect(applied.kind == sent.kind && applied.babyID == sent.babyID && applied.sessionID == sent.sessionID)
+                #expect(abs(applied.startedAt.timeIntervalSince(sent.startedAt)) < 0.001, "\(label) shows \(applied.startedAt), not \(sent.startedAt)")
+                #expect(applied.currentSide == sent.currentSide)
+                #expect((applied.currentBottleStartedAt == nil) == (sent.currentBottleStartedAt == nil))
+                if let appliedBottle = applied.currentBottleStartedAt, let sentBottle = sent.currentBottleStartedAt {
+                    #expect(abs(appliedBottle.timeIntervalSince(sentBottle)) < 0.001, "\(label) shows the bottle started at \(appliedBottle), not \(sentBottle)")
+                }
+            }
+            served.append(line)
+        }
+
+        clock.advance(by: 240)
+        let joinedBottle = try #require(try caregiver.store.activeTimer(id: bottleID))
+        let stopped = try #require(try caregiver.store.stopBottle(joinedBottle, volumeML: 60))
+        try await caregiver.sync(.localWrite)
+        try await owner.sync()
+        for side in [owner, caregiver] {
+            #expect(try side.store.activeTimer(id: bottleID) == nil, "\(side.name) still runs the stopped bottle")
+            #expect(try side.store.activeTimer(id: sleepID) != nil, "\(side.name) lost the running sleep")
+            let feeds = try side.store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture)
+            #expect(feeds.count == 1 && feeds.first?.feedIDs == [stopped.id], "\(side.name) has feeds \(feeds.map(\.feedIDs)), not [\(stopped.id)]")
+            #expect(try side.store.nextDispatchBatch(limit: 100).isEmpty, "\(side.name)'s outbox did not drain")
+        }
+        print("running-timer snapshot proof: the caregiver joined while the owner's timers ran; the join pulled from cursor=\(joinPulls.first.flatMap { $0 }.map(String.init) ?? "-"), the snapshot's high water \(highWater); snapshot served \(served.joined(separator: ", ")); joined phone and fresh-snapshot store show both timers identically; the caregiver stopped the joined bottle (\(stopped.id)) and the owner has it")
+    }
+
     /// Both phones: nothing running, exactly one session holding exactly two
     /// parts, Left then Right, and an outbox with nothing left to send.
     private func expectOneSessionOfLeftThenRight(on phones: [Phone], baby: UUID) throws -> String {
@@ -203,48 +285,5 @@ struct OnePartTimerSyncE2ETests {
         try phone.store.context.fetch(FetchDescriptor<SyncOutboxEntry>()).first {
             $0.entityKind == .timer && $0.operation == .timerStop && $0.entityID == timerID
         }
-    }
-}
-
-/// Two phones in a fresh family of their own, with one baby, both up to date.
-@MainActor
-private struct Race {
-    let owner: Phone
-    let caregiver: Phone
-    let babyID: UUID
-    let clock: TestDateProvider
-    private let scratch: URL
-
-    init(environment: E2EEnvironment) async throws {
-        let live = try LiveServer(environment)
-        // One clock for both phones, in the past so the server has seen every
-        // timestamp happen, and moved only when the test says so.
-        clock = TestDateProvider(Date(timeIntervalSince1970: floor(Date().timeIntervalSince1970) - 2 * 3600))
-        scratch = FileManager.default.temporaryDirectory
-            .appending(path: "one-part-timer-e2e-\(UUID().uuidString)", directoryHint: .isDirectory)
-        try FileManager.default.createDirectory(at: scratch, withIntermediateDirectories: true)
-
-        // Brand-new Apple accounts, the way step 18's third phone signs in.
-        owner = try Phone(name: "owner", live: live, clock: clock, directory: scratch,
-                          appleSubject: UUID().uuidString.lowercased())
-        caregiver = try Phone(name: "caregiver", live: live, clock: clock, directory: scratch,
-                              appleSubject: UUID().uuidString.lowercased())
-
-        babyID = try owner.store.addBaby(name: "Race", birthDate: clock.now.addingTimeInterval(-20 * 86_400),
-                                         referenceSex: .boys, expectedDueDate: nil).id
-        _ = try await owner.signIn(displayName: "Race Owner", live: live)
-        try await owner.model.createFamily(name: "E2E one-part timers")
-        try owner.expectUpToDate("after creating the family")
-        let invitation = try await owner.model.createInvitation()
-        _ = try await caregiver.signIn(displayName: "Race Caregiver", live: live)
-        try await caregiver.model.acceptInvitation(try InvitationParser.parse(invitation.shareURL.absoluteString))
-        try caregiver.expectUpToDate("after joining")
-        try #require(try caregiver.store.baby(babyID) != nil, "the caregiver never received the baby")
-    }
-
-    func tearDown() {
-        owner.forgetDefaults()
-        caregiver.forgetDefaults()
-        try? FileManager.default.removeItem(at: scratch)
     }
 }

@@ -13,10 +13,10 @@ import (
 // while the timer runs, a full pull after it stopped, and a snapshot.
 //
 // Their stored form carries `completed_components` and no `completed_sides`,
-// and the journal/snapshot decoder once validated every stored payload as v1
+// and the legacy pull/snapshot decoder once validated every stored payload as v1
 // first — so the write committed and every later pull for the family failed
 // with a retryable 503. Found by the two-caregiver iOS gate (protocol-e2e.sh).
-func TestTimersReadBackThroughJournalAndSnapshot(t *testing.T) {
+func TestTimersReadBackThroughPullAndSnapshot(t *testing.T) {
 	h := testkit.New(t)
 	baby := testkit.MustMutation(t, "baby.json")
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, baby); err != nil {
@@ -66,7 +66,7 @@ func TestTimersReadBackThroughJournalAndSnapshot(t *testing.T) {
 	if len(running.Changes) != 2 {
 		t.Fatalf("running changes=%d", len(running.Changes))
 	}
-	snapshot, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	snapshot, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil {
 		t.Fatalf("snapshot with live timers: %v", err)
 	}
@@ -81,7 +81,7 @@ func TestTimersReadBackThroughJournalAndSnapshot(t *testing.T) {
 	}
 
 	// Stopped: the timers end and their records exist, and everything still
-	// reads back from the very start of the journal.
+	// reads back in a pull from cursor 0.
 	apply(mutation(feedTimer, "timer_stop", 1, fmt.Sprintf(`{"baby_id":"%s","completed_record_id":"21000000-0000-4000-8000-000000000301",`+
 		`"stopped_at":"2026-09-20T15:10:00.000Z","note":null,"sleep_kind_override":null}`, babyID)))
 	apply(mutation(sleepTimer, "timer_stop", 1, fmt.Sprintf(`{"baby_id":"%s","completed_record_id":"22000000-0000-4000-8000-000000000302",`+
@@ -91,14 +91,15 @@ func TestTimersReadBackThroughJournalAndSnapshot(t *testing.T) {
 	for _, change := range full.Changes {
 		kinds[change.EntityKind]++
 	}
-	if kinds["feed"] != 1 || kinds["sleep"] != 1 || kinds["timer"] < 4 {
+	// Latest state: each timer once, as its stop tombstone.
+	if kinds["feed"] != 1 || kinds["sleep"] != 1 || kinds["timer"] != 2 {
 		t.Fatalf("full pull kinds=%v", kinds)
 	}
 	feed := h.ReadFeed(t, "21000000-0000-4000-8000-000000000301").Payload.(protocol.FeedPayload)
 	if len(feed.Components) != 2 || feed.Components[0].ID != leftComponent || feed.Components[1].ID != bottleComponent {
 		t.Fatalf("completed feed components=%+v", feed.Components)
 	}
-	if _, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{}); err != nil {
+	if _, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{}); err != nil {
 		t.Fatalf("snapshot after stops: %v", err)
 	}
 }

@@ -21,13 +21,6 @@ func TestGrowthOwnerArchiveRawAndTombstones(t *testing.T) {
 	}{{name: "raw"}, {name: "tombstones", deleted: true}, {name: "delayed_raw", deferred: true}} {
 		t.Run(scenario.name, func(t *testing.T) {
 			h := testkit.New(t)
-			head, err := h.Security.Head(t.Context())
-			if err != nil {
-				t.Fatal(err)
-			}
-			if _, err := h.Migrator.Exec(t.Context(), `SELECT app.update_server_state($1,$2,$3,$4,$5)`, h.Info.InstanceID, h.Info.RecoveryEpoch, head.Generation, head.Revision, head.EventHash[:]); err != nil {
-				t.Fatal(err)
-			}
 			for _, f := range []string{"baby.json", "growth-profile.json", "measurement.json"} {
 				out, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, f))
 				if err != nil || out.Status != "applied" {

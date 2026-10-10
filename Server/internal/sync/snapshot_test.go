@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/care/caretest"
 	"babytracker/server/internal/protocol"
 	familysync "babytracker/server/internal/sync"
 	"babytracker/server/internal/testkit"
@@ -40,8 +41,8 @@ func TestSnapshotContainsAllTypedKindsAndTombstonesInDeterministicOrder(t *testi
 		}
 		expected = append(expected, *outcome.CanonicalEntity)
 	}
-	h.RebuildSyncService(t)
-	snapshot, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	h.RebuildSyncService(t, h.Limits)
+	snapshot, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil || snapshot.NextPageToken != nil || !reflect.DeepEqual(snapshot.Entities, expected) {
 		t.Fatalf("snapshot=%+v expected=%+v err=%v", snapshot.Entities, expected, err)
 	}
@@ -57,8 +58,8 @@ func TestSnapshotContainsLiveAndStoppedTimerCanonicalForms(t *testing.T) {
 	if err != nil || started.Status != "applied" {
 		t.Fatalf("start=%+v err=%v", started, err)
 	}
-	h.RebuildSyncService(t)
-	live, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	h.RebuildSyncService(t, h.Limits)
+	live, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,7 +72,7 @@ func TestSnapshotContainsLiveAndStoppedTimerCanonicalForms(t *testing.T) {
 	if outcome, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, stop); err != nil || outcome.Status != "applied" {
 		t.Fatalf("stop=%+v err=%v", outcome, err)
 	}
-	stopped, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	stopped, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -101,17 +102,17 @@ func assertSnapshotTimer(t *testing.T, entities []protocol.CanonicalEntity, id s
 func TestSnapshotDeadlineRollsBackAllDurableRows(t *testing.T) {
 	h := testkit.New(t)
 	h.SeedBabies(t, 1)
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	blocker, err := h.Migrator.Begin(t.Context())
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer blocker.Rollback(t.Context())
-	if _, err := blocker.Exec(t.Context(), `LOCK TABLE babies IN ACCESS EXCLUSIVE MODE`); err != nil {
+	if _, err := blocker.Exec(t.Context(), `LOCK TABLE care_entities IN ACCESS EXCLUSIVE MODE`); err != nil {
 		t.Fatal(err)
 	}
 	// Expire the deadline only after PostgreSQL proves that the snapshot has
-	// reached the blocked babies read. A wall-clock deadline started before
+	// reached the blocked page read. A wall-clock deadline started before
 	// family resolution can instead expire in strict authority validation.
 	ctx := &snapshotDeadlineContext{Context: context.WithoutCancel(t.Context()), done: make(chan struct{})}
 	finished := make(chan struct{})
@@ -137,7 +138,7 @@ func TestSnapshotDeadlineRollsBackAllDurableRows(t *testing.T) {
 		err := h.Migrator.QueryRow(waitCtx, `SELECT EXISTS (
 			SELECT 1 FROM pg_locks
 			WHERE database = (SELECT oid FROM pg_database WHERE datname = current_database())
-			AND relation = 'babies'::regclass AND mode = 'AccessShareLock' AND NOT granted
+			AND relation = 'care_entities'::regclass AND mode = 'AccessShareLock' AND NOT granted
 			AND $1::int = ANY(pg_blocking_pids(pid)))`, blocker.Conn().PgConn().PID()).Scan(&blocked)
 		if err != nil {
 			t.Fatalf("observe blocked snapshot read: %v", err)
@@ -149,7 +150,7 @@ func TestSnapshotDeadlineRollsBackAllDurableRows(t *testing.T) {
 		case <-finished:
 			t.Fatalf("snapshot returned before blocked read: %v", snapshotErr)
 		case <-waitCtx.Done():
-			t.Fatal("snapshot did not reach blocked babies read")
+			t.Fatal("snapshot did not reach blocked page read")
 		case <-poll.C:
 		}
 	}
@@ -162,16 +163,10 @@ func TestSnapshotDeadlineRollsBackAllDurableRows(t *testing.T) {
 	case <-waitCtx.Done():
 		t.Fatal("snapshot did not return after deadline")
 	}
-	if got := h.Count(t, "sync_snapshot_admissions", h.FamilyID); got != 0 {
-		t.Fatalf("partial admissions=%d", got)
-	}
-	if got := h.Count(t, "sync_snapshots", h.FamilyID); got != 0 {
+	if got := h.Count(t, "sync_snapshot_sessions", h.FamilyID); got != 0 {
 		t.Fatalf("partial snapshots=%d", got)
 	}
-	if got := h.Count(t, "sync_snapshot_entities", h.FamilyID); got != 0 {
-		t.Fatalf("partial entities=%d", got)
-	}
-	if got := h.Count(t, "sync_page_sessions", h.FamilyID); got != 0 {
+	if got := h.Count(t, "sync_page_bindings", h.FamilyID); got != 0 {
 		t.Fatalf("partial pages=%d", got)
 	}
 }
@@ -197,33 +192,41 @@ func (c *snapshotDeadlineContext) Err() error {
 }
 func (c *snapshotDeadlineContext) expire() { c.expireOnce.Do(func() { close(c.done) }) }
 
-func TestSnapshotPagesStayAtOneHighWater(t *testing.T) {
+// A snapshot is not frozen (Phase 2 snapshot ruling): its pages carry the
+// one high water recorded at capture, a row changed after the capture is
+// served at its current version, and the pull from that high water
+// re-delivers it, so the device converges.
+func TestSnapshotPagesKeepOneHighWaterAndTheNextPullCatchesUp(t *testing.T) {
 	h := testkit.New(t)
 	h.Limits.SyncPageSize = 2
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	seeded := h.SeedBabies(t, 3)
-	first, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	first, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if err != nil || first.NextPageToken == nil || len(first.Entities) != 2 {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
 	notYetDelivered := seeded[2].CanonicalEntity
 	original := notYetDelivered.Payload.(protocol.BabyPayload).Name
 	h.RenameBaby(t, notYetDelivered.Meta.ID, "Changed after capture")
-	last, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{PageToken: first.NextPageToken})
+	last, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{PageToken: first.NextPageToken})
 	if err != nil || last.NextPageToken != nil || last.HighWater != first.HighWater || last.SnapshotID != first.SnapshotID {
 		t.Fatalf("last=%+v err=%v", last, err)
 	}
 	if len(last.Entities) != 1 || last.Entities[0].Meta.ID != notYetDelivered.Meta.ID ||
-		last.Entities[0].Meta.EntityVersion != 1 || last.Entities[0].Payload.(protocol.BabyPayload).Name != original {
-		t.Fatalf("late page crossed capture boundary: %+v", last.Entities)
+		last.Entities[0].Meta.EntityVersion != 2 || last.Entities[0].Payload.(protocol.BabyPayload).Name == original {
+		t.Fatalf("late page did not serve the current row: %+v", last.Entities)
+	}
+	pull := h.Pull(t, h.Owner, &first.HighWater, nil)
+	if len(pull.Changes) != 1 || pull.Changes[0].EntityID != notYetDelivered.Meta.ID || pull.Changes[0].EntityVersion != 2 {
+		t.Fatalf("pull after the snapshot=%+v", pull.Changes)
 	}
 }
 
 func TestSnapshotAccountAdmissionSerializesConcurrentSecondAndThirdStarts(t *testing.T) {
 	h := testkit.New(t)
 	h.SeedBabies(t, 1)
-	h.RebuildSyncService(t)
-	if _, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{}); err != nil {
+	h.RebuildSyncService(t, h.Limits)
+	if _, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{}); err != nil {
 		t.Fatal(err)
 	}
 	errorsByAttempt := make(chan error, 2)
@@ -231,7 +234,7 @@ func TestSnapshotAccountAdmissionSerializesConcurrentSecondAndThirdStarts(t *tes
 	for range 2 {
 		go func() {
 			<-start
-			_, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+			_, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 			errorsByAttempt <- err
 		}()
 	}
@@ -246,21 +249,21 @@ func TestSnapshotAccountAdmissionSerializesConcurrentSecondAndThirdStarts(t *tes
 			t.Fatalf("unexpected admission error: %v", err)
 		}
 	}
-	if allowed != 1 || denied != 1 || h.Count(t, "sync_snapshots", h.FamilyID) != 2 {
-		t.Fatalf("allowed=%d denied=%d snapshots=%d", allowed, denied, h.Count(t, "sync_snapshots", h.FamilyID))
+	if allowed != 1 || denied != 1 || h.Count(t, "sync_snapshot_sessions", h.FamilyID) != 2 {
+		t.Fatalf("allowed=%d denied=%d snapshots=%d", allowed, denied, h.Count(t, "sync_snapshot_sessions", h.FamilyID))
 	}
 }
 
 func TestSnapshotFamilyAdmissionSerializesConcurrentEighthAndNinthStarts(t *testing.T) {
 	h := testkit.New(t)
 	h.SeedBabies(t, 1)
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	principals := []access.Principal{h.Owner, h.Caregiver}
 	for index := 0; index < 7; index++ {
 		principals = append(principals, h.AddCaregiver(t, fmt.Sprintf("snapshot-%d", index)))
 	}
 	for _, principal := range principals[:7] {
-		if _, err := h.Service.FullSnapshot(t.Context(), principal, protocol.SnapshotRequest{}); err != nil {
+		if _, err := fullSnapshot(t, h.Service, principal, protocol.SnapshotRequest{}); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -270,7 +273,7 @@ func TestSnapshotFamilyAdmissionSerializesConcurrentEighthAndNinthStarts(t *test
 		principal := principal
 		go func() {
 			<-start
-			_, err := h.Service.FullSnapshot(t.Context(), principal, protocol.SnapshotRequest{})
+			_, err := fullSnapshot(t, h.Service, principal, protocol.SnapshotRequest{})
 			errorsByAttempt <- err
 		}()
 	}
@@ -285,24 +288,24 @@ func TestSnapshotFamilyAdmissionSerializesConcurrentEighthAndNinthStarts(t *test
 			t.Fatalf("unexpected admission error: %v", err)
 		}
 	}
-	if allowed != 1 || denied != 1 || h.Count(t, "sync_snapshot_admissions", h.FamilyID) != 8 {
-		t.Fatalf("allowed=%d denied=%d admissions=%d", allowed, denied, h.Count(t, "sync_snapshot_admissions", h.FamilyID))
+	if allowed != 1 || denied != 1 || h.Count(t, "sync_snapshot_sessions", h.FamilyID) != 8 {
+		t.Fatalf("allowed=%d denied=%d admissions=%d", allowed, denied, h.Count(t, "sync_snapshot_sessions", h.FamilyID))
 	}
 }
 
 func TestSnapshotContinuationReauthorizes(t *testing.T) {
 	h := testkit.New(t)
 	h.Limits.SyncPageSize = 1
-	h.RebuildSyncService(t)
+	h.RebuildSyncService(t, h.Limits)
 	h.SeedBabies(t, 2)
-	first, err := h.Service.FullSnapshot(t.Context(), h.Caregiver, protocol.SnapshotRequest{})
+	first, err := fullSnapshot(t, h.Service, h.Caregiver, protocol.SnapshotRequest{})
 	if err != nil || first.NextPageToken == nil {
 		t.Fatalf("first=%+v err=%v", first, err)
 	}
 	if _, err = h.Family.Remove(t.Context(), h.Owner, h.CommandID(), h.Caregiver.AccountID); err != nil {
 		t.Fatal(err)
 	}
-	_, err = h.Service.FullSnapshot(t.Context(), h.Caregiver, protocol.SnapshotRequest{PageToken: first.NextPageToken})
+	_, err = fullSnapshot(t, h.Service, h.Caregiver, protocol.SnapshotRequest{PageToken: first.NextPageToken})
 	if err == nil || errors.Is(err, familysync.ErrInvalidPageToken) {
 		t.Fatalf("continuation did not reauthorize: %v", err)
 	}
@@ -311,47 +314,76 @@ func TestSnapshotContinuationReauthorizes(t *testing.T) {
 func TestSnapshotEntityCapRollsBackWholeCapture(t *testing.T) {
 	h := testkit.New(t)
 	baby := h.SeedBabies(t, 1)[0].CanonicalEntity
-	h.ExecFamily(t, `UPDATE families SET next_sequence=1001 WHERE id=$1`, h.FamilyID)
-	h.ExecFamily(t, `WITH source AS (
-		SELECT n,('60000000-0000-4000-8000-' || lpad(to_hex(n),12,'0'))::uuid id FROM generate_series(1,1000) n
-	), journal AS (
-		INSERT INTO mutation_journal(family_id,sequence,entity_kind,entity_id,entity_version,actor_account_id,device_id,operation,canonical_entity,accepted_at)
-		SELECT $1::uuid,n+1,'sleep',id,2,$3::uuid,$4::uuid,'delete',jsonb_build_object('entity_kind','sleep','meta',jsonb_build_object(
-		'id',id::text,'family_id',$1::text,'entity_version',2,'creator_account_id',$3::text,'last_editor_account_id',$3::text,
-		'client_mutation_time','2026-09-20T12:00:00.000000Z','accepted_at','2026-09-20T12:00:01.000000Z',
-		'tombstoned_at','2026-09-20T12:00:02.000000Z'),'payload',NULL), '2026-09-20T12:00:01Z' FROM source
-		RETURNING sequence
-	)
-	INSERT INTO sleep_entries(family_id,id,baby_id,entity_version,creator_account_id,last_editor_account_id,
-		client_mutation_time,accepted_at,tombstoned_at,last_sequence,storage_bytes,started_at,ended_at,time_zone_id,note,kind_override)
-		SELECT $1::uuid,id,$2::uuid,2,$3::uuid,$3::uuid,'2026-09-20T12:00:00Z','2026-09-20T12:00:01Z','2026-09-20T12:00:02Z',n+1,512,
-		'2026-09-20T11:00:00Z','2026-09-20T12:00:00Z','UTC',NULL,NULL FROM source`,
-		h.FamilyID, baby.Meta.ID, h.Owner.AccountID, h.Owner.DeviceID)
+	sleeps := make([]protocol.Mutation, 0, 1000)
+	for n := range 1000 {
+		sleeps = append(sleeps, caretest.Record("sleep", baby.Meta.ID, n+1))
+	}
+	caretest.Seed(t, h, sleeps...)
 	h.Limits.SnapshotMaxEntities = 1000
-	h.RebuildSyncService(t)
-	_, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
+	h.RebuildSyncService(t, h.Limits)
+	_, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
 	if !errors.Is(err, familysync.ErrSnapshotLimit) {
 		t.Fatalf("err=%v", err)
 	}
-	if got := h.Count(t, "sync_snapshots", h.FamilyID); got != 0 {
+	if got := h.Count(t, "sync_snapshot_sessions", h.FamilyID); got != 0 {
 		t.Fatalf("partial snapshots=%d", got)
 	}
-	if got := h.Count(t, "sync_snapshot_entities", h.FamilyID); got != 0 {
-		t.Fatalf("partial snapshot entities=%d", got)
+	if got := h.Count(t, "sync_page_bindings", h.FamilyID); got != 0 {
+		t.Fatalf("partial pages=%d", got)
 	}
 
 	// Reconstruct the service over the same canonical rows with a raised legal
 	// cap. No source mutation occurs between the failed and successful capture.
 	h.Limits.SnapshotMaxEntities = 1001
-	h.RebuildSyncService(t)
-	first, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
-	if err != nil || len(first.Entities) == 0 {
-		t.Fatalf("restart snapshot=%+v err=%v", first, err)
+	h.RebuildSyncService(t, h.Limits)
+	first, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{})
+	if err != nil || len(first.Entities) != h.Limits.SyncPageSize || first.NextPageToken == nil {
+		t.Fatalf("restart snapshot=%d entities, token %v, err=%v", len(first.Entities), first.NextPageToken, err)
 	}
-	if got := h.Count(t, "sync_snapshots", h.FamilyID); got != 1 {
+	if got := h.Count(t, "sync_snapshot_sessions", h.FamilyID); got != 1 {
 		t.Fatalf("snapshots=%d", got)
 	}
-	if got := h.Count(t, "sync_snapshot_entities", h.FamilyID); got != 1001 {
-		t.Fatalf("snapshot entities=%d", got)
+}
+
+// Snapshot admission is serialized: a capture waits for an uncommitted
+// capture of the same account, then counts its session, so the account cap
+// holds even when both start together.
+func TestSnapshotAdmissionWaitsForAnUncommittedCapture(t *testing.T) {
+	h := testkit.New(t)
+	h.SeedBabies(t, 1)
+	h.RebuildSyncService(t, h.Limits)
+	if _, err := fullSnapshot(t, h.Service, h.Owner, protocol.SnapshotRequest{}); err != nil {
+		t.Fatal(err)
+	}
+	guard := &pausingGuard{RequestGuard: h.Authority, entered: make(chan struct{}), release: make(chan struct{})}
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(guard.release) }) }
+	t.Cleanup(release) // a failing check still lets the paused capture end
+	paused := serviceGuarded(h, guard)
+	first := make(chan error, 1)
+	go func() {
+		_, err := paused.FullSnapshot(context.Background(), h.Owner, protocol.SnapshotRequest{})
+		first <- err
+	}()
+	<-guard.entered // the second session is written, not committed
+	second := make(chan error, 1)
+	go func() {
+		_, err := h.Service.FullSnapshot(context.Background(), h.Owner, protocol.SnapshotRequest{})
+		second <- err
+	}()
+	select {
+	case err := <-second:
+		t.Fatalf("a capture was admitted beside an uncommitted one: %v", err)
+	case <-time.After(500 * time.Millisecond):
+	}
+	release()
+	if err := <-first; err != nil {
+		t.Fatal(err)
+	}
+	if err := <-second; !errors.Is(err, familysync.ErrSnapshotLimit) {
+		t.Fatalf("third capture: %v", err)
+	}
+	if got := h.Count(t, "sync_snapshot_sessions", h.FamilyID); got != 2 {
+		t.Fatalf("sessions=%d", got)
 	}
 }

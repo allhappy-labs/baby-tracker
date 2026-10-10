@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/url"
@@ -17,41 +16,38 @@ import (
 	"unicode/utf8"
 
 	"babytracker/server/internal/access"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/identity"
-	"babytracker/server/internal/security"
+	"github.com/jackc/pgx/v5"
 )
 
+// Options configures a Service. Role policy (Allowed), the family_sync
+// entitlement and the caregiver and invitation caps are the authority's
+// options: the authority evaluates them inside its transactions.
 type Options struct {
-	Security                      *security.Service
-	Repository                    *Repository
-	Entitlements                  EntitlementPolicy
-	InvitationKeys                identity.DigestKeyring
-	Origin                        string
-	Now                           func() time.Time
-	MaxCaregivers, MaxInvitations int
-	InvitationTTL                 time.Duration
+	Authority      *authority.Service
+	InvitationKeys identity.DigestKeyring
+	Origin         string
+	Now            func() time.Time
+	InvitationTTL  time.Duration
 }
 
+// Service is the family surface: it shapes requests into authority
+// commands and reads, and maps their codes to the family's legacy codes.
 type Service struct {
-	security                      *security.Service
-	repository                    *Repository
-	entitlements                  EntitlementPolicy
-	invitationKeys                identity.DigestKeyring
-	origin                        string
-	now                           func() time.Time
-	maxCaregivers, maxInvitations int
-	invitationTTL                 time.Duration
+	authority      *authority.Service
+	invitationKeys identity.DigestKeyring
+	origin         string
+	now            func() time.Time
+	invitationTTL  time.Duration
 }
 
 func New(options Options) (*Service, error) {
-	if options.Security == nil || options.Repository == nil || options.Entitlements == nil || options.Now == nil ||
-		!validKeyring(options.InvitationKeys) || !validOrigin(options.Origin) || options.MaxCaregivers <= 0 ||
-		options.MaxInvitations <= 0 || options.InvitationTTL <= 0 {
-		return nil, errors.New("family service requires authority, repository, entitlement policy, invitation keys, HTTPS origin, clock, positive caps, and TTL")
+	if options.Authority == nil || options.Now == nil || !validKeyring(options.InvitationKeys) || !validOrigin(options.Origin) || options.InvitationTTL <= 0 {
+		return nil, errors.New("family service requires authority, invitation keys, HTTPS origin, clock, and TTL")
 	}
-	return &Service{security: options.Security, repository: options.Repository, entitlements: options.Entitlements,
-		invitationKeys: options.InvitationKeys, origin: options.Origin, now: options.Now,
-		maxCaregivers: options.MaxCaregivers, maxInvitations: options.MaxInvitations, invitationTTL: options.InvitationTTL}, nil
+	return &Service{authority: options.Authority, invitationKeys: options.InvitationKeys, origin: options.Origin, now: options.Now,
+		invitationTTL: options.InvitationTTL}, nil
 }
 
 func validKeyring(ring identity.DigestKeyring) bool {
@@ -131,68 +127,27 @@ func InvitationID(actorID, commandID string) (string, error) {
 	return deterministicID("baby-tracker-invitation-id-v1", actorID, commandID)
 }
 
-func (service *Service) Authorize(ctx context.Context, principal access.Principal, familyID, action string) (access.Grant, error) {
-	if service == nil || service.security == nil || familyID == "" ||
-		!allowed("owner", action) && !allowed("caregiver", action) && !allowed("viewer", action) {
-		return access.Grant{}, ErrMembershipRevoked
+// withFamilyRead runs run in a read transaction over the caller's family as
+// the authority grants it for action. These reads named the family by the
+// caller's active slot in the legacy service, so a caller whose slot is a
+// family_recovery reservation (or whose session is recovery scoped) is
+// family_unavailable here, as it was there.
+func (service *Service) withFamilyRead(ctx context.Context, principal access.Principal, action string, run func(pgx.Tx, access.Grant) error) error {
+	if service == nil || service.authority == nil {
+		return ErrUnavailable
 	}
-	var account security.AccountView
-	var accountOK bool
-	var slot security.FamilySlotView
-	var slotOK bool
-	var family security.FamilyView
-	var familyOK bool
-	var authorityMembership security.MembershipView
-	var authorityMembershipExists bool
-	var authorityHead security.Head
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		account, accountOK = view.Account(principal.AccountID)
-		slot, slotOK = view.FamilySlot(principal.AccountID)
-		family, familyOK = view.Family(familyID)
-		authorityMembership, authorityMembershipExists = view.Membership(familyID, principal.AccountID)
-		authorityHead = view.Head()
-		return nil
-	})
-	if err != nil {
-		return access.Grant{}, familyError(err)
+	err := service.authority.WithFamilyReadTx(ctx, principal, action, run)
+	if authority.CodeOf(err) == "recovery_only" {
+		return ErrFamilyUnavailable
 	}
-	membership, memberOK := authorityMembership, authorityMembershipExists
-	if !accountOK || account.Status != "active" || !slotOK || slot.FamilyID != familyID || slot.State != "active" || !familyOK || family.Status != "active" ||
-		!memberOK || membership.Status != "active" || !allowed(membership.Role, action) {
-		if slotOK && slot.FamilyID == familyID && slot.State == "family_recovery" {
-			return access.Grant{}, ErrRecoveryOnly
-		}
-		if memberOK && membership.Role != "owner" && !allowed(membership.Role, action) {
-			// A view-only caregiver refused something an ordinary caregiver
-			// could do is not missing ownership — they are missing write
-			// access, and telling them "owner required" sends them looking for
-			// a transfer that would not help and that nobody meant to offer.
-			//
-			// `membership.go` has always said record mutations get the precise
-			// code from inside the sync transaction. They did not: this gate
-			// runs first, and its answer is the one the client sees. The inner
-			// gate still exists and still matters — it is what catches a
-			// replayed mutation that never passed through here.
-			if membership.Role == "viewer" && allowed("caregiver", action) {
-				return access.Grant{}, ErrReadOnlyCaregiver
-			}
-			return access.Grant{}, ErrOwnerRequired
-		}
-		return access.Grant{}, ErrMembershipRevoked
-	}
-	if !entitlementExempt(action) {
-		if err := service.entitlements.Check(ctx, familyID, "family_sync", service.now().UTC()); err != nil {
-			return access.Grant{}, err
-		}
-	}
-	return access.Grant{AccountID: principal.AccountID, FamilyID: familyID, Role: membership.Role, Revision: authorityHead.Revision, MembershipRevision: membership.Generation}, nil
+	return familyErrorOrNil(err)
 }
 
 func (service *Service) Account(ctx context.Context, principal access.Principal) (AccountView, error) {
-	if service == nil || service.repository == nil {
+	if service == nil || service.authority == nil {
 		return AccountView{}, ErrUnavailable
 	}
-	view, err := service.repository.account(ctx, service.security, principal)
+	view, err := readAccount(ctx, service.authority, principal)
 	if err != nil {
 		return AccountView{}, familyError(err)
 	}
@@ -206,40 +161,22 @@ func (service *Service) UpdateProfile(ctx context.Context, principal access.Prin
 	if !validUUID(commandID) || !validDisplayName(displayName) {
 		return AccountView{}, ErrInvalidRequest
 	}
-	var receiptExists bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		_, receiptExists = view.Receipt(principal.AccountID, commandID)
-		return nil
-	})
-	if err != nil {
-		return AccountView{}, familyError(err)
+	if service == nil || service.authority == nil {
+		return AccountView{}, ErrUnavailable
 	}
-	if receiptExists {
-		return AccountView{}, ErrCommandIDReused
+	// A command ID the caller already spent on a security command is never
+	// a profile command (the profile table keeps its own receipts).
+	if validUUID(principal.AccountID) {
+		if _, found, err := service.authority.CommandReceipt(ctx, principal.AccountID, commandID); err != nil {
+			return AccountView{}, familyError(err)
+		} else if found {
+			return AccountView{}, ErrCommandIDReused
+		}
 	}
-	if err := service.repository.updateProfile(ctx, service.security, principal, commandID, displayName, service.now().UTC()); err != nil {
+	if err := updateProfile(ctx, service.authority, principal, commandID, displayName, service.now().UTC()); err != nil {
 		return AccountView{}, familyError(err)
 	}
 	return service.Account(ctx, principal)
-}
-
-type familyMaterial struct {
-	Version, Kind, FamilyID, ActorAccountID, DisplayName string
-}
-
-func encodeFamilyMaterial(kind, familyID, accountID, displayName string) ([]byte, [32]byte, error) {
-	material := struct {
-		Version        string `json:"version"`
-		Kind           string `json:"kind"`
-		FamilyID       string `json:"family_id"`
-		ActorAccountID string `json:"actor_account_id"`
-		DisplayName    string `json:"display_name"`
-	}{"v1", kind, familyID, accountID, displayName}
-	encoded, err := json.Marshal(material)
-	if err != nil {
-		return nil, [32]byte{}, err
-	}
-	return encoded, sha256.Sum256(encoded), nil
 }
 
 func (service *Service) Create(ctx context.Context, principal access.Principal, commandID, displayName string) (FamilyView, error) {
@@ -250,88 +187,33 @@ func (service *Service) Create(ctx context.Context, principal access.Principal, 
 	if err != nil {
 		return FamilyView{}, err
 	}
-	material, materialDigest, err := encodeFamilyMaterial("family_create", familyID, principal.AccountID, displayName)
-	if err != nil {
+	if service.authority == nil {
 		return FamilyView{}, ErrUnavailable
 	}
-	now := service.now().UTC()
-	kind := security.EventKind("family_created")
-	var payload any = security.FamilyCreatedPayload{Version: "v1", FamilyID: familyID, OwnerAccountID: principal.AccountID, ProjectionMaterialDigest: hex.EncodeToString(materialDigest[:])}
-	if hosted, ok := service.entitlements.(hostedBootstrapPolicy); ok && hosted.hostedBootstrap() {
-		kind = "family_bootstrapped"
-		payload = security.FamilyBootstrappedPayload{Version: "v1", FamilyID: familyID, OwnerAccountID: principal.AccountID,
-			EntitlementKey: "family_sync", EntitlementSource: "hosted_beta",
-			ProjectionMaterialDigest: hex.EncodeToString(materialDigest[:])}
-	}
-	rawPayload, _ := json.Marshal(payload)
-	command := security.Command{ID: commandID, Kind: kind, AffectedAccountIDs: []string{principal.AccountID}, AffectedFamilyIDs: []string{familyID}, Payload: rawPayload}
-	commandHash, err := security.CanonicalCommandHash(principal, command)
+	result, err := service.authority.CreateFamily(ctx, authority.CreateFamily{CommandID: commandID, OwnerAccountID: principal.AccountID,
+		FamilyID: familyID, DisplayName: displayName, Principal: principal})
 	if err != nil {
 		return FamilyView{}, familyError(err)
 	}
-	var receipt security.ReceiptView
-	var receiptExists bool
-	err = service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, receiptExists = view.Receipt(principal.AccountID, commandID)
-		return nil
-	})
-	if err != nil {
-		return FamilyView{}, familyError(err)
-	}
-	if receiptExists {
-		if receipt.CommandHash != commandHash {
-			return FamilyView{}, ErrCommandIDReused
-		}
-		return service.familyAfterReceipt(ctx, principal, familyID)
-	}
-	if err := service.repository.StageFamilyMaterial(ctx, FamilyMaterialStage{CommandID: commandID, CommandHash: commandHash,
-		ProjectionMaterialDigest: materialDigest, Material: material, AccountID: principal.AccountID, Now: now}); err != nil {
-		return service.replayFamilyView(ctx, principal, familyID, commandID, kind, commandHash)
-	}
-	if _, err := service.security.Execute(ctx, principal, command); err != nil {
-		if replay, replayErr := service.replayFamilyView(ctx, principal, familyID, commandID, kind, commandHash); replayErr == nil || replayErr == ErrCommandIDReused {
-			return replay, replayErr
-		}
-		return FamilyView{}, familyError(err)
-	}
-	return service.familyAfterReceipt(ctx, principal, familyID)
+	return service.familyAfterReceipt(ctx, principal, result.FamilyID)
 }
 
-func (service *Service) replayFamilyView(ctx context.Context, principal access.Principal, expectedFamilyID, commandID string, kind security.EventKind, commandHash [32]byte) (FamilyView, error) {
-	var receipt security.ReceiptView
-	var exists bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, exists = view.Receipt(principal.AccountID, commandID)
-		return nil
-	})
-	if err != nil {
-		return FamilyView{}, familyError(err)
-	}
-	if !exists {
-		return FamilyView{}, ErrUnavailable
-	}
-	if receipt.Kind != kind || receipt.CommandHash != commandHash {
-		return FamilyView{}, ErrCommandIDReused
-	}
-	return service.familyAfterReceipt(ctx, principal, expectedFamilyID)
-}
-
+// familyAfterReceipt reads the family a committed (or exactly retried)
+// command names, provided it is still the caller's family: a receipt never
+// returns a family the caller has since left. An empty expectedFamilyID
+// accepts the caller's current family.
 func (service *Service) familyAfterReceipt(ctx context.Context, principal access.Principal, expectedFamilyID string) (FamilyView, error) {
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
+	var view FamilyView
+	err := service.withFamilyRead(ctx, principal, "read_receipt", func(tx pgx.Tx, grant access.Grant) error {
+		if expectedFamilyID != "" && grant.FamilyID != expectedFamilyID {
+			return ErrFamilyUnavailable
+		}
+		var err error
+		view, err = readFamily(ctx, tx, grant.FamilyID)
+		return err
 	})
 	if err != nil {
-		return FamilyView{}, familyError(err)
-	}
-	if !ok || slot.State != "active" || slot.FamilyID != expectedFamilyID {
-		return FamilyView{}, ErrFamilyUnavailable
-	}
-	view, err := service.repository.family(ctx, service.security, principal, expectedFamilyID, "read_receipt")
-	if err != nil {
-		return FamilyView{}, familyError(err)
+		return FamilyView{}, err
 	}
 	return view, nil
 }
@@ -343,58 +225,14 @@ func (service *Service) RepairProfile(ctx context.Context, principal access.Prin
 	if !validUUID(commandID) || !validDisplayName(displayName) {
 		return FamilyView{}, ErrInvalidRequest
 	}
-	var slot security.FamilySlotView
-	var ok bool
-	var receipt security.ReceiptView
-	var receiptExists bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		receipt, receiptExists = view.Receipt(principal.AccountID, commandID)
-		return nil
-	})
-	if err != nil {
-		return FamilyView{}, familyError(err)
-	}
-	if !ok || slot.State != "active" {
-		return FamilyView{}, ErrFamilyUnavailable
-	}
-	material, materialDigest, err := encodeFamilyMaterial("family_profile_repair", slot.FamilyID, principal.AccountID, displayName)
-	if err != nil {
+	if service == nil || service.authority == nil {
 		return FamilyView{}, ErrUnavailable
 	}
-	payload := security.FamilyProfileRepairedPayload{Version: "v1", FamilyID: slot.FamilyID, OwnerAccountID: principal.AccountID,
-		ProjectionMaterialDigest: hex.EncodeToString(materialDigest[:])}
-	raw, _ := json.Marshal(payload)
-	command := security.Command{ID: commandID, Kind: "family_profile_repaired", AffectedAccountIDs: []string{principal.AccountID},
-		AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw}
-	commandHash, err := security.CanonicalCommandHash(principal, command)
-	if err != nil {
+	if _, err := service.authority.RepairFamilyProfile(ctx, authority.RepairFamilyProfile{CommandID: commandID, OwnerAccountID: principal.AccountID,
+		DisplayName: displayName, Principal: principal}); err != nil {
 		return FamilyView{}, familyError(err)
 	}
-	if receiptExists {
-		if receipt.Kind != command.Kind || receipt.CommandHash != commandHash {
-			return FamilyView{}, ErrCommandIDReused
-		}
-		return service.familyAfterReceipt(ctx, principal, slot.FamilyID)
-	}
-	if _, err := service.Authorize(ctx, principal, slot.FamilyID, "repair_profile"); err != nil {
-		return FamilyView{}, err
-	}
-	now := service.now().UTC()
-	if err := service.repository.StageFamilyMaterial(ctx, FamilyMaterialStage{CommandID: commandID, CommandHash: commandHash,
-		ProjectionMaterialDigest: materialDigest, Material: material, AccountID: principal.AccountID, Now: now}); err != nil {
-		if errors.Is(err, ErrProfileNotRequired) {
-			return FamilyView{}, ErrProfileNotRequired
-		}
-		return service.replayFamilyView(ctx, principal, slot.FamilyID, commandID, command.Kind, commandHash)
-	}
-	if _, err := service.security.Execute(ctx, principal, command); err != nil {
-		if replay, replayErr := service.replayFamilyView(ctx, principal, slot.FamilyID, commandID, command.Kind, commandHash); replayErr == nil || replayErr == ErrCommandIDReused {
-			return replay, replayErr
-		}
-		return FamilyView{}, familyError(err)
-	}
-	return service.familyAfterReceipt(ctx, principal, slot.FamilyID)
+	return service.familyAfterReceipt(ctx, principal, "")
 }
 
 func (service *Service) ListActors(ctx context.Context, principal access.Principal, after, highWater string, limit int) (ActorLabelPage, error) {
@@ -402,21 +240,14 @@ func (service *Service) ListActors(ctx context.Context, principal access.Princip
 		(after != "" && highWater == "") {
 		return ActorLabelPage{}, ErrInvalidRequest
 	}
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
+	var page ActorLabelPage
+	err := service.withFamilyRead(ctx, principal, "read", func(tx pgx.Tx, grant access.Grant) error {
+		var err error
+		page, err = readActorLabels(ctx, tx, grant.FamilyID, after, highWater, limit)
+		return err
 	})
 	if err != nil {
-		return ActorLabelPage{}, familyError(err)
-	}
-	if !ok || slot.State != "active" {
-		return ActorLabelPage{}, ErrFamilyUnavailable
-	}
-	page, err := service.repository.actorLabels(ctx, service.security, principal, slot.FamilyID, after, highWater, limit)
-	if err != nil {
-		return ActorLabelPage{}, familyError(err)
+		return ActorLabelPage{}, err
 	}
 	return page, nil
 }
@@ -430,21 +261,14 @@ func validHighWater(value string) bool {
 }
 
 func (service *Service) Current(ctx context.Context, principal access.Principal) (FamilyView, error) {
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
+	var view FamilyView
+	err := service.withFamilyRead(ctx, principal, "read", func(tx pgx.Tx, grant access.Grant) error {
+		var err error
+		view, err = readFamily(ctx, tx, grant.FamilyID)
+		return err
 	})
 	if err != nil {
-		return FamilyView{}, familyError(err)
-	}
-	if !ok || slot.State != "active" {
-		return FamilyView{}, ErrFamilyUnavailable
-	}
-	view, err := service.repository.family(ctx, service.security, principal, slot.FamilyID, "read")
-	if err != nil {
-		return FamilyView{}, familyError(err)
+		return FamilyView{}, err
 	}
 	return view, nil
 }
@@ -456,6 +280,11 @@ func (service *Service) Current(ctx context.Context, principal access.Principal)
 // knows what access to hand out is the one writing the message, not the one
 // receiving it — and because a redeemer who could choose their own role would
 // not be a viewer for long.
+//
+// An exact retry returns the stored invitation without its secret
+// (SecretUnavailable): only the first attempt's caller ever held the token.
+// The retry is recognised before the caller's current slot matters, so it is
+// answered for the family the original command named.
 func (service *Service) Invite(ctx context.Context, principal access.Principal, commandID, role string) (InvitationSecret, error) {
 	if role == "" {
 		role = "caregiver"
@@ -467,35 +296,28 @@ func (service *Service) Invite(ctx context.Context, principal access.Principal, 
 	if err != nil {
 		return InvitationSecret{}, err
 	}
-	var receipt security.ReceiptView
-	var receiptExists bool
-	var authorityInvitation security.InvitationView
-	var authorityInvitationExists bool
-	var slot security.FamilySlotView
-	var ok bool
-	err = service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, receiptExists = view.Receipt(principal.AccountID, commandID)
-		authorityInvitation, authorityInvitationExists = view.Invitation(invitationID)
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
-	})
+	if service == nil || service.authority == nil {
+		return InvitationSecret{}, ErrUnavailable
+	}
+	receipt, found, err := service.authority.CommandReceipt(ctx, principal.AccountID, commandID)
 	if err != nil {
 		return InvitationSecret{}, familyError(err)
 	}
-	if receiptExists {
-		invitation, invitationExists := authorityInvitation, authorityInvitationExists
-		if receipt.Kind != "invitation_created" || !invitationExists || receipt.Result.Revision == 0 {
+	var familyID string
+	if found {
+		if receipt.Kind != authority.KindInvitationCreated || len(receipt.FamilyIDs) != 1 {
 			return InvitationSecret{}, ErrCommandIDReused
 		}
-		expiresAt, parseErr := time.Parse(time.RFC3339Nano, invitation.ExpiresAt)
-		if parseErr != nil {
-			return InvitationSecret{}, ErrUnavailable
+		familyID = receipt.FamilyIDs[0]
+	} else {
+		slot, err := service.authority.FamilySlot(ctx, principal.AccountID)
+		if err != nil {
+			return InvitationSecret{}, familyError(err)
 		}
-		return InvitationSecret{Invitation: InvitationView{ID: invitationID, FamilyID: invitation.FamilyID, Role: invitation.Role, Status: invitation.Status,
-			ExpiresAt: expiresAt, CreatedAt: expiresAt.Add(-service.invitationTTL)}, SecretUnavailable: true}, nil
-	}
-	if !ok || slot.State != "active" {
-		return InvitationSecret{}, ErrFamilyUnavailable
+		if slot == nil || slot.State != "active" {
+			return InvitationSecret{}, ErrFamilyUnavailable
+		}
+		familyID = slot.FamilyID
 	}
 	token, err := newInvitationToken()
 	if err != nil {
@@ -505,84 +327,55 @@ func (service *Service) Invite(ctx context.Context, principal access.Principal, 
 	if err != nil {
 		return InvitationSecret{}, err
 	}
-	now := service.now().UTC().Truncate(time.Microsecond)
-	expiresAt := now.Add(service.invitationTTL)
-	payload := security.InvitationPayload{Version: "v1", InvitationID: invitationID, FamilyID: slot.FamilyID, CreatorAccountID: principal.AccountID,
-		TokenDigest: digest, Role: role, Status: "active", ExpiresAt: expiresAt.Format(time.RFC3339Nano)}
-	raw, _ := json.Marshal(payload)
-	command := security.Command{ID: commandID, Kind: "invitation_created", AffectedAccountIDs: []string{principal.AccountID}, AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw}
-	if _, err := service.security.Execute(ctx, principal, command); err != nil {
-		if replay, replayErr := service.replayInvitation(ctx, principal, commandID, invitationID); replayErr == nil || replayErr == ErrCommandIDReused {
-			return replay, replayErr
-		}
-		return InvitationSecret{}, familyError(err)
-	}
-	return InvitationSecret{Invitation: InvitationView{ID: invitationID, FamilyID: slot.FamilyID, Role: role, Status: "active", ExpiresAt: expiresAt, CreatedAt: now},
-		Token: token, Link: service.origin + "/invite#token=" + token}, nil
-}
-
-func (service *Service) replayInvitation(ctx context.Context, principal access.Principal, commandID, invitationID string) (InvitationSecret, error) {
-	var receipt security.ReceiptView
-	var exists bool
-	var invitation security.InvitationView
-	var invitationExists bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, exists = view.Receipt(principal.AccountID, commandID)
-		invitation, invitationExists = view.Invitation(invitationID)
-		return nil
-	})
+	expiresAt := service.now().UTC().Truncate(time.Microsecond).Add(service.invitationTTL)
+	result, err := service.authority.CreateInvitation(ctx, authority.CreateInvitation{CommandID: commandID, CreatorAccountID: principal.AccountID,
+		InvitationID: invitationID, FamilyID: familyID, TokenDigest: digest, Role: role, ExpiresAt: expiresAt, Principal: principal})
 	if err != nil {
 		return InvitationSecret{}, familyError(err)
 	}
-	if !exists {
-		return InvitationSecret{}, ErrUnavailable
+	stored := result.Invitation
+	view := InvitationView{ID: stored.ID, FamilyID: stored.FamilyID, Role: stored.Role, Status: stored.Status,
+		ExpiresAt: stored.ExpiresAt.UTC(), CreatedAt: stored.CreatedAt.UTC()}
+	if result.SecretUnavailable {
+		return InvitationSecret{Invitation: view, SecretUnavailable: true}, nil
 	}
-	if receipt.Kind != "invitation_created" || !invitationExists {
-		return InvitationSecret{}, ErrCommandIDReused
-	}
-	expiresAt, parseErr := time.Parse(time.RFC3339Nano, invitation.ExpiresAt)
-	if parseErr != nil {
-		return InvitationSecret{}, ErrUnavailable
-	}
-	return InvitationSecret{Invitation: InvitationView{ID: invitationID, FamilyID: invitation.FamilyID, Role: invitation.Role, Status: invitation.Status,
-		ExpiresAt: expiresAt, CreatedAt: expiresAt.Add(-service.invitationTTL)}, SecretUnavailable: true}, nil
+	return InvitationSecret{Invitation: view, Token: token, Link: service.origin + "/invite#token=" + token}, nil
 }
 
-func (service *Service) lookupInvitation(ctx context.Context, principal access.Principal, token string) (invitationLookup, string, error) {
+// lookupInvitation resolves an invitation token for its invitee. The lookup
+// crosses families, so it runs only for a caller whose session is live (the
+// legacy lookup ran in the caller's account context): the session is checked
+// first, then the invitation of an active family is found by the token's
+// digest under every invitation key (more than one match is
+// authorization_quarantine).
+func (service *Service) lookupInvitation(ctx context.Context, principal access.Principal, token string) (authority.InvitationView, []string, error) {
 	if !validInvitationToken(token) {
-		return invitationLookup{}, "", ErrInvitationInvalid
+		return authority.InvitationView{}, nil, ErrInvitationInvalid
 	}
 	candidates, err := invitationCandidates(service.invitationKeys, token)
 	if err != nil {
-		return invitationLookup{}, "", err
+		return authority.InvitationView{}, nil, err
 	}
-	var matched invitationLookup
-	matchedDigest := ""
-	matches := 0
-	var operationalErr error
-	for _, digest := range candidates {
-		item, found, lookupErr := service.repository.lookupInvitation(ctx, service.security, principal, digest)
-		if lookupErr != nil {
-			operationalErr = lookupErr
-			continue
-		}
-		if found {
-			matched, matchedDigest, matches = item, digest, matches+1
-		}
+	if service.authority == nil {
+		return authority.InvitationView{}, nil, ErrUnavailable
 	}
-	if operationalErr != nil {
-		return invitationLookup{}, "", familyError(operationalErr)
+	if err := service.authority.WithAccountTx(ctx, principal, func(pgx.Tx) error { return nil }); err != nil {
+		return authority.InvitationView{}, nil, familyError(err)
 	}
-	if matches == 0 {
-		return invitationLookup{}, "", ErrInvitationInvalid
+	invitation, found, err := service.authority.LookupInvitation(ctx, candidates)
+	if err != nil {
+		return authority.InvitationView{}, nil, familyError(err)
 	}
-	if matches != 1 {
-		return invitationLookup{}, "", ErrAuthorizationQuarantine
+	if !found {
+		return authority.InvitationView{}, nil, ErrInvitationInvalid
 	}
-	return matched, matchedDigest, nil
+	return invitation, candidates, nil
 }
 
 func (service *Service) Preview(ctx context.Context, principal access.Principal, token string) (InvitationPreview, error) {
+	if service == nil {
+		return InvitationPreview{}, ErrUnavailable
+	}
 	invitation, _, err := service.lookupInvitation(ctx, principal, token)
 	if err != nil {
 		return InvitationPreview{}, err
@@ -599,7 +392,7 @@ func (service *Service) Preview(ctx context.Context, principal access.Principal,
 	if !service.now().UTC().Before(invitation.ExpiresAt) {
 		return InvitationPreview{}, ErrInvitationExpired
 	}
-	return InvitationPreview{FamilyDisplayName: invitation.FamilyDisplayName, ExpiresAt: invitation.ExpiresAt}, nil
+	return InvitationPreview{FamilyDisplayName: invitation.FamilyDisplayName, ExpiresAt: invitation.ExpiresAt.UTC()}, nil
 }
 
 func (service *Service) Redeem(ctx context.Context, principal access.Principal, commandID, token string, confirmed bool) (FamilyView, error) {
@@ -609,134 +402,74 @@ func (service *Service) Redeem(ctx context.Context, principal access.Principal, 
 	if !validUUID(commandID) {
 		return FamilyView{}, ErrInvalidRequest
 	}
-	invitation, digest, err := service.lookupInvitation(ctx, principal, token)
+	if service == nil {
+		return FamilyView{}, ErrUnavailable
+	}
+	_, candidates, err := service.lookupInvitation(ctx, principal, token)
 	if err != nil {
 		return FamilyView{}, err
 	}
-	payload := security.InvitationPayload{Version: "v1", InvitationID: invitation.ID, FamilyID: invitation.FamilyID,
-		RedeemerAccountID: principal.AccountID, TokenDigest: digest, Role: invitation.Role, Status: "redeemed", ExpiresAt: invitation.ExpiresAt.Format(time.RFC3339Nano)}
-	raw, _ := json.Marshal(payload)
-	command := security.Command{ID: commandID, Kind: "invitation_redeemed", AffectedAccountIDs: []string{principal.AccountID}, AffectedFamilyIDs: []string{invitation.FamilyID}, Payload: raw}
-	if _, err := service.security.Execute(ctx, principal, command); err != nil {
+	result, err := service.authority.RedeemInvitation(ctx, authority.RedeemInvitation{CommandID: commandID, RedeemerAccountID: principal.AccountID,
+		TokenDigestCandidates: candidates, Principal: principal})
+	if err != nil {
 		return FamilyView{}, familyError(err)
 	}
-	return service.familyAfterReceipt(ctx, principal, invitation.FamilyID)
+	return service.familyAfterReceipt(ctx, principal, result.FamilyID)
 }
 
 func (service *Service) Invitation(ctx context.Context, principal access.Principal, invitationID string) (InvitationView, error) {
 	if !validUUID(invitationID) {
 		return InvitationView{}, ErrInvitationInvalid
 	}
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
+	var view InvitationView
+	err := service.withFamilyRead(ctx, principal, "manage_members", func(tx pgx.Tx, grant access.Grant) error {
+		found := false
+		var err error
+		view, found, err = readInvitation(ctx, tx, grant.FamilyID, invitationID)
+		if err == nil && !found {
+			return ErrInvitationInvalid
+		}
+		return err
 	})
 	if err != nil {
-		return InvitationView{}, familyError(err)
-	}
-	if !ok || slot.State != "active" {
-		return InvitationView{}, ErrFamilyUnavailable
-	}
-	view, found, err := service.repository.invitation(ctx, service.security, principal, slot.FamilyID, invitationID)
-	if err != nil {
-		return InvitationView{}, familyError(err)
-	}
-	if !found {
-		return InvitationView{}, ErrInvitationInvalid
+		return InvitationView{}, err
 	}
 	return view, nil
 }
 
 func (service *Service) PendingInvitations(ctx context.Context, principal access.Principal) ([]InvitationView, error) {
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
+	var views []InvitationView
+	err := service.withFamilyRead(ctx, principal, "manage_members", func(tx pgx.Tx, grant access.Grant) error {
+		var err error
+		views, err = readPendingInvitations(ctx, tx, grant.FamilyID, service.now().UTC())
+		return err
 	})
 	if err != nil {
-		return nil, familyError(err)
-	}
-	if !ok || slot.State != "active" {
-		return nil, ErrFamilyUnavailable
-	}
-	views, err := service.repository.pendingInvitations(ctx, service.security, principal, slot.FamilyID, service.now().UTC())
-	if err != nil {
-		return nil, familyError(err)
+		return nil, err
 	}
 	return views, nil
 }
 
-func (service *Service) RevokeInvitation(ctx context.Context, principal access.Principal, commandID, invitationID string) (security.CommandResult, error) {
+func (service *Service) RevokeInvitation(ctx context.Context, principal access.Principal, commandID, invitationID string) (authority.Result, error) {
 	if !validUUID(commandID) || !validUUID(invitationID) {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
-	var invitation security.InvitationView
-	var ok bool
-	var receipt security.ReceiptView
-	var receiptExists bool
-	var slot security.FamilySlotView
-	var slotOK bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		invitation, ok = view.Invitation(invitationID)
-		receipt, receiptExists = view.Receipt(principal.AccountID, commandID)
-		slot, slotOK = view.FamilySlot(principal.AccountID)
-		return nil
-	})
-	if err != nil {
-		return security.CommandResult{}, familyError(err)
+	if service == nil || service.authority == nil {
+		return authority.Result{}, ErrUnavailable
 	}
-	if receiptExists {
-		if receipt.Kind != "invitation_revoked" || !ok {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		command := revokeInvitationCommand(commandID, invitationID, invitation)
-		commandHash, hashErr := security.CanonicalCommandHash(principal, command)
-		if hashErr != nil || commandHash != receipt.CommandHash {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		return receipt.Result, nil
-	}
-	if !slotOK || slot.State != "active" {
-		return security.CommandResult{}, ErrFamilyUnavailable
-	}
-	if !ok || invitation.FamilyID != slot.FamilyID {
-		return security.CommandResult{}, ErrInvitationInvalid
-	}
-	command := revokeInvitationCommand(commandID, invitationID, invitation)
-	result, err := service.security.Execute(ctx, principal, command)
-	return result, familyErrorOrNil(err)
+	return commandResult(service.authority.RevokeInvitation(ctx, authority.RevokeInvitation{CommandID: commandID, ActorAccountID: principal.AccountID,
+		InvitationID: invitationID, Principal: principal}))
 }
 
-func revokeInvitationCommand(commandID, invitationID string, invitation security.InvitationView) security.Command {
-	payload := security.InvitationPayload{Version: "v1", InvitationID: invitationID, FamilyID: invitation.FamilyID, CreatorAccountID: invitation.AccountID,
-		TokenDigest: invitation.TokenDigest, Role: invitation.Role, Status: "revoked", ExpiresAt: invitation.ExpiresAt}
-	raw, _ := json.Marshal(payload)
-	return security.Command{ID: commandID, Kind: "invitation_revoked", AffectedAccountIDs: []string{invitation.AccountID}, AffectedFamilyIDs: []string{invitation.FamilyID}, Payload: raw}
-}
-
-func (service *Service) Transfer(ctx context.Context, principal access.Principal, commandID, newOwnerID string) (security.CommandResult, error) {
+func (service *Service) Transfer(ctx context.Context, principal access.Principal, commandID, newOwnerID string) (authority.Result, error) {
 	if !validUUID(commandID) || !validUUID(newOwnerID) {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
-	})
-	if err != nil {
-		return security.CommandResult{}, familyError(err)
+	if service == nil || service.authority == nil {
+		return authority.Result{}, ErrUnavailable
 	}
-	if !ok || slot.State != "active" {
-		return security.CommandResult{}, ErrFamilyUnavailable
-	}
-	payload := security.OwnerChangePayload{Version: "v1", FamilyID: slot.FamilyID, OldOwnerAccountID: principal.AccountID, NewOwnerAccountID: newOwnerID}
-	raw, _ := json.Marshal(payload)
-	result, err := service.security.Execute(ctx, principal, security.Command{ID: commandID, Kind: "owner_transferred", AffectedAccountIDs: []string{principal.AccountID, newOwnerID}, AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw})
-	return result, familyErrorOrNil(err)
+	return commandResult(service.authority.TransferOwner(ctx, authority.TransferOwner{CommandID: commandID, OldOwnerID: principal.AccountID,
+		NewOwnerID: newOwnerID, Principal: principal}))
 }
 
 // ChangeRole moves a caregiver between writing and view-only.
@@ -744,87 +477,42 @@ func (service *Service) Transfer(ctx context.Context, principal access.Principal
 // Owner-only, and refused for the owner's own row: a family must always have
 // exactly one owner, and demoting yourself here would leave it with none.
 // Stepping down is Transfer, which names a successor in the same command.
-func (service *Service) ChangeRole(ctx context.Context, principal access.Principal, commandID, accountID, role string) (security.CommandResult, error) {
+func (service *Service) ChangeRole(ctx context.Context, principal access.Principal, commandID, accountID, role string) (authority.Result, error) {
 	if !validUUID(commandID) || !validUUID(accountID) || (role != "caregiver" && role != "viewer") {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
-	})
-	if err != nil {
-		return security.CommandResult{}, familyError(err)
+	if service == nil || service.authority == nil {
+		return authority.Result{}, ErrUnavailable
 	}
-	if !ok || slot.State != "active" {
-		return security.CommandResult{}, ErrFamilyUnavailable
-	}
-	payload := security.MemberRolePayload{Version: "v1", AccountID: accountID, FamilyID: slot.FamilyID, Role: role}
-	raw, _ := json.Marshal(payload)
-	result, err := service.security.Execute(ctx, principal, security.Command{
-		ID: commandID, Kind: "member_role_changed",
-		AffectedAccountIDs: []string{accountID}, AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw,
-	})
-	return result, familyErrorOrNil(err)
+	return commandResult(service.authority.ChangeRole(ctx, authority.ChangeRole{CommandID: commandID, OwnerAccountID: principal.AccountID,
+		AccountID: accountID, Role: role, Principal: principal}))
 }
 
-func (service *Service) Remove(ctx context.Context, principal access.Principal, commandID, accountID string) (security.CommandResult, error) {
+func (service *Service) Remove(ctx context.Context, principal access.Principal, commandID, accountID string) (authority.Result, error) {
 	if !validUUID(commandID) || !validUUID(accountID) {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
-	})
-	if err != nil {
-		return security.CommandResult{}, familyError(err)
+	if service == nil || service.authority == nil {
+		return authority.Result{}, ErrUnavailable
 	}
-	if !ok || slot.State != "active" {
-		return security.CommandResult{}, ErrFamilyUnavailable
-	}
-	payload := security.MembershipPayload{Version: "v1", AccountID: accountID, FamilyID: slot.FamilyID}
-	raw, _ := json.Marshal(payload)
-	result, err := service.security.Execute(ctx, principal, security.Command{ID: commandID, Kind: "member_removed", AffectedAccountIDs: []string{accountID}, AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw})
-	return result, familyErrorOrNil(err)
+	return commandResult(service.authority.RemoveMember(ctx, authority.RemoveMember{CommandID: commandID, OwnerAccountID: principal.AccountID,
+		AccountID: accountID, Principal: principal}))
 }
 
-func (service *Service) Leave(ctx context.Context, principal access.Principal, commandID string) (security.CommandResult, error) {
+func (service *Service) Leave(ctx context.Context, principal access.Principal, commandID string) (authority.Result, error) {
 	if !validUUID(commandID) {
-		return security.CommandResult{}, ErrInvalidRequest
+		return authority.Result{}, ErrInvalidRequest
 	}
-	var receipt security.ReceiptView
-	var receiptExists bool
-	var slot security.FamilySlotView
-	var ok bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, receiptExists = view.Receipt(principal.AccountID, commandID)
-		slot, ok = view.FamilySlot(principal.AccountID)
-		return nil
-	})
-	if err != nil {
-		return security.CommandResult{}, familyError(err)
+	if service == nil || service.authority == nil {
+		return authority.Result{}, ErrUnavailable
 	}
-	if receiptExists {
-		if receipt.Kind != "member_left" {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		return receipt.Result, nil
-	}
-	if !ok || slot.State != "active" {
-		return security.CommandResult{}, ErrFamilyUnavailable
-	}
-	payload := security.MembershipPayload{Version: "v1", AccountID: principal.AccountID, FamilyID: slot.FamilyID}
-	raw, _ := json.Marshal(payload)
-	result, err := service.security.Execute(ctx, principal, security.Command{ID: commandID, Kind: "member_left", AffectedAccountIDs: []string{principal.AccountID}, AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw})
-	return result, familyErrorOrNil(err)
+	return commandResult(service.authority.LeaveFamily(ctx, authority.LeaveFamily{CommandID: commandID, AccountID: principal.AccountID, Principal: principal}))
 }
 
-func familyErrorOrNil(err error) error {
-	if err == nil {
-		return nil
+// commandResult maps an authority command's error to the family codes.
+func commandResult(result authority.Result, err error) (authority.Result, error) {
+	if err != nil {
+		return authority.Result{}, familyError(err)
 	}
-	return familyError(err)
+	return result, nil
 }

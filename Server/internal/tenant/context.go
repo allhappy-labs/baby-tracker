@@ -16,6 +16,11 @@ type Context struct {
 	FamilyID  string
 }
 
+// SetLocalSQL is the statement SetLocal runs: $1 the account, $2 the family.
+// Callers that pipeline it in a batch (authority.WithLiveActivitySnapshot)
+// validate both IDs as SetLocal does.
+const SetLocalSQL = "SELECT set_config('app.account_id', $1, true), set_config('app.family_id', $2, true)"
+
 var canonicalUUID = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$`)
 
 // SetLocal sets both identifiers for the lifetime of tx, including its queries
@@ -30,7 +35,7 @@ func SetLocal(ctx context.Context, tx pgx.Tx, tenant Context) error {
 			return fmt.Errorf("tenant %s ID must be a nonzero UUID", name)
 		}
 	}
-	if _, err := tx.Exec(ctx, "SELECT set_config('app.account_id', $1, true), set_config('app.family_id', $2, true)", tenant.AccountID, tenant.FamilyID); err != nil {
+	if _, err := tx.Exec(ctx, SetLocalSQL, tenant.AccountID, tenant.FamilyID); err != nil {
 		return fmt.Errorf("set tenant context: %w", err)
 	}
 	return nil

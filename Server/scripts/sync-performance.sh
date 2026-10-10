@@ -171,7 +171,7 @@ docker inspect "$app" | python3 -c 'import json,os,sys; root=os.path.realpath(sy
 phase=tls
 compose up -d --wait --wait-timeout 60 tls >> "$raw" 2>&1
 curl --silent --fail --max-time 5 --cacert "$BT_SECRETS_DIR/tls.crt" "$BT_PUBLIC_ORIGIN/readyz" >/dev/null
-maintenance=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_function_privilege('baby_tracker_export_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE') AND NOT has_function_privilege('baby_tracker_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE') AND NOT has_function_privilege('baby_tracker_projector_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE')")
+maintenance=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_function_privilege('baby_tracker_export_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE') AND NOT has_function_privilege('baby_tracker_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE')")
 [[ $maintenance == t ]] || { echo "maintenance privilege proof failed" >&2; exit 1; }
 if [[ $mode == matrix ]]; then
   jq -n --arg source "$source_sha" --arg binary "$binary_sha" --arg image "$image_id" --arg harness "$(git -C "$harness_root" rev-parse HEAD)" --arg os "$(uname -sm)" --argjson schema "$schema" '{source:$source,binary_sha:$binary,image:$image,harness_source:$harness,build:"identitytest-no-race",environment:$os,schema:$schema,single_source_ip:true,default_quotas:true,baseline_unmodified:true}' > "$output/build.json"

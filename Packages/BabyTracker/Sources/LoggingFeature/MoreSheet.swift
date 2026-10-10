@@ -54,49 +54,40 @@ public struct MoreSheet: View {
         self.onDone = onDone
     }
 
+    /// Presented with `fittedSheet`: the sheet is as tall as this, so the
+    /// title and Cancel are drawn here rather than in a navigation bar.
     public var body: some View {
-        NavigationStack {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 20) {
-                    if typeSize.isAccessibilitySize {
-                        VStack(spacing: 10) { tiles }
-                    } else {
-                        HStack(spacing: 10) { tiles }
-                    }
+        ScrollView {
+            VStack(alignment: .leading, spacing: 20) {
+                SheetHeader(MoreSheetCopy.title, cancelTitle: MoreSheetCopy.cancel, onCancel: onDone)
+                    .padding(.horizontal, -20)
 
-                    VStack(alignment: .leading, spacing: 8) {
-                        Text(Tracker.supplement.title)
-                            .font(.footnote)
-                            .foregroundStyle(Palette.secondaryText)
-                        ScrollView(.horizontal, showsIndicators: false) {
-                            HStack(spacing: 8) {
-                                ForEach(Array(model.meds.enumerated()), id: \.offset) { index, name in
-                                    medChip(name, index: index)
-                                }
-                                addMedChip
+                if typeSize.isAccessibilitySize {
+                    VStack(spacing: 10) { tiles }
+                } else {
+                    HStack(spacing: 10) { tiles }
+                }
+
+                VStack(alignment: .leading, spacing: 8) {
+                    Text(Tracker.supplement.title)
+                        .font(.footnote)
+                        .foregroundStyle(Palette.secondaryText)
+                    ScrollView(.horizontal, showsIndicators: false) {
+                        HStack(spacing: 8) {
+                            ForEach(Array(model.meds.enumerated()), id: \.offset) { index, name in
+                                medChip(name, index: index)
                             }
+                            addMedChip
                         }
                     }
                 }
-                .padding(20)
             }
-            // Scrolls rather than clips when the text outgrows the sheet's
-            // stated height; at the ordinary sizes everything fits and it
-            // does not bounce.
-            .scrollBounceBehavior(.basedOnSize)
-            // Tall enough for the tiles and the whole Meds row: at 260 the
-            // row's chips were cut off by the bottom of the sheet.
-            .sheetHeight(295)
-            .navigationTitle(MoreSheetCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(MoreSheetCopy.cancel, action: onDone)
-                }
-            }
+            .padding(.horizontal, 20)
+            .padding(.bottom, 12)
         }
+        // Past the screen (the largest text sizes) it scrolls rather than
+        // clips; otherwise it does not bounce.
+        .scrollBounceBehavior(.basedOnSize)
     }
 
     @ViewBuilder

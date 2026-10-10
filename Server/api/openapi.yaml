@@ -28,7 +28,7 @@ paths:
         '401': {$ref: '#/components/responses/FamilyUnauthorized'}
         '403': {description: Live Activity Forbidden, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityForbiddenError'}}}}
         '409': {description: Live Activity Conflict, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityConflictError'}}}}
-        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '404': {description: 'family_unavailable (JSON FamilyNotFoundError, as FamilyNotFound); or, on a server with Live Activity push disabled, the route is not registered and the 404 is a plain-text body with no JSON error', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/FamilyNotFoundError'}}}}
         '429': {$ref: '#/components/responses/FamilyRateLimited'}
         '503': {description: Live Activity Unavailable, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityUnavailableError'}}}}
         '413': {description: Request body exceeds 16 KiB, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
@@ -50,7 +50,7 @@ paths:
         '401': {$ref: '#/components/responses/FamilyUnauthorized'}
         '403': {description: Live Activity Forbidden, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityForbiddenError'}}}}
         '409': {description: Live Activity Conflict, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityConflictError'}}}}
-        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '404': {description: 'family_unavailable (JSON FamilyNotFoundError, as FamilyNotFound); or, on a server with Live Activity push disabled, the route is not registered and the 404 is a plain-text body with no JSON error', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/FamilyNotFoundError'}}}}
         '429': {$ref: '#/components/responses/FamilyRateLimited'}
         '503': {description: Live Activity Unavailable, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityUnavailableError'}}}}
         '413': {description: Request body exceeds 16 KiB, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
@@ -71,7 +71,7 @@ paths:
         '401': {$ref: '#/components/responses/FamilyUnauthorized'}
         '403': {description: Live Activity Forbidden, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityForbiddenError'}}}}
         '409': {description: Live Activity Conflict, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityConflictError'}}}}
-        '404': {$ref: '#/components/responses/FamilyNotFound'}
+        '404': {description: 'family_unavailable (JSON FamilyNotFoundError, as FamilyNotFound); or, on a server that composes no unregistration (never in production), the route is not registered and the 404 is a plain-text body with no JSON error', headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/FamilyNotFoundError'}}}}
         '429': {$ref: '#/components/responses/FamilyRateLimited'}
         '503': {description: Live Activity Unavailable, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}, content: {application/json: {schema: {$ref: '#/components/schemas/LiveActivityUnavailableError'}}}}
   /v1/export:
@@ -127,6 +127,49 @@ paths:
         '404': {description: Unknown export, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
         '409': {$ref: '#/components/responses/FamilyConflict'}
         '410': {description: Export expired, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+  /v1/devices/push-token:
+    put:
+      summary: Register the authenticated device's APNs token for background wakes
+      description: >-
+        Served, and push-token-v1 advertised, only by a server with APNs wakes
+        configured; elsewhere the route is 404. The device is always the
+        authenticated session's own; no device ID is sent. Registering the same
+        or another token replaces the device's one token. Limited to 10 requests
+        a device and 30 an account per hour (PUT and DELETE together).
+      operationId: registerPushToken
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: push-token-v1}}
+      requestBody:
+        required: true
+        content: {application/json: {schema: {$ref: '#/components/schemas/PushTokenRequest'}}}
+      responses:
+        '204': {description: Token stored, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}}
+        '400': {description: 'invalid_push_token, invalid_request or unsupported_protocol', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {description: 'family_scope_required (not a family session), membership_revoked or entitlement_required', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: The server has no APNs wakes configured}
+        '409': {description: 'unsupported_capability (capabilities other than exactly push-token-v1)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '413': {description: The 4 KiB request-body bound was exceeded, content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
+    delete:
+      summary: Forget the authenticated device's APNs token (idempotent)
+      operationId: unregisterPushToken
+      security: [{bearerAuth: []}]
+      parameters:
+        - {name: X-Baby-Tracker-Protocol, in: header, required: true, schema: {type: string, const: v1}}
+        - {name: X-Baby-Tracker-Capabilities, in: header, required: true, schema: {type: string, const: push-token-v1}}
+      responses:
+        '204': {description: No token is stored for the device, headers: {Cache-Control: {$ref: '#/components/headers/NoStore'}}}
+        '400': {description: 'invalid_request (a body or a query) or unsupported_protocol', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '401': {$ref: '#/components/responses/FamilyUnauthorized'}
+        '403': {description: 'family_scope_required (not a family session), membership_revoked or entitlement_required', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '404': {description: The server has no APNs wakes configured}
+        '409': {description: 'unsupported_capability (capabilities other than exactly push-token-v1)', content: {application/json: {schema: {$ref: '#/components/schemas/ErrorResponse'}}}}
+        '429': {$ref: '#/components/responses/FamilyRateLimited'}
+        '503': {$ref: '#/components/responses/FamilyUnavailable'}
   /v1/family/import/resolve:
     post:
       summary: Stage a resumable import chunk and finalize exact baby mapping
@@ -1319,7 +1362,24 @@ components:
       type: array
       maxItems: 16
       uniqueItems: true
-      items: {type: string, enum: [identity-v1, family-lifecycle-v1, recovery-v1, records-v1, snapshot-v1, timer-commands-v1, import-resolver-v1, live-hints-v1, export-v1, refresh-recovery-v1, live-activity-push-v1]}
+      items: {type: string, enum: [identity-v1, family-lifecycle-v1, recovery-v1, records-v1, snapshot-v1, timer-commands-v1, import-resolver-v1, live-hints-v1, export-v1, refresh-recovery-v1, push-token-v1, live-activity-push-v1]}
+    PushTokenRequest:
+      type: object
+      additionalProperties: false
+      required: [protocol_version, capabilities, token, environment]
+      properties:
+        protocol_version: {type: string, const: v1}
+        capabilities:
+          type: array
+          minItems: 1
+          maxItems: 1
+          uniqueItems: true
+          items: {type: string, const: push-token-v1}
+        token:
+          description: The APNs device token as lowercase hex, 16 to 256 bytes.
+          type: string
+          pattern: '^(?:[0-9a-f]{2}){16,256}$'
+        environment: {type: string, enum: [sandbox, production]}
     ExportCapabilities:
       type: array
       minItems: 1

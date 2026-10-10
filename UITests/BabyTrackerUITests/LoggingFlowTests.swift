@@ -175,34 +175,26 @@ final class LoggingFlowTests: XCTestCase {
         XCTAssertTrue(app.buttons["home.sleep"].waitForExistence(timeout: 5))
     }
 
-    /// Something that already happened: More → Past entry → Left breast,
+    /// Something that already happened: More → Past entry → Breast, Left,
     /// the default ten minutes up to now → Save → a Left feed row in History.
     func testPastEntryLogsALeftBreastFeedToHistory() {
         XCTAssertTrue(app.tap(app.buttons["home.more"], until: app.buttons["more.pastEntry"]))
-        XCTAssertTrue(app.tap(app.buttons["more.pastEntry"], until: app.buttons["pastEntry.save"]))
+        XCTAssertTrue(app.tap(app.buttons["more.pastEntry"], until: app.buttons["partEdit.save"]))
 
-        // The kind, chosen from its menu rather than left at the default.
-        let kind = app.buttons["pastEntry.kind"]
-        XCTAssertTrue(kind.waitForExistence(timeout: 5))
-        kind.tap()
-        let right = app.buttons["Right breast"]
-        XCTAssertTrue(right.waitForExistence(timeout: 5), "the kind menu did not open")
-        right.tap()
-        kind.tap()
-        let left = app.buttons["Left breast"]
-        XCTAssertTrue(left.waitForExistence(timeout: 5), "the kind menu did not reopen")
-        left.tap()
-        XCTAssertTrue(
-            kind.label.contains("Left breast") || (kind.value as? String)?.contains("Left breast") == true,
-            "the kind did not change to Left breast: \(kind.label) \((kind.value as? String) ?? "")"
-        )
+        // Breast is the default kind; choose Right, then back to Left.
+        let side = app.segmentedControls["partEdit.side"]
+        XCTAssertTrue(side.waitForExistence(timeout: 5))
+        side.buttons["Right"].tap()
+        side.buttons["Left"].tap()
+        XCTAssertTrue(side.buttons["Left"].isSelected)
 
         // Start ten minutes ago, end now: both on screen, and valid.
-        XCTAssertTrue(app.descendants(matching: .any)["pastEntry.start"].firstMatch.exists)
-        XCTAssertTrue(app.descendants(matching: .any)["pastEntry.end"].firstMatch.exists)
-        XCTAssertFalse(app.staticTexts["pastEntry.validation"].exists, "the default times do not validate")
+        XCTAssertTrue(app.descendants(matching: .any)["partEdit.start"].firstMatch.exists)
+        XCTAssertTrue(app.descendants(matching: .any)["partEdit.end"].firstMatch.exists)
+        XCTAssertFalse(app.staticTexts["partEdit.validation"].exists, "the default times do not validate")
+        XCTAssertFalse(app.buttons["partEdit.delete"].exists, "a new entry has nothing to delete")
 
-        let save = app.buttons["pastEntry.save"]
+        let save = app.buttons["partEdit.save"]
         XCTAssertTrue(save.isEnabled)
         save.tap()
         XCTAssertTrue(save.waitForNonExistence(timeout: 5), "Save did not close the sheet")

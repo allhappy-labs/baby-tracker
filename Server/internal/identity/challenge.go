@@ -25,22 +25,21 @@ const (
 
 type Service struct {
 	verifier           IdentityVerifier
-	repository         *Repository
-	lookupIdentity     func(context.Context, string, KeyedDigest) (identityLookup, bool, error)
+	authority          Authority
 	origin, instanceID string
 	identityKeys       DigestKeyring
 	now                func() time.Time
 }
 
 func New(options Options) (*Service, error) {
-	if options.Verifier == nil || options.Repository == nil || options.Now == nil || !validNonzeroUUID(options.InstanceID) || !validateKeyring(options.IdentityKeys) {
+	if options.Verifier == nil || options.Authority == nil || options.Now == nil || !validNonzeroUUID(options.InstanceID) || !validateKeyring(options.IdentityKeys) {
 		return nil, errors.New("complete identity options are required")
 	}
 	origin, err := config.CanonicalOrigin(options.Origin, config.ModeHosted)
 	if err != nil {
 		return nil, errors.New("canonical HTTPS origin is required")
 	}
-	return &Service{verifier: options.Verifier, repository: options.Repository, lookupIdentity: options.Repository.lookupIdentity, origin: origin.String(),
+	return &Service{verifier: options.Verifier, authority: options.Authority, origin: origin.String(),
 		instanceID: options.InstanceID, identityKeys: options.IdentityKeys, now: options.Now}, nil
 }
 
@@ -53,9 +52,10 @@ func (service *Service) Challenge(ctx context.Context) (Challenge, error) {
 		return Challenge{}, ErrUnavailable
 	}
 	token := base64.RawURLEncoding.EncodeToString(random)
-	digest := sha256.Sum256([]byte(token))
-	expiresAt := service.now().UTC().Add(challengeLifetime)
-	if err := service.repository.CreateChallenge(ctx, digest, OriginBinding{Origin: service.origin, InstanceID: service.instanceID}, expiresAt); err != nil {
+	digest := challengeDigest(service.origin, service.instanceID, token)
+	now := service.now().UTC().Truncate(time.Microsecond)
+	expiresAt := now.Add(challengeLifetime)
+	if err := service.authority.CreateChallenge(ctx, digest, expiresAt, now); err != nil {
 		return Challenge{}, err
 	}
 	return Challenge{Challenge: token, ServerInstanceID: service.instanceID, CanonicalOrigin: service.origin, ExpiresAt: expiresAt}, nil
@@ -78,8 +78,8 @@ func (service *Service) VerifyExchangeWithProfile(ctx context.Context, request E
 	if err != nil {
 		return VerifiedExchange{}, ErrInvalidRequest
 	}
-	digest := sha256.Sum256([]byte(request.Challenge))
-	if err := service.repository.ConsumeChallenge(ctx, digest, OriginBinding{Origin: service.origin, InstanceID: service.instanceID}, service.now().UTC()); err != nil {
+	digest := challengeDigest(service.origin, service.instanceID, request.Challenge)
+	if err := service.authority.ConsumeChallenge(ctx, digest, service.now().UTC()); err != nil {
 		return VerifiedExchange{}, err
 	}
 	verified, err := service.verifier.Verify(ctx, request.IdentityToken, nonce)
@@ -89,48 +89,30 @@ func (service *Service) VerifyExchangeWithProfile(ctx context.Context, request E
 	if verified.Provider != "apple" || verified.Subject == "" || verified.Audience == "" {
 		return VerifiedExchange{}, ErrInvalidAppleProof
 	}
-
-	match, matchedDigest, found, err := service.lookupIdentityCandidates(ctx, verified)
+	candidates, err := service.AuthorityKeyCandidates(verified)
 	if err != nil {
 		return VerifiedExchange{}, err
 	}
-	if (!found || match.ProfileRequired) && profile == nil {
+	resolution, err := service.authority.ResolveIdentity(ctx, candidates)
+	if err != nil {
+		return VerifiedExchange{}, err
+	}
+	if (!resolution.Live() || resolution.ProfileRequired) && profile == nil {
 		return VerifiedExchange{}, ErrDisplayNameRequired
 	}
-	verified.IdentityKey = authorityDigest(matchedDigest)
-	return VerifiedExchange{Identity: verified, Profile: profile}, nil
+	verified.IdentityKey = candidates[0]
+	if resolution.Live() {
+		verified.IdentityKey = resolution.IdentityKey
+	}
+	return VerifiedExchange{Identity: verified, Profile: profile, Candidates: candidates, Authority: resolution}, nil
 }
 
-func (service *Service) lookupIdentityCandidates(ctx context.Context, verified VerifiedIdentity) (identityLookup, KeyedDigest, bool, error) {
-	if service == nil || service.lookupIdentity == nil {
-		return identityLookup{}, KeyedDigest{}, false, ErrUnavailable
-	}
-	keys := append([]DigestKey{service.identityKeys.Current}, service.identityKeys.Previous...)
-	var match identityLookup
-	var matchedDigest KeyedDigest
-	found, ambiguous := false, false
-	for _, key := range keys {
-		candidate := identityDigest(key, verified.Provider, verified.Audience, verified.Subject)
-		row, exists, err := service.lookupIdentity(ctx, verified.Provider, candidate)
-		if err != nil {
-			return identityLookup{}, KeyedDigest{}, false, err
-		}
-		if !exists {
-			continue
-		}
-		if found {
-			ambiguous = true
-			continue
-		}
-		found, match, matchedDigest = true, row, candidate
-	}
-	if ambiguous {
-		return identityLookup{}, KeyedDigest{}, false, ErrUnavailable
-	}
-	if !found {
-		matchedDigest = identityDigest(service.identityKeys.Current, verified.Provider, verified.Audience, verified.Subject)
-	}
-	return match, matchedDigest, found, nil
+// challengeDigest binds a challenge to the origin and instance that issued
+// it: a challenge minted by another origin or instance never matches. (The
+// authority's challenge table no longer stores the binding; this replaces
+// app.consume_auth_challenge's origin and instance predicates.)
+func challengeDigest(origin, instanceID, challenge string) [32]byte {
+	return sha256.Sum256([]byte("baby-tracker-auth-challenge-v1\x00" + origin + "\x00" + instanceID + "\x00" + challenge))
 }
 
 func (service *Service) AuthorityKeyCandidates(verified VerifiedIdentity) ([]string, error) {

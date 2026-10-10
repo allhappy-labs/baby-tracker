@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/operator"
-	"babytracker/server/internal/security"
 )
 
 type operatorCLIFixtureFile struct {
@@ -33,7 +33,7 @@ type cliAuthority struct {
 
 type cliReceipt struct {
 	key    operator.ReceiptKey
-	result security.CommandResult
+	result authority.Result
 }
 
 func (*cliAuthority) PreflightRecovery(context.Context, operator.RecoveryCommand) error {
@@ -42,36 +42,36 @@ func (*cliAuthority) PreflightRecovery(context.Context, operator.RecoveryCommand
 func (*cliAuthority) PreflightEntitlement(context.Context, operator.EntitlementCommand) error {
 	return nil
 }
-func (authority *cliAuthority) ReplayRecovery(_ context.Context, command operator.RecoveryCommand) (security.CommandResult, bool, error) {
-	return authority.replay(command.Receipt)
+func (fake *cliAuthority) ReplayRecovery(_ context.Context, command operator.RecoveryCommand) (authority.Result, bool, error) {
+	return fake.replay(command.Receipt)
 }
-func (authority *cliAuthority) ReplayEntitlement(_ context.Context, command operator.EntitlementCommand) (security.CommandResult, bool, error) {
-	return authority.replay(command.Receipt)
+func (fake *cliAuthority) ReplayEntitlement(_ context.Context, command operator.EntitlementCommand) (authority.Result, bool, error) {
+	return fake.replay(command.Receipt)
 }
-func (authority *cliAuthority) replay(key operator.ReceiptKey) (security.CommandResult, bool, error) {
-	receipt, exists := authority.receipts[key.CommandID]
+func (fake *cliAuthority) replay(key operator.ReceiptKey) (authority.Result, bool, error) {
+	receipt, exists := fake.receipts[key.CommandID]
 	if !exists {
-		return security.CommandResult{}, false, nil
+		return authority.Result{}, false, nil
 	}
 	if receipt.key != key {
-		return security.CommandResult{}, false, operator.ErrCommandIDReused
+		return authority.Result{}, false, operator.ErrCommandIDReused
 	}
 	return receipt.result, true, nil
 }
-func (authority *cliAuthority) RecoverOwner(_ context.Context, command operator.RecoveryCommand) (security.CommandResult, error) {
-	return authority.commit(command.Proposal.CommandID, command.Proposal.ExpectedRevision, command.Receipt, command.Audit, "")
+func (fake *cliAuthority) RecoverOwner(_ context.Context, command operator.RecoveryCommand) (authority.Result, error) {
+	return fake.commit(command.Proposal.CommandID, command.Proposal.ExpectedRevision, command.Receipt, command.Audit, "")
 }
-func (authority *cliAuthority) GrantEntitlement(_ context.Context, command operator.EntitlementCommand) (security.CommandResult, error) {
-	return authority.commit(command.Proposal.CommandID, command.Proposal.ExpectedRevision, command.Receipt, command.Audit, command.Proposal.Source)
+func (fake *cliAuthority) GrantEntitlement(_ context.Context, command operator.EntitlementCommand) (authority.Result, error) {
+	return fake.commit(command.Proposal.CommandID, command.Proposal.ExpectedRevision, command.Receipt, command.Audit, command.Proposal.Source)
 }
-func (authority *cliAuthority) SuspendEntitlement(_ context.Context, command operator.EntitlementCommand) (security.CommandResult, error) {
-	return authority.commit(command.Proposal.CommandID, command.Proposal.ExpectedRevision, command.Receipt, command.Audit, command.Proposal.Source)
+func (fake *cliAuthority) SuspendEntitlement(_ context.Context, command operator.EntitlementCommand) (authority.Result, error) {
+	return fake.commit(command.Proposal.CommandID, command.Proposal.ExpectedRevision, command.Receipt, command.Audit, command.Proposal.Source)
 }
-func (authority *cliAuthority) commit(commandID string, revision uint64, key operator.ReceiptKey, audit operator.Audit, source string) (security.CommandResult, error) {
-	result := security.CommandResult{CommandID: commandID, Outcome: "committed", Code: "ok", Revision: revision + 1}
-	authority.receipts[commandID] = cliReceipt{key: key, result: result}
-	authority.audits = append(authority.audits, audit)
-	authority.sources = append(authority.sources, source)
+func (fake *cliAuthority) commit(commandID string, revision uint64, key operator.ReceiptKey, audit operator.Audit, source string) (authority.Result, error) {
+	result := authority.Result{CommandID: commandID, Outcome: "committed", Code: "ok", Revision: revision + 1}
+	fake.receipts[commandID] = cliReceipt{key: key, result: result}
+	fake.audits = append(fake.audits, audit)
+	fake.sources = append(fake.sources, source)
 	return result, nil
 }
 
@@ -88,7 +88,7 @@ func TestDocumentedOperatorCLI(t *testing.T) {
 					t.Fatalf("fixture argv is not byte-equivalent to the runbook: %v", arguments)
 				}
 			}
-			service, authority := newOperatorCLIService(t, fixture)
+			service, fake := newOperatorCLIService(t, fixture)
 			var output bytes.Buffer
 			if err := RunWithServices(t.Context(), example.PrepareArgs, service, &output); err != nil {
 				t.Fatal(err)
@@ -104,12 +104,12 @@ func TestDocumentedOperatorCLI(t *testing.T) {
 			if err := RunWithServices(t.Context(), example.CommitArgs, service, &output); err != nil {
 				t.Fatal(err)
 			}
-			var result security.CommandResult
-			if err := json.Unmarshal(output.Bytes(), &result); err != nil || result.Revision != 43 || len(authority.audits) != 1 {
-				t.Fatalf("commit output=%q audits=%d err=%v", output.String(), len(authority.audits), err)
+			var result authority.Result
+			if err := json.Unmarshal(output.Bytes(), &result); err != nil || result.Revision != 43 || len(fake.audits) != 1 {
+				t.Fatalf("commit output=%q audits=%d err=%v", output.String(), len(fake.audits), err)
 			}
-			if example.Name == "entitlement-suspend" && authority.sources[0] != "hosted_beta" {
-				t.Fatalf("suspension source=%q", authority.sources[0])
+			if example.Name == "entitlement-suspend" && fake.sources[0] != "hosted_beta" {
+				t.Fatalf("suspension source=%q", fake.sources[0])
 			}
 		})
 	}
@@ -123,22 +123,22 @@ func TestDocumentedOperatorMissingOrChangedFields(t *testing.T) {
 				continue
 			}
 			t.Run(example.Name+argument, func(t *testing.T) {
-				service, authority := newOperatorCLIService(t, fixture)
+				service, fake := newOperatorCLIService(t, fixture)
 				arguments := append([]string(nil), example.CommitArgs...)
 				arguments = append(arguments[:index], arguments[index+2:]...)
-				if err := RunWithServices(t.Context(), arguments, service, &bytes.Buffer{}); err == nil || len(authority.audits) != 0 {
-					t.Fatalf("missing %s was accepted; audits=%d", argument, len(authority.audits))
+				if err := RunWithServices(t.Context(), arguments, service, &bytes.Buffer{}); err == nil || len(fake.audits) != 0 {
+					t.Fatalf("missing %s was accepted; audits=%d", argument, len(fake.audits))
 				}
 			})
 		}
 	}
 
 	t.Run("grant digest cannot suspend", func(t *testing.T) {
-		service, authority := newOperatorCLIService(t, fixture)
+		service, fake := newOperatorCLIService(t, fixture)
 		arguments := append([]string(nil), fixture.Examples[1].CommitArgs...)
 		arguments[1] = "suspend"
-		if err := RunWithServices(t.Context(), arguments, service, &bytes.Buffer{}); err == nil || len(authority.audits) != 0 {
-			t.Fatalf("cross-operation digest was accepted; audits=%d", len(authority.audits))
+		if err := RunWithServices(t.Context(), arguments, service, &bytes.Buffer{}); err == nil || len(fake.audits) != 0 {
+			t.Fatalf("cross-operation digest was accepted; audits=%d", len(fake.audits))
 		}
 	})
 
@@ -150,10 +150,10 @@ func TestDocumentedOperatorMissingOrChangedFields(t *testing.T) {
 		"changed revision":            {"--expected-revision", "43"},
 	} {
 		t.Run(name, func(t *testing.T) {
-			service, authority := newOperatorCLIService(t, fixture)
+			service, fake := newOperatorCLIService(t, fixture)
 			arguments := replaceOperatorFlag(t, fixture.Examples[0].CommitArgs, mutation.flag, mutation.value)
-			if err := RunWithServices(t.Context(), arguments, service, &bytes.Buffer{}); err == nil || len(authority.audits) != 0 {
-				t.Fatalf("changed %s was accepted; audits=%d", mutation.flag, len(authority.audits))
+			if err := RunWithServices(t.Context(), arguments, service, &bytes.Buffer{}); err == nil || len(fake.audits) != 0 {
+				t.Fatalf("changed %s was accepted; audits=%d", mutation.flag, len(fake.audits))
 			}
 		})
 	}
@@ -208,14 +208,14 @@ func newOperatorCLIService(t *testing.T, fixture operatorCLIFixtureFile) (*opera
 	for index := range key {
 		key[index] = 0x42
 	}
-	authority := &cliAuthority{receipts: make(map[string]cliReceipt)}
-	service, err := operator.New(operator.Options{Authority: authority, OperatorID: fixture.OperatorID,
+	fake := &cliAuthority{receipts: make(map[string]cliReceipt)}
+	service, err := operator.New(operator.Options{Authority: fake, OperatorID: fixture.OperatorID,
 		OwnershipPolicyID: "owner-policy-test-v1", EntitlementPolicyID: "entitlement-policy-test-v1",
 		ConfirmationKey: key, Now: func() time.Time { return now }})
 	if err != nil {
 		t.Fatal(err)
 	}
-	return service, authority
+	return service, fake
 }
 
 var _ operator.Authority = (*cliAuthority)(nil)

@@ -4,31 +4,35 @@ import (
 	"fmt"
 	"testing"
 
+	"babytracker/server/internal/care"
 	"babytracker/server/internal/tenant"
 	"babytracker/server/internal/testpg"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-type Postgres struct{ Admin, Runtime, Migrator, Projector, Maintenance, LiveActivity *pgxpool.Pool }
+// Postgres is a disposable database's pools. The authority runs on Runtime;
+// there is no projector pool.
+type Postgres struct{ Admin, Runtime, Migrator, Maintenance *pgxpool.Pool }
 
 func NewPostgres(t *testing.T) Postgres {
 	t.Helper()
 	return postgresOf(testpg.New(t))
 }
 
-// NewPostgresThrough is NewPostgres on a database migrated only up to version.
-func NewPostgresThrough(t *testing.T, version int64) Postgres {
+// NewWithICUCollation is New on a database whose default collation is the
+// ICU locale (testpg.NewWithICUCollation).
+func NewWithICUCollation(t *testing.T, locale string) *Harness {
 	t.Helper()
-	return postgresOf(testpg.NewThrough(t, version))
+	return newHarnessOn(t, postgresOf(testpg.NewWithICUCollation(t, locale)), "", false, databaseNoon)
 }
 
 func postgresOf(fixture *testpg.Fixture) Postgres {
-	return Postgres{Admin: fixture.Admin, Runtime: fixture.Runtime, Migrator: fixture.Owner, Projector: fixture.Projector, Maintenance: fixture.Maintenance, LiveActivity: fixture.LiveActivity}
+	return Postgres{Admin: fixture.Admin, Runtime: fixture.Runtime, Migrator: fixture.Owner, Maintenance: fixture.Maintenance}
 }
 
 func count(t *testing.T, pool *pgxpool.Pool, table, familyID, accountID string) int {
 	t.Helper()
-	allowed := map[string]bool{"babies": true, "feed_entries": true, "feed_components": true, "sleep_entries": true, "diaper_entries": true, "supplement_entries": true, "growth_profiles": true, "measurement_entries": true, "active_timers": true, "timer_components": true, "mutation_journal": true, "mutation_receipts": true, "family_record_usage": true, "sync_snapshots": true, "sync_snapshot_admissions": true, "sync_snapshot_entities": true, "sync_page_sessions": true, "import_sessions": true, "import_chunks": true, "import_baby_candidates": true, "import_record_manifests": true, "import_conflicts": true, "import_conflict_receipts": true, "import_baby_mappings": true}
+	allowed := map[string]bool{"import_sessions": true, "import_chunks": true, "import_baby_candidates": true, "import_record_manifests": true, "import_conflicts": true, "import_conflict_receipts": true, "import_baby_mappings": true, "care_entities": true, "care_receipts": true, "sync_page_bindings": true, "sync_snapshot_sessions": true}
 	if !allowed[table] {
 		t.Fatalf("unsupported assertion table %q", table)
 	}
@@ -93,8 +97,38 @@ func familyUsage(t *testing.T, pool *pgxpool.Pool, accountID, familyID string) (
 		t.Fatal(err)
 	}
 	var count, bytes int64
-	if err = tx.QueryRow(t.Context(), `SELECT canonical_record_count,charged_storage_bytes FROM family_record_usage WHERE family_id=$1`, familyID).Scan(&count, &bytes); err != nil {
+	if err = tx.QueryRow(t.Context(), `SELECT care_record_count,care_charged_bytes FROM families WHERE id=$1`, familyID).Scan(&count, &bytes); err != nil {
 		t.Fatal(err)
 	}
 	return count, bytes
+}
+
+// CareCount is the care_entities rows of kind (a care kind name) in
+// familyID, tombstones included, read as the owner.
+func (h *Harness) CareCount(t *testing.T, kind, familyID string) int {
+	t.Helper()
+	code, ok := care.KindCode(kind)
+	if !ok {
+		t.Fatalf("care kind %q", kind)
+	}
+	tx, err := h.Migrator.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(t.Context())
+	if err = tenant.SetLocal(t.Context(), tx, tenant.Context{AccountID: h.Owner.AccountID, FamilyID: familyID}); err != nil {
+		t.Fatal(err)
+	}
+	var result int
+	if err := tx.QueryRow(t.Context(), `SELECT count(*) FROM care_entities WHERE family_id=$1 AND kind=$2`, familyID, code).Scan(&result); err != nil {
+		t.Fatal(err)
+	}
+	return result
+}
+
+// SequenceOf is familyID's next_sequence: the number of changes the family
+// has taken, read as accountID.
+func (h *Harness) SequenceOf(t *testing.T, accountID, familyID string) uint64 {
+	t.Helper()
+	return familySequence(t, h.Migrator, accountID, familyID)
 }

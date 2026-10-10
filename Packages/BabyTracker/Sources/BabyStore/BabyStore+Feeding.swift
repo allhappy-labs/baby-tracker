@@ -159,10 +159,13 @@ public extension BabyStore {
         volumeML: Double,
         contents: BottleContents,
         for babyID: UUID,
-        at date: Date? = nil
+        at date: Date? = nil,
+        endedAt end: Date? = nil,
+        note: String? = nil
     ) throws -> FeedEntry {
         let stamp = date ?? now
-        let entry = bottleEntry(volumeML: volumeML, contents: contents, at: stamp, for: babyID)
+        let entry = bottleEntry(volumeML: volumeML, contents: contents, at: stamp, endedAt: end, for: babyID)
+        entry.note = note
         entry.feedingSessionID = try continuedSessionID(.feed, for: babyID, startingAt: stamp)
 
         context.insert(entry)
@@ -177,7 +180,8 @@ public extension BabyStore {
         foods: [String],
         amount: SolidsAmount,
         for babyID: UUID,
-        at date: Date? = nil
+        at date: Date? = nil,
+        note: String? = nil
     ) throws -> FeedEntry {
         let stamp = date ?? now
         let entry = FeedEntry(
@@ -190,6 +194,7 @@ public extension BabyStore {
         )
         entry.components = [.solids(id: UUID(), foods: foods, amount: amount)]
         entry.endedAt = stamp
+        entry.note = note
 
         context.insert(entry)
         try record(.create, on: entry)
@@ -257,7 +262,8 @@ public extension BabyStore {
 extension BabyStore {
     /// A bottle, not yet inserted or linked to a session — shared by
     /// `logBottle` and `addFeedPart`, which differ only in that.
-    func bottleEntry(volumeML: Double, contents: BottleContents, at stamp: Date, for babyID: UUID) -> FeedEntry {
+    func bottleEntry(volumeML: Double, contents: BottleContents, at stamp: Date, endedAt end: Date? = nil,
+                     for babyID: UUID) -> FeedEntry {
         let entry = FeedEntry(
             babyID: babyID,
             kind: .bottle,
@@ -266,8 +272,10 @@ extension BabyStore {
             createdBy: deviceID,
             realm: activeRealm
         )
-        entry.components = [.bottle(id: UUID(), volumeML: volumeML, contents: contents, startedAt: stamp)]
-        entry.endedAt = stamp
+        let seconds = end.map { Int($0.timeIntervalSince(stamp).rounded()) }.flatMap { $0 > 0 ? $0 : nil }
+        entry.components = [.bottle(id: UUID(), volumeML: volumeML, contents: contents, seconds: seconds,
+                                    startedAt: stamp, endedAt: seconds == nil ? nil : end)]
+        entry.endedAt = seconds == nil ? stamp : end
         return entry
     }
 }

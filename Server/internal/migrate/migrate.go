@@ -12,6 +12,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
 
@@ -68,6 +70,14 @@ func (r *Runner) Apply(ctx context.Context, pool *pgxpool.Pool) error {
 	return nil
 }
 
+// executor is what the runner's statements need; both a pooled connection and
+// a transaction provide it.
+type executor interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
 func acquireLocked(ctx context.Context, pool *pgxpool.Pool) (*pgxpool.Conn, error) {
 	if pool == nil {
 		return nil, errors.New("database pool is required")
@@ -92,7 +102,7 @@ func releaseLocked(conn *pgxpool.Conn) {
 	conn.Release()
 }
 
-func ensureTable(ctx context.Context, conn *pgxpool.Conn) error {
+func ensureTable(ctx context.Context, conn executor) error {
 	_, err := conn.Exec(ctx, `CREATE TABLE IF NOT EXISTS schema_migrations (
 		version bigint PRIMARY KEY,
 		name text NOT NULL,
@@ -111,14 +121,24 @@ func applyOne(ctx context.Context, conn *pgxpool.Conn, migration migration) erro
 		return fmt.Errorf("begin migration %d: %w", migration.version, err)
 	}
 	defer tx.Rollback(ctx)
-	if _, err := tx.Exec(ctx, migration.sql); err != nil {
-		return fmt.Errorf("execute migration %d: %w", migration.version, err)
-	}
-	if _, err := tx.Exec(ctx, "INSERT INTO schema_migrations (version, name, sha256) VALUES ($1, $2, $3)", migration.version, migration.name, migration.checksum); err != nil {
-		return fmt.Errorf("record migration %d: %w", migration.version, err)
+	if err := execMigration(ctx, tx, migration); err != nil {
+		return err
 	}
 	if err := tx.Commit(ctx); err != nil {
 		return fmt.Errorf("commit migration %d: %w", migration.version, err)
+	}
+	return nil
+}
+
+// execMigration runs one migration file and records it. The file goes without
+// arguments, so pgx sends it over the simple protocol and a file may hold many
+// statements.
+func execMigration(ctx context.Context, conn executor, migration migration) error {
+	if _, err := conn.Exec(ctx, migration.sql); err != nil {
+		return fmt.Errorf("execute migration %d: %w", migration.version, err)
+	}
+	if _, err := conn.Exec(ctx, "INSERT INTO schema_migrations (version, name, sha256) VALUES ($1, $2, $3)", migration.version, migration.name, migration.checksum); err != nil {
+		return fmt.Errorf("record migration %d: %w", migration.version, err)
 	}
 	return nil
 }
@@ -151,12 +171,25 @@ func (r *Runner) loadMigrations() ([]migration, error) {
 		return nil, errors.New("no migrations found")
 	}
 	sort.Slice(migrations, func(i, j int) bool { return migrations[i].version < migrations[j].version })
+	// The history starts at 1, or at a squashed baseline (NNNNNN_baseline.sql)
+	// that stands for every version up to its own; it is contiguous from there.
+	first := migrations[0]
+	if first.version != 1 && !isBaseline(first.name) {
+		return nil, fmt.Errorf("migration_gap: expected version 1 or a baseline, found %s", first.name)
+	}
 	for i, migration := range migrations {
-		if migration.version != int64(i+1) {
-			return nil, fmt.Errorf("migration_gap: expected version %d, found %d", i+1, migration.version)
+		if want := first.version + int64(i); migration.version != want {
+			return nil, fmt.Errorf("migration_gap: expected version %d, found %d", want, migration.version)
 		}
 	}
 	return migrations, nil
+}
+
+// isBaseline reports whether name is a squashed baseline migration,
+// NNNNNN_baseline.sql: the whole schema through its own version, so a
+// history may start at it instead of at 1.
+func isBaseline(name string) bool {
+	return len(name) == len("000000_baseline.sql") && name[6:] == "_baseline.sql"
 }
 
 func parseMigrationName(filename string) (int64, string, error) {
@@ -170,7 +203,7 @@ func parseMigrationName(filename string) (int64, string, error) {
 	return version, filename, nil
 }
 
-func appliedMigrations(ctx context.Context, conn *pgxpool.Conn) (map[int64]appliedMigration, error) {
+func appliedMigrations(ctx context.Context, conn executor) (map[int64]appliedMigration, error) {
 	rows, err := conn.Query(ctx, "SELECT version, name, sha256 FROM schema_migrations ORDER BY version")
 	if err != nil {
 		return nil, fmt.Errorf("read applied migrations: %w", err)
@@ -201,8 +234,16 @@ func validateApplied(migrations []migration, applied map[int64]appliedMigration)
 	for _, migration := range migrations {
 		byVersion[migration.version] = migration
 	}
+	first := migrations[0]
 	for version, actual := range applied {
 		expected, ok := byVersion[version]
+		if !ok && version < first.version {
+			// A history from before the baseline (a legacy or pre-squash
+			// install) is not this binary's: it is never adopted. The
+			// legacy chain lived in Phase 4's importer, deleted after the
+			// homelab's cutover.
+			return fmt.Errorf("%w: version %d predates %s", ErrChecksumMismatch, version, first.name)
+		}
 		if !ok {
 			return fmt.Errorf("%w: version %d", ErrDatabaseNewer, version)
 		}
@@ -216,7 +257,7 @@ func validateApplied(migrations []migration, applied map[int64]appliedMigration)
 			current = version
 		}
 	}
-	for version := int64(1); version <= current; version++ {
+	for version := first.version; version <= current; version++ {
 		if _, ok := applied[version]; !ok {
 			return fmt.Errorf("migration_gap: applied history is missing version %d", version)
 		}

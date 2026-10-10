@@ -11,16 +11,24 @@ import (
 	"babytracker/server/internal/testkit"
 )
 
-// The family row lock (records.LockFamilyForUpdate) serializes a family's
-// writes against each other and against page reads. These tests hold that row
-// from another transaction and require each operation to wait on its own
-// family fence statement first — not on whatever later statement happens to
-// touch the row (a journal insert's foreign key check, the next_sequence
-// update), which is what a missing explicit lock would look like.
+// The family row lock (care.LockFamily, the first statement of the batch's
+// Fetch) serializes a family's writes. These tests hold that row from
+// another transaction and require a mutation to wait on its own family
+// fence statement first — not on whatever later statement happens to touch
+// the row (the family update of the write batch), which is what a missing
+// explicit lock would look like. Pull pages and continuations take no lock:
+// they read under their statement's snapshot while a writer holds the row.
 
-const familyFenceSQL = "SELECT id FROM families WHERE id=$1 FOR UPDATE"
+const familyFenceSQL = "SELECT next_sequence, care_record_count, care_charged_bytes, care_entity_count, care_wire_bytes FROM families WHERE id=$1 FOR NO KEY UPDATE"
 
 func holdFamilyRow(t *testing.T, h *testkit.Harness) (pid uint32, release func()) {
+	t.Helper()
+	return holdFamilyRowAs(t, h, "FOR UPDATE")
+}
+
+// holdFamilyRowAs holds the family row with lock (FOR UPDATE, or FOR NO KEY
+// UPDATE as a concurrent writer's batch holds it).
+func holdFamilyRowAs(t *testing.T, h *testkit.Harness, lock string) (pid uint32, release func()) {
 	t.Helper()
 	tx, err := h.Migrator.Begin(t.Context())
 	if err != nil {
@@ -30,7 +38,7 @@ func holdFamilyRow(t *testing.T, h *testkit.Harness) (pid uint32, release func()
 		t.Fatal(err)
 	}
 	var id string
-	if err := tx.QueryRow(t.Context(), `SELECT id::text FROM families WHERE id=$1 FOR UPDATE`, h.FamilyID).Scan(&id); err != nil {
+	if err := tx.QueryRow(t.Context(), `SELECT id::text FROM families WHERE id=$1 `+lock, h.FamilyID).Scan(&id); err != nil {
 		t.Fatalf("hold family row: %v", err)
 	}
 	released := false
@@ -106,32 +114,53 @@ func TestMutationWaitsOnTheFamilyFenceFirst(t *testing.T) {
 	})
 }
 
-func TestSyncContinuationWaitsOnTheFamilyFenceFirst(t *testing.T) {
+// requireNoWaitOnTheFamilyRow runs op while a writer holds the family row
+// and requires it to finish without waiting.
+func requireNoWaitOnTheFamilyRow(t *testing.T, h *testkit.Harness, op func() error) {
+	t.Helper()
+	_, release := holdFamilyRowAs(t, h, "FOR NO KEY UPDATE")
+	defer release()
+	done := make(chan error, 1)
+	go func() { done <- op() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatalf("operation under a held family row: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("a pull waited on the family row a writer holds")
+	}
+}
+
+func TestPullsAndContinuationsTakeNoFamilyLock(t *testing.T) {
 	h := testkit.New(t)
 	h.Limits.SyncPageSize = 1
-	h.RebuildSyncService(t)
-	h.SeedBabies(t, 2)
-	first, err := h.Service.ApplyAndPull(t.Context(), h.Owner, h.SyncRequest(h.Cursor(0), nil))
-	if err != nil || first.NextPageToken == nil {
-		t.Fatalf("first=%+v err=%v", first, err)
+	h.RebuildSyncService(t, h.Limits)
+	h.SeedBabies(t, 3)
+	var first protocol.SyncResponse
+	requireNoWaitOnTheFamilyRow(t, h, func() error {
+		var err error
+		first, err = applyAndPull(t, h.Service, h.Owner, h.SyncRequest(h.Cursor(0), nil))
+		return err
+	})
+	if first.NextPageToken == nil {
+		t.Fatalf("first=%+v", first)
 	}
-	requireFirstWaitIsFamilyFence(t, h, func() error {
+	requireNoWaitOnTheFamilyRow(t, h, func() error {
 		_, err := h.Service.ApplyAndPull(context.Background(), h.Owner, h.SyncRequest(nil, first.NextPageToken))
 		return err
 	})
-}
-
-func TestSnapshotContinuationWaitsOnTheFamilyFenceFirst(t *testing.T) {
-	h := testkit.New(t)
-	h.Limits.SyncPageSize = 1
-	h.RebuildSyncService(t)
-	h.SeedBabies(t, 2)
-	first, err := h.Service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{})
-	if err != nil || first.NextPageToken == nil {
-		t.Fatalf("first=%+v err=%v", first, err)
+	var snapshot protocol.SnapshotResponse
+	requireNoWaitOnTheFamilyRow(t, h, func() error {
+		var err error
+		snapshot, err = h.Service.FullSnapshot(context.Background(), h.Owner, protocol.SnapshotRequest{})
+		return err
+	})
+	if snapshot.NextPageToken == nil {
+		t.Fatalf("snapshot=%+v", snapshot)
 	}
-	requireFirstWaitIsFamilyFence(t, h, func() error {
-		_, err := h.Service.FullSnapshot(context.Background(), h.Owner, protocol.SnapshotRequest{PageToken: first.NextPageToken})
+	requireNoWaitOnTheFamilyRow(t, h, func() error {
+		_, err := h.Service.FullSnapshot(context.Background(), h.Owner, protocol.SnapshotRequest{PageToken: snapshot.NextPageToken})
 		return err
 	})
 }

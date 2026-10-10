@@ -1,11 +1,18 @@
 package migrate
 
 import (
+	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"strings"
 	"testing"
+	"testing/fstest"
+
+	"babytracker/server/migrations"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 func TestKnownAdditiveMigrationOverlap(t *testing.T) {
@@ -42,291 +49,175 @@ func TestKnownAdditiveMigrationOverlap(t *testing.T) {
 	}
 }
 
-func TestMigration000017CompatibilityOverlap(t *testing.T) {
-	compatibility, err := EmbeddedCompatibility()
+// 000001–000032 were squashed into 000032_baseline.sql before the homelab
+// cutover (Phase 4 Task 26): the binary embeds that one file, its manifest
+// knows only it, and a history from before it is never adopted.
+func TestOnlyTheBaselineIsEmbedded(t *testing.T) {
+	entries, err := fs.ReadDir(migrations.Files, ".")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compatibility.Min != 29 || compatibility.Max != 29 || len(compatibility.Known) != 29 {
-		t.Fatalf("invitation-roles compatibility manifest=%+v", compatibility)
+	var names []string
+	for _, entry := range entries {
+		names = append(names, entry.Name())
 	}
-	if err := ValidateCompatibility(compatibility.Known[:4], compatibility); err == nil {
-		t.Fatal("feature manifest accepted schema four")
+	if len(names) != 1 || names[0] != "000032_baseline.sql" {
+		t.Fatalf("embedded migrations %v; want exactly 000032_baseline.sql", names)
 	}
-	if err := ValidateCompatibility(compatibility.Known[:5], compatibility); err == nil {
-		t.Fatal("family feature manifest accepted schema five")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:6], compatibility); err == nil {
-		t.Fatal("worker-resume manifest accepted schema six")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:7], compatibility); err == nil {
-		t.Fatal("lifecycle feature manifest accepted schema seven")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:8], compatibility); err == nil {
-		t.Fatal("feature manifest accepted schema eight")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:10], compatibility); err == nil {
-		t.Fatal("import predecessor manifest accepted schema ten")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:11], compatibility); err == nil {
-		t.Fatal("delivery predecessor accepted schema eleven")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:12], compatibility); err == nil {
-		t.Fatal("viewer-role manifest accepted schema twelve")
-	}
-	// The window moves by exactly one, and never widens.
-	//
-	// 000014 could be deployed ahead of the code — it only widened two CHECK
-	// constraints, and a schema-13 binary simply never emitted the new value.
-	// Neither of its successors can: this binary emits `member_role_changed`
-	// and mints invitations for either role, and against a database without
-	// the projections for those the event commits to the ledger and then
-	// strands the projection. Refusing to start is the correct behaviour and
-	// is what this bound expresses.
-	if err := ValidateCompatibility(compatibility.Known[:14], compatibility); err == nil {
-		t.Fatal("invitation-roles manifest accepted schema fourteen")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:15], compatibility); err == nil {
-		t.Fatal("feed-component manifest accepted schema fifteen")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:16], compatibility); err == nil {
-		t.Fatal("feed-component feature accepted schema sixteen")
-	}
-	if err := ValidateCompatibility(compatibility.Known, compatibility); err != nil {
-		t.Fatalf("exact embedded schema seventeen rejected: %v", err)
-	}
-	for _, expected := range []struct {
-		index   int
-		version int64
-		name    string
-	}{{15, 16, "000016_invitation_roles.sql"}, {16, 17, "000017_feed_components.sql"}} {
-		encoded, err := os.ReadFile("../../migrations/" + expected.name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		want := fmt.Sprintf("%x", sha256.Sum256(encoded))
-		entry := compatibility.Known[expected.index]
-		if entry.Version != expected.version || entry.Name != expected.name || entry.SHA256 != want {
-			t.Fatalf("migration %d manifest entry=%+v want sha256=%s", expected.version, entry, want)
-		}
-	}
-	changed := append([]MigrationDigest(nil), compatibility.Known...)
-	changed[13].SHA256 = strings.Repeat("9", 64)
-	if err := ValidateCompatibility(changed, compatibility); err == nil {
-		t.Fatal("changed migration fourteen digest was accepted")
-	}
-	unknown := append(append([]MigrationDigest(nil), compatibility.Known...), MigrationDigest{
-		Version: 15, Name: "000015_unknown.sql", SHA256: strings.Repeat("a", 64),
-	})
-	if err := ValidateCompatibility(unknown, compatibility); err == nil {
-		t.Fatal("unknown migration fifteen was accepted")
-	}
-}
-
-func TestMigrationFeedComponentsRequiresSeventeen(t *testing.T) {
-	compatibility, err := EmbeddedCompatibility()
+	raw, err := fs.ReadFile(migrations.Files, "000032_baseline.sql")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if compatibility.Min != 29 || compatibility.Max != 29 || len(compatibility.Known) != 29 {
-		t.Fatalf("feed-component compatibility manifest=%+v", compatibility)
-	}
-	if err := ValidateCompatibility(compatibility.Known[:15], compatibility); err == nil {
-		t.Fatal("feed-component feature accepted schema fifteen")
-	}
-	if err := ValidateCompatibility(compatibility.Known[:16], compatibility); err == nil {
-		t.Fatal("schema-sixteen predecessor was accepted by feature binary")
-	}
-	if err := ValidateCompatibility(compatibility.Known, compatibility); err != nil {
-		t.Fatalf("schema-seventeen feature rejected: %v", err)
-	}
-	encoded, err := os.ReadFile("../../migrations/000017_feed_components.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := fmt.Sprintf("%x", sha256.Sum256(encoded))
-	entry := compatibility.Known[16]
-	if entry.Version != 17 || entry.Name != "000017_feed_components.sql" || entry.SHA256 != want {
-		t.Fatalf("migration 17 manifest entry=%+v want sha256=%s", entry, want)
-	}
-}
-
-func TestSupplementsRequiresSchemaEighteen(t *testing.T) {
 	c, err := EmbeddedCompatibility()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err := ValidateCompatibility(c.Known[:17], c); err == nil {
-		t.Fatal("supplement binary accepted schema seventeen")
+	baseline := MigrationDigest{Version: 32, Name: "000032_baseline.sql", SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
+	if c.Min != 32 || c.Max != 32 || len(c.Known) != 1 || c.Known[0] != baseline {
+		t.Fatalf("compatibility %+v; want min 32 max 32 known [%+v]", c, baseline)
 	}
-	raw, err := os.ReadFile("../../migrations/000018_supplements.sql")
+	loaded, err := New(migrations.Files).loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c.Known[17].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("supplement migration digest mismatch")
+	if len(loaded) != 1 || loaded[0].version != 32 || loaded[0].name != baseline.Name || loaded[0].checksum != baseline.SHA256 {
+		t.Fatalf("runner loads %+v", loaded)
 	}
-}
+	if err := ValidateCompatibility(c.Known, c); err != nil {
+		t.Fatalf("the baseline install is refused: %v", err)
+	}
 
-func TestExportRequiresSchemaNineteen(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
+	// The chain's history, the homelab's legacy history: none is this binary's.
+	chain := make([]MigrationDigest, 31)
+	for i := range chain {
+		chain[i] = MigrationDigest{Version: int64(i + 1), Name: fmt.Sprintf("%06d_chain.sql", i+1), SHA256: strings.Repeat("a", 64)}
 	}
-	if err := ValidateCompatibility(c.Known[:18], c); err == nil {
-		t.Fatal("export binary accepted schema eighteen")
-	}
-	raw, err := os.ReadFile("../../migrations/000019_exports.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Known[18].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("export migration digest mismatch")
-	}
-}
-
-func TestSessionLineageStartRequiresSchemaTwenty(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := ValidateCompatibility(c.Known[:19], c); err == nil {
-		t.Fatal("one-year session binary accepted schema nineteen")
-	}
-	raw, err := os.ReadFile("../../migrations/000020_session_lineage_start.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Known[19].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("session lineage migration digest mismatch")
-	}
-}
-
-func TestGrowthFollowsTimerPauseAtSchemaTwentyFour(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Min != 29 || c.Max != 29 || len(c.Known) != 29 {
-		t.Fatalf("combined compatibility=%+v", c)
-	}
-	if err := ValidateCompatibility(c.Known[:23], c); err == nil {
-		t.Fatal("growth binary accepted timer-pause-only schema")
-	}
-	for _, expected := range []struct {
-		index   int
-		version int64
-		name    string
-	}{
-		{22, 23, "000023_timer_pause.sql"}, {23, 24, "000024_growth.sql"},
+	for name, applied := range map[string][]MigrationDigest{
+		"version 1 alone":                 {{Version: 1, Name: "000001_server_state.sql", SHA256: "e6bf0d5b545b295f1a03c78d607ce8edc8bc2772d49f58bcbe77edb757266085"}},
+		"the chain through 31":            chain,
+		"the chain through 31, then 32":   append(append([]MigrationDigest(nil), chain...), baseline),
+		"the pre-squash 32":               {{Version: 32, Name: "000032_live_activity.sql", SHA256: "64cb3c3ab2a043a7138f4407cc865cfb148b4e0f680d47f44d8a8548a6f6716f"}},
+		"the baseline with a changed sum": {{Version: 32, Name: baseline.Name, SHA256: strings.Repeat("0", 64)}},
 	} {
-		raw, err := os.ReadFile("../../migrations/" + expected.name)
-		if err != nil {
-			t.Fatal(err)
-		}
-		entry := c.Known[expected.index]
-		if entry.Version != expected.version || entry.Name != expected.name || entry.SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-			t.Fatalf("migration identity mismatch: %+v", entry)
+		if err := ValidateCompatibility(applied, c); err == nil {
+			t.Errorf("%s: accepted by the baseline binary", name)
 		}
 	}
-	if err := ValidateCompatibility(c.Known, c); err != nil {
+
+	databaseURL := os.Getenv("BABY_TRACKER_TEST_DATABASE_URL")
+	if databaseURL == "" {
+		t.Skip("BABY_TRACKER_TEST_DATABASE_URL is not set")
+	}
+	ctx := context.Background()
+	pool, err := pgxpool.New(ctx, databaseURL)
+	if err != nil {
 		t.Fatal(err)
+	}
+	defer pool.Close()
+	runner := New(migrations.Files)
+	for name, rows := range map[string]string{
+		"version 1":                        `(1, '000001_server_state.sql', 'e6bf0d5b545b295f1a03c78d607ce8edc8bc2772d49f58bcbe77edb757266085')`,
+		"versions 1 and the baseline":      `(1, '000001_server_state.sql', 'e6bf0d5b545b295f1a03c78d607ce8edc8bc2772d49f58bcbe77edb757266085'), (32, '000032_baseline.sql', '` + baseline.SHA256 + `')`,
+		"the homelab's legacy 29":          `(29, '000029_baby_icon.sql', '8a296b40a8a1aba5e8d4f0256a8bb2aa050c50c8ea30a6d9ae2d6cfd9e087288')`,
+		"the pre-squash 32 as the top row": `(32, '000032_live_activity.sql', '64cb3c3ab2a043a7138f4407cc865cfb148b4e0f680d47f44d8a8548a6f6716f')`,
+	} {
+		t.Run(name, func(t *testing.T) {
+			if _, err := pool.Exec(ctx, "DROP SCHEMA IF EXISTS app CASCADE; DROP SCHEMA public CASCADE; CREATE SCHEMA public"); err != nil {
+				t.Fatal(err)
+			}
+			if err := ensureTable(ctx, pool); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := pool.Exec(ctx, `INSERT INTO schema_migrations (version, name, sha256) VALUES `+rows); err != nil {
+				t.Fatal(err)
+			}
+			// A pre-baseline row is a history this binary does not have, not a
+			// newer database: migration_checksum_mismatch.
+			if err := runner.Apply(ctx, pool); !errors.Is(err, ErrChecksumMismatch) {
+				t.Fatalf("Apply over %s: %v", name, err)
+			}
+			if _, err := runner.Status(ctx, pool); !errors.Is(err, ErrChecksumMismatch) {
+				t.Fatalf("Status over %s: %v", name, err)
+			}
+			if _, err := runner.CompatibleVersion(ctx, pool, c); err == nil {
+				t.Fatalf("CompatibleVersion accepted %s", name)
+			}
+			var applied bool
+			if err := pool.QueryRow(ctx, `SELECT EXISTS (SELECT FROM pg_namespace WHERE nspname = 'app')
+				OR to_regclass('public.schema_compatibility') IS NOT NULL`).Scan(&applied); err != nil {
+				t.Fatal(err)
+			}
+			if applied {
+				t.Fatalf("the baseline ran over %s", name)
+			}
+		})
 	}
 }
 
-func TestRecoveryRequiresSchemaTwentyFive(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
+// A squashed baseline may start the history; nothing else may start it at a
+// version other than 1, and the history stays contiguous after it.
+func TestTheHistoryStartsAtOneOrABaseline(t *testing.T) {
+	digest := func(version int64, name string) MigrationDigest {
+		return MigrationDigest{Version: version, Name: name, SHA256: strings.Repeat(fmt.Sprint(version%10), 64)}
 	}
-	if err := ValidateCompatibility(c.Known[:24], c); err == nil {
-		t.Fatal("recovery binary accepted schema24")
+	baseline, next := digest(32, "000032_baseline.sql"), digest(33, "000033_next.sql")
+	for name, c := range map[string]Compatibility{
+		"the baseline":            {Min: 32, Max: 32, Known: []MigrationDigest{baseline}},
+		"the baseline and 33":     {Min: 32, Max: 33, Known: []MigrationDigest{baseline, next}},
+		"33 over the baseline":    {Min: 33, Max: 33, Known: []MigrationDigest{baseline, next}},
+		"a chain from 1":          {Min: 1, Max: 1, Known: []MigrationDigest{digest(1, "000001_first.sql")}},
+		"a baseline at version 1": {Min: 1, Max: 1, Known: []MigrationDigest{digest(1, "000001_baseline.sql")}},
+	} {
+		if err := validateCompatibilityCatalog(c); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
-	raw, err := os.ReadFile("../../migrations/000025_refresh_recovery.sql")
-	if err != nil {
-		t.Fatal(err)
+	for name, c := range map[string]Compatibility{
+		"a non-baseline start at 32": {Min: 32, Max: 32, Known: []MigrationDigest{digest(32, "000032_live_activity.sql")}},
+		"a gap after the baseline":   {Min: 32, Max: 34, Known: []MigrationDigest{baseline, digest(34, "000034_next.sql")}},
+		"min below the baseline":     {Min: 31, Max: 32, Known: []MigrationDigest{baseline}},
+		"max above the history":      {Min: 32, Max: 33, Known: []MigrationDigest{baseline}},
+		"nothing known":              {Min: 32, Max: 32},
+		"a misnamed baseline":        {Min: 32, Max: 32, Known: []MigrationDigest{digest(32, "000032_baseline_v2.sql")}},
+	} {
+		if err := validateCompatibilityCatalog(c); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
 	}
-	if c.Known[24].Version != 25 || c.Known[24].Name != "000025_refresh_recovery.sql" || c.Known[24].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("recovery migration identity mismatch")
-	}
-}
 
-func TestSleepSessionsFollowRefreshRecoveryAtSchemaTwentySix(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
+	// A binary with 33 over the baseline runs on 32 and 33; a 32 database
+	// still lacks 33's schema when min is 33.
+	both := Compatibility{Min: 32, Max: 33, Known: []MigrationDigest{baseline, next}}
+	if err := ValidateCompatibility([]MigrationDigest{baseline}, both); err != nil {
 		t.Fatal(err)
 	}
-	if c.Min != 29 || c.Max != 29 || len(c.Known) != 29 {
-		t.Fatalf("unexpected compatibility %+v", c)
-	}
-	if err := ValidateCompatibility(c.Known[:25], c); err == nil {
-		t.Fatal("sleep-sessions binary accepted schema25")
-	}
-	raw, err := os.ReadFile("../../migrations/000026_sleep_sessions.sql")
-	if err != nil {
+	if err := ValidateCompatibility([]MigrationDigest{baseline, next}, both); err != nil {
 		t.Fatal(err)
 	}
-	if c.Known[25].Version != 26 || c.Known[25].Name != "000026_sleep_sessions.sql" || c.Known[25].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("sleep-sessions migration identity mismatch")
+	if err := ValidateCompatibility([]MigrationDigest{next}, both); err == nil {
+		t.Fatal("33 without the baseline was accepted")
 	}
-}
+	if err := ValidateCompatibility([]MigrationDigest{baseline}, Compatibility{Min: 33, Max: 33, Known: both.Known}); err == nil {
+		t.Fatal("a min-33 binary accepted the baseline alone")
+	}
 
-// 000027 rewrites stored records and sync history into the current formats,
-// so this binary refuses a schema-26 database: the app stays stopped while
-// `migrate` runs, and 26 is no longer inside the window.
-func TestFormatCleanupRequiresSchemaTwentySeven(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
+	sql := func(text string) *fstest.MapFile { return &fstest.MapFile{Data: []byte(text)} }
+	for name, files := range map[string]fstest.MapFS{
+		"the baseline":        {"000032_baseline.sql": sql("SELECT 32;")},
+		"the baseline and 33": {"000032_baseline.sql": sql("SELECT 32;"), "000033_next.sql": sql("SELECT 33;")},
+	} {
+		if _, err := New(files).loadMigrations(); err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
-	if c.Min != 29 || c.Max != 29 || len(c.Known) != 29 {
-		t.Fatalf("unexpected compatibility %+v", c)
-	}
-	if err := ValidateCompatibility(c.Known[:26], c); err == nil {
-		t.Fatal("format-cleanup binary accepted schema26")
-	}
-	raw, err := os.ReadFile("../../migrations/000027_format_cleanup.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Known[26].Version != 27 || c.Known[26].Name != "000027_format_cleanup.sql" || c.Known[26].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("format-cleanup migration identity mismatch")
-	}
-	if err := ValidateCompatibility(c.Known, c); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestLiveActivityRequiresSchemaTwentyEight(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = ValidateCompatibility(c.Known[:27], c); err == nil {
-		t.Fatal("live activity binary accepted schema27")
-	}
-	raw, err := os.ReadFile("../../migrations/000028_live_activity_push.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Known[27].Version != 28 || c.Known[27].Name != "000028_live_activity_push.sql" || c.Known[27].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("live activity migration identity mismatch")
-	}
-}
-
-func TestBabyIconRequiresSchemaTwentyNine(t *testing.T) {
-	c, err := EmbeddedCompatibility()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = ValidateCompatibility(c.Known[:28], c); err == nil {
-		t.Fatal("baby icon binary accepted schema 28")
-	}
-	raw, err := os.ReadFile("../../migrations/000029_baby_icon.sql")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if c.Known[28].Version != 29 || c.Known[28].Name != "000029_baby_icon.sql" || c.Known[28].SHA256 != fmt.Sprintf("%x", sha256.Sum256(raw)) {
-		t.Fatal("baby icon migration identity mismatch")
+	for name, files := range map[string]fstest.MapFS{
+		"a non-baseline start at 32":    {"000032_live_activity.sql": sql("SELECT 32;")},
+		"a gap after the baseline":      {"000032_baseline.sql": sql("SELECT 32;"), "000034_next.sql": sql("SELECT 34;")},
+		"a chain below the baseline":    {"000031_chain.sql": sql("SELECT 31;"), "000032_baseline.sql": sql("SELECT 32;")},
+		"a gap before a later baseline": {"000001_first.sql": sql("SELECT 1;"), "000032_baseline.sql": sql("SELECT 32;")},
+	} {
+		if _, err := New(files).loadMigrations(); err == nil || !strings.Contains(err.Error(), "migration_gap") {
+			t.Errorf("%s: %v", name, err)
+		}
 	}
 }

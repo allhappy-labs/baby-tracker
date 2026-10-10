@@ -22,8 +22,8 @@ import LoggingFeature
 ///    comes back as the same device in `.shared`, is told to sign in, and
 ///    after signing in runs `activateAsOwner` with the device's deterministic
 ///    import checkpoint ID: the import an earlier store already finished on
-///    the server. It must import its empty store and replay the journal from
-///    cursor 0.
+///    the server. It must import its empty store and pull from cursor 0: every
+///    entity's latest state, deletes as tombstones.
 /// 2. **The app is deleted and installed again** (Phase C-3). iOS wipes the
 ///    App Group defaults and keeps the Keychain. The app starts `.localOnly`;
 ///    signing in offers no device-continuity proof (that lookup needs the
@@ -168,7 +168,7 @@ struct OwnerReinstallE2ETests {
         try await owner.sync()
 
         // Deletes, both ways: a session member, a standalone feed, a med and
-        // a diaper. Each leaves a tombstone in the journal.
+        // a diaper. Each leaves a tombstone row on the server.
         clock.advance(by: 30 * 60)
         let standalone = try owner.store.logBottle(volumeML: 90, contents: .formula, for: baby.id)
         try await owner.sync(.localWrite)
@@ -423,14 +423,21 @@ private func completedImportID(in store: BabyStore) throws -> UUID? {
         .first { $0.phase == .complete }?.checkpointID
 }
 
+/// The entities this store holds as server tombstones.
+///
+/// Read from the canonical bases, not the visible rows. Pulls deliver each
+/// entity's latest state (PostgreSQL authority, Phase 2), so an entity
+/// created and deleted before a pull from cursor 0 arrives only as its
+/// tombstone: `applyCanonical` stores it as a base with a null payload and
+/// creates no row for it, exactly as a snapshot page's tombstone always has.
+/// The legacy journal sent the create first, so a tombstoned row existed too.
 @MainActor
 private func tombstonedIDs(in store: BabyStore) throws -> Set<UUID> {
     let realm = store.activeRealm.encodedKey
-    var ids = Set(try store.context.fetch(FetchDescriptor<FeedEntry>()).filter { $0.realmKey == realm && $0.isTombstoned }.map(\.id))
-    ids.formUnion(try store.context.fetch(FetchDescriptor<SupplementEntry>()).filter { $0.realmKey == realm && $0.isTombstoned }.map(\.id))
-    ids.formUnion(try store.context.fetch(FetchDescriptor<DiaperEntry>()).filter { $0.realmKey == realm && $0.isTombstoned }.map(\.id))
-    ids.formUnion(try store.context.fetch(FetchDescriptor<SleepEntry>()).filter { $0.realmKey == realm && $0.isTombstoned }.map(\.id))
-    return ids
+    return Set(try store.context.fetch(FetchDescriptor<CanonicalEntityBase>()).filter {
+        $0.realmKey == realm
+            && (try? JSONSerialization.jsonObject(with: $0.payload, options: .fragmentsAllowed)) is NSNull
+    }.map(\.entityID))
 }
 
 /// The server's answer, read raw, to chunk 0 of an empty-store import under

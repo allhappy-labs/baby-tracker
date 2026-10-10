@@ -249,33 +249,6 @@ func TestHostedAppleExchangeUsesFixedEndpointAndExactForm(t *testing.T) {
 	}
 }
 
-func TestHostedAppleRevokeUsesFixedEndpointAndExactForm(t *testing.T) {
-	fixture := newHostedAppleFixture(t)
-	fixture.body = nil
-	fixture.requestFn = func(request *http.Request) {
-		if request.Method != http.MethodPost || request.URL.String() != appleRevokeURL {
-			t.Fatalf("request=%s %s", request.Method, request.URL)
-		}
-		form := readForm(t, request)
-		if len(form) != 4 || form.Get("client_id") != testHostedAppleClientID || form.Get("client_secret") == "" ||
-			form.Get("token") != "refresh+/=& token" || form.Get("token_type_hint") != "refresh_token" {
-			t.Fatalf("form=%v", form)
-		}
-	}
-	err := fixture.apple().Revoke(t.Context(), AppleRevocationRequest{
-		Binding: CredentialBinding{
-			AccountID:        "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
-			ServerInstanceID: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa",
-			Purpose:          AppleCredentialPurpose,
-			ObjectID:         "cccccccc-cccc-8ccc-8ccc-cccccccccccc",
-		},
-		RefreshToken: []byte("refresh+/=& token"),
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-}
-
 func TestHostedAppleDeniesRedirectWithoutMutatingInjectedClient(t *testing.T) {
 	fixture := newHostedAppleFixture(t)
 	var originalRedirectCalled atomic.Bool
@@ -445,42 +418,6 @@ func TestHostedAppleMapsStatusesAndSuppressesProviderDetails(t *testing.T) {
 	}
 }
 
-func TestHostedAppleRevocationMapsStatusesAndBoundsResponses(t *testing.T) {
-	fixture := newHostedAppleFixture(t)
-	request := AppleRevocationRequest{RefreshToken: []byte("refresh-token")}
-	const providerDetail = "DISTINCTIVE-REVOCATION-DETAIL"
-	fixture.body = []byte(providerDetail)
-	for _, status := range []int{400, 401, 403, 404, 409, 422, 429} {
-		fixture.status = status
-		err := fixture.apple().Revoke(t.Context(), request)
-		if Code(err) != "invalid_apple_authorization" || strings.Contains(err.Error(), providerDetail) {
-			t.Fatalf("status=%d code=%q err=%v", status, Code(err), err)
-		}
-	}
-	fixture.status = http.StatusBadRequest
-	fixture.body = bytes.Repeat([]byte{'x'}, 64<<10+1)
-	if err := fixture.apple().Revoke(t.Context(), request); Code(err) != "invalid_apple_authorization" {
-		t.Fatalf("oversized 4xx code=%q err=%v", Code(err), err)
-	}
-	for _, status := range []int{300, 301, 307, 500, 502, 503, 504} {
-		fixture.status = status
-		err := fixture.apple().Revoke(t.Context(), request)
-		if Code(err) != "apple_unavailable" || strings.Contains(err.Error(), providerDetail) {
-			t.Fatalf("status=%d code=%q err=%v", status, Code(err), err)
-		}
-	}
-
-	fixture.status = http.StatusOK
-	fixture.body = bytes.Repeat([]byte{'x'}, 64<<10)
-	if err := fixture.apple().Revoke(t.Context(), request); err != nil {
-		t.Fatal(err)
-	}
-	fixture.body = append(fixture.body, 'x')
-	if err := fixture.apple().Revoke(t.Context(), request); Code(err) != "apple_unavailable" {
-		t.Fatalf("code=%q err=%v", Code(err), err)
-	}
-}
-
 func TestHostedAppleRejectsInvalidInputsWithoutNetwork(t *testing.T) {
 	fixture := newHostedAppleFixture(t)
 	apple := fixture.apple()
@@ -493,36 +430,24 @@ func TestHostedAppleRejectsInvalidInputsWithoutNetwork(t *testing.T) {
 	if _, err := apple.ExchangeCode(t.Context(), request); Code(err) != "invalid_apple_authorization" {
 		t.Fatalf("code=%q err=%v", Code(err), err)
 	}
-	if err := apple.Revoke(t.Context(), AppleRevocationRequest{}); Code(err) != "invalid_apple_authorization" {
-		t.Fatalf("code=%q err=%v", Code(err), err)
-	}
-	if err := apple.Revoke(t.Context(), AppleRevocationRequest{RefreshToken: bytes.Repeat([]byte{'x'}, 16<<10+1)}); Code(err) != "invalid_apple_authorization" {
-		t.Fatalf("code=%q err=%v", Code(err), err)
-	}
 	if fixture.requests.Load() != 0 {
 		t.Fatalf("requests=%d", fixture.requests.Load())
 	}
 }
 
-func TestHostedAppleSupportsConcurrentExchangeAndRevocation(t *testing.T) {
+func TestHostedAppleSupportsConcurrentExchanges(t *testing.T) {
 	fixture := newHostedAppleFixture(t)
 	fixture.requestFn = func(request *http.Request) {
 		_ = readForm(t, request)
 	}
 	apple := fixture.apple()
 	var wait sync.WaitGroup
-	for index := 0; index < 20; index++ {
-		wait.Add(2)
+	for index := 0; index < 40; index++ {
+		wait.Add(1)
 		go func() {
 			defer wait.Done()
 			if _, err := apple.ExchangeCode(t.Context(), validAppleExchangeRequest()); err != nil {
 				t.Errorf("exchange: %v", err)
-			}
-		}()
-		go func() {
-			defer wait.Done()
-			if err := apple.Revoke(t.Context(), AppleRevocationRequest{RefreshToken: []byte("refresh-token")}); err != nil {
-				t.Errorf("revoke: %v", err)
 			}
 		}()
 	}

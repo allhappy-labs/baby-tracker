@@ -8,10 +8,10 @@ import (
 	"time"
 
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/identity"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/recovery"
 )
 
 const authBodyBytes int64 = 32 << 10
@@ -342,16 +342,22 @@ func authDependenciesError(request *http.Request, options Options) error {
 	return options.Gate.Check(request.Context())
 }
 
+// authReadinessCode is the stable code a readiness or gate failure is
+// reported as: one of the three refusal codes when the error is (or wraps) it,
+// service_unavailable otherwise. The error's own text never reaches the
+// client.
 func authReadinessCode(err error) string {
-	if errors.Is(err, recovery.ErrQuarantine) {
-		return "authorization_quarantine"
-	}
 	if err == nil {
 		return ""
 	}
-	switch err.Error() {
+	message := err.Error()
+	var code authority.Code
+	if errors.As(err, &code) {
+		message = string(code)
+	}
+	switch message {
 	case "authorization_quarantine", "hosted_adapter_unavailable", "credential_key_unavailable":
-		return err.Error()
+		return message
 	default:
 		return "service_unavailable"
 	}

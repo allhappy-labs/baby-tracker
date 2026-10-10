@@ -11,10 +11,11 @@ import (
 )
 
 // This exercises the init-only bootstrap in an isolated container. The
-// secrets bind starts without the optional hosted revoker credential, then the
-// same bootstrap is rerun after that file appears. Nothing under the host's
+// secrets bind starts without the export (maintenance) credential, then the
+// same bootstrap is rerun after that file appears. The bootstrap creates no
+// projector or Apple-revoker role (Phase 4 Task 27). Nothing under the host's
 // /run hierarchy is read or changed.
-func TestBootstrapInstallsAppleRevokerPasswordWhenSecretAppearsLater(t *testing.T) {
+func TestBootstrapInstallsExportPasswordWhenSecretAppearsLater(t *testing.T) {
 	if os.Getenv("BABY_TRACKER_REQUIRE_DATABASE") != "1" {
 		t.Skip("set BABY_TRACKER_REQUIRE_DATABASE=1 to run container bootstrap integration")
 	}
@@ -28,9 +29,8 @@ func TestBootstrapInstallsAppleRevokerPasswordWhenSecretAppearsLater(t *testing.
 	}
 	secretDir := t.TempDir()
 	for name, value := range map[string]string{
-		"migrator_password":  "migrator-bootstrap-test",
-		"projector_password": "projector-bootstrap-test",
-		"runtime_password":   "runtime-bootstrap-test",
+		"migrator_password": "migrator-bootstrap-test",
+		"runtime_password":  "runtime-bootstrap-test",
 	} {
 		if err := os.WriteFile(filepath.Join(secretDir, name), []byte(value+"\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -77,10 +77,10 @@ func TestBootstrapInstallsAppleRevokerPasswordWhenSecretAppearsLater(t *testing.
 	}
 	passwordIsNull := func() (string, error) {
 		command := exec.Command(docker, "exec", container, "psql", "-XAt", "-U", "postgres", "-d", "babytracker", "-c",
-			`SELECT rolpassword IS NULL FROM pg_authid WHERE rolname='baby_tracker_apple_revoker_app'`)
+			`SELECT rolpassword IS NULL FROM pg_authid WHERE rolname='baby_tracker_export_app'`)
 		output, err := command.CombinedOutput()
 		if err != nil {
-			return string(output), fmt.Errorf("inspect revoker password: %w", err)
+			return string(output), fmt.Errorf("inspect export password: %w", err)
 		}
 		return strings.TrimSpace(string(output)), nil
 	}
@@ -97,11 +97,16 @@ func TestBootstrapInstallsAppleRevokerPasswordWhenSecretAppearsLater(t *testing.
 		time.Sleep(100 * time.Millisecond)
 	}
 	if got != "t" {
-		t.Fatalf("revoker password absent bootstrap=%q, want null", got)
+		t.Fatalf("export password absent bootstrap=%q, want null", got)
+	}
+	retired := exec.Command(docker, "exec", container, "psql", "-XAt", "-U", "postgres", "-d", "babytracker", "-c",
+		`SELECT count(*) FROM pg_roles WHERE rolname IN ('baby_tracker_projector','baby_tracker_projector_app','baby_tracker_apple_revoker','baby_tracker_apple_revoker_app')`)
+	if output, err := retired.CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "0" {
+		t.Fatalf("the bootstrap created a retired role: %v: %s", err, output)
 	}
 
-	const laterPassword = "later-mounted-revoker-test"
-	if err := os.WriteFile(filepath.Join(secretDir, "apple_revocation_password"), []byte(laterPassword+"\n"), 0o600); err != nil {
+	const laterPassword = "later-mounted-export-test"
+	if err := os.WriteFile(filepath.Join(secretDir, "export_password"), []byte(laterPassword+"\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	rerun := exec.Command(docker, "exec", container, "/docker-entrypoint-initdb.d/20-init-users.sh")
@@ -113,11 +118,11 @@ func TestBootstrapInstallsAppleRevokerPasswordWhenSecretAppearsLater(t *testing.
 		t.Fatal(err)
 	}
 	if got != "f" {
-		t.Fatalf("revoker password after rerun=%q, want installed", got)
+		t.Fatalf("export password after rerun=%q, want installed", got)
 	}
 	authenticate := exec.Command(docker, "exec", "--env", "PGPASSWORD="+laterPassword, container,
-		"psql", "-XAt", "-h", "127.0.0.1", "-U", "baby_tracker_apple_revoker_app", "-d", "babytracker", "-c", "SELECT current_user")
-	if output, err := authenticate.CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "baby_tracker_apple_revoker_app" {
-		t.Fatalf("later revoker credential unusable: %v: %s", err, output)
+		"psql", "-XAt", "-h", "127.0.0.1", "-U", "baby_tracker_export_app", "-d", "babytracker", "-c", "SELECT current_user")
+	if output, err := authenticate.CombinedOutput(); err != nil || strings.TrimSpace(string(output)) != "baby_tracker_export_app" {
+		t.Fatalf("later export credential unusable: %v: %s", err, output)
 	}
 }

@@ -31,7 +31,7 @@ func TestBootstrapRoles(t *testing.T) {
 	if _, err := admin.Exec(ctx, string(bootstrap)); err != nil {
 		t.Fatal(err)
 	}
-	for _, role := range []string{"baby_tracker_runtime", "baby_tracker_maintenance", "baby_tracker_projector"} {
+	for _, role := range []string{"baby_tracker_runtime", "baby_tracker_maintenance"} {
 		t.Run(role, func(t *testing.T) {
 			t.Run("compatible reruns preserve incoming login members", func(t *testing.T) {
 				tx := begin(t, admin)
@@ -58,7 +58,7 @@ func TestBootstrapRoles(t *testing.T) {
 				})
 			}
 			for name, statement := range map[string]string{
-				"NOINHERIT":  "ALTER ROLE " + pgx.Identifier{role}.Sanitize() + " NOINHERIT",
+				"NOINHERIT":   "ALTER ROLE " + pgx.Identifier{role}.Sanitize() + " NOINHERIT",
 				"role config": "ALTER ROLE " + pgx.Identifier{role}.Sanitize() + " SET search_path=pg_catalog",
 				"expiry":      "ALTER ROLE " + pgx.Identifier{role}.Sanitize() + " VALID UNTIL '2000-01-01'",
 			} {

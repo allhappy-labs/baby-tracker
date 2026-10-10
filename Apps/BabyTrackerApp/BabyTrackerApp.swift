@@ -5,12 +5,14 @@ import SettingsFeature
 
 @main
 struct BabyTrackerApp: App {
-    /// The one environment for this process, built at launch rather than by a
-    /// view. A Live Activity started by a push launches the app in the
-    /// background, maybe with no scene at all, and its update token still has
-    /// to be registered: the store, the restored account and the push
-    /// registration must not wait for `RootView` to exist.
-    @State private var environment: AppEnvironment
+    /// Owns the app's one `AppEnvironment`, built at process launch when
+    /// protected data is available, and takes APNs registration and
+    /// background pushes (see `AppDelegate`). A Live Activity started by a
+    /// push launches the app in the background, maybe with no scene at all,
+    /// and its update token still has to be registered: the store, the
+    /// restored account and the push registration must not wait for
+    /// `RootView` to exist.
+    @UIApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
 
     init() {
         BabyTrackerShortcuts.updateAppShortcutParameters()
@@ -21,12 +23,11 @@ struct BabyTrackerApp: App {
         LiveActivityCardActions.makeGate = { store in LiveActivityBackgroundComposition.make(store: store) }
         // The tap returns once it has written; the publish runs after it.
         LiveActivityCardActions.runInBackground = LiveActivityBackgroundComposition.runInBackground
-        _environment = State(initialValue: AppEnvironment())
     }
 
     var body: some Scene {
         WindowGroup {
-            RootView(environment: environment)
+            RootView(environment: appDelegate.environment)
         }
     }
 }

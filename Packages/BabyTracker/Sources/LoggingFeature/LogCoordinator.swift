@@ -61,6 +61,22 @@ private extension EntryRef {
     }
 }
 
+public extension LogSheet {
+    /// A session's list of parts: a full-height system sheet, not a fitted
+    /// one — it scrolls a varying number of rows. Everything else is a panel
+    /// presented with `fittedSheet`.
+    @MainActor
+    func opensSessionList(store: BabyStore, babyID: UUID) -> Bool {
+        switch self {
+        case .session: return true
+        case .editEntry(let ref):
+            if case .session = EditDestination.resolve(ref, store: store, babyID: babyID) { return true }
+            return false
+        default: return false
+        }
+    }
+}
+
 /// The sheet an entry opens in edit mode, decided from the entry as it is
 /// when the sheet opens.
 enum EditDestination: Equatable {
@@ -145,8 +161,8 @@ public struct LogSheetView: View {
             BottleSheet(store: store, babyID: babyID, unit: unit, mode: .amount(feedID: feedID), onDone: onDone)
         case .solids:
             SolidsSheet(store: store, babyID: babyID, onDone: onDone)
-        // No detent here for any sheet: each sizes itself to its content —
-        // see `sheetHeight`.
+        // No detent here for any sheet: each sets its own, full height or one
+        // fixed height — see `SheetSizing.swift`.
         case .measurement:
             MeasurementSheet(store: store, mode: .create(babyID: babyID), onDone: onDone)
         case .supplement:
@@ -156,7 +172,7 @@ public struct LogSheetView: View {
         case .more:
             MoreSheet(store: store, babyID: babyID, onSwitchTo: onSwitchTo, onDone: onDone)
         case .pastEntry:
-            PastEntrySheet(store: store, babyID: babyID, unit: unit, onDone: onDone)
+            NewPartSheet(store: store, babyID: babyID, unit: unit, onDone: onDone)
         case .editEntry(let ref):
             EditSheetRouter(ref: ref, store: store, babyID: babyID, unit: unit, onDone: onDone)
         case .session(let kind, let rootID):

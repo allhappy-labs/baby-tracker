@@ -120,9 +120,11 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
         .sheet(item: $inviteSheet, onDismiss: dismissed) { request in
             InviteSheet(model: model, showing: request.invitation)
         }
-        .sheet(item: $unavailableInvitation, onDismiss: dismissed) { invitation in
+        .fittedSheet(item: $unavailableInvitation, onDismiss: dismissed) { invitation in
             UnavailableInvitationSheet(invitation: invitation) {
                 run { try await model.revokeInvitation(invitation.id) }
+            } onClose: {
+                unavailableInvitation = nil
             }
         }
         // A link opened before any server was chosen starts on the server
@@ -165,10 +167,10 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
             unavailableInvitation = nil
             pendingConfirmation = nil
         }
-        .sheet(item: joinConfirmation, onDismiss: dismissed) { request in
+        .fittedSheet(item: joinConfirmation, onDismiss: dismissed) { request in
             JoinConfirmationView(model: model, intent: request.intent) { pendingInvitation = nil }
         }
-        .sheet(item: $pendingConfirmation, onDismiss: dismissed) { confirmation in
+        .fittedSheet(item: $pendingConfirmation, onDismiss: dismissed) { confirmation in
             FamilyLifecycleConfirmationView(confirmation: confirmation) {
                 pendingConfirmation = nil
                 run(confirmation.action)

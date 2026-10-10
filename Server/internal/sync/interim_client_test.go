@@ -83,6 +83,9 @@ func (allowAll) Take(context.Context, string, string, limits.Policy) (limits.Dec
 func (allowAll) TakeMany(context.Context, []limits.Charge) (limits.Decision, error) {
 	return limits.Decision{Allowed: true}, nil
 }
+func (allowAll) Peek(context.Context, []limits.Charge) (limits.Decision, error) {
+	return limits.Decision{Allowed: true}, nil
+}
 
 // interimPhone sends requests exactly as FamilySyncHTTPClient.send does at
 // d1daa6a: bearer token, protocol and capability headers, all four feature
@@ -175,7 +178,7 @@ func requireApplied(t *testing.T, label string, response protocol.SyncResponse) 
 }
 
 func TestInterimClientWritesAreAcceptedWithItsFeatureHeaders(t *testing.T) {
-	h := testkit.New(t)
+	h := testkit.NewAtFixtureClock(t) // the phone's timer times are written against it
 	baby := testkit.MustMutation(t, "baby.json")
 	baby.EntityID = interimBabyID
 	if out, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, baby); err != nil || out.Status != "applied" {
@@ -251,6 +254,6 @@ func TestOlderFeedCreatesAreRefusedAsInvalidRequests(t *testing.T) {
 		}
 	}
 	if after := h.FamilySequence(t); after != before {
-		t.Fatalf("refused writes advanced the journal %d -> %d", before, after)
+		t.Fatalf("refused writes advanced the family sequence %d -> %d", before, after)
 	}
 }

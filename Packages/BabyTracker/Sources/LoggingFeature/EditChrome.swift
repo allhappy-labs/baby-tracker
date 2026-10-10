@@ -20,6 +20,12 @@ public enum EditChromeCopy {
     public static let deleteConfirmTitle = LoggingL10n.text("Delete this entry?")
     public static let keep = LoggingL10n.text("Keep it")
     public static let timeLabel = LoggingL10n.text("Date and time")
+    public static let optional = LoggingL10n.text("Optional")
+    public static let note = LoggingL10n.text("Note")
+    public static let expanded = LoggingL10n.text("Expanded")
+    public static let collapsed = LoggingL10n.text("Collapsed")
+    public static let cancel = LoggingL10n.text("Cancel")
+    public static let details = LoggingL10n.text("Details")
 }
 
 /// An edited entry's time, with its date: an entry is often corrected the day
@@ -67,20 +73,18 @@ public struct EditTimeRow: View {
     }
 }
 
-/// Save and Delete, pinned under an edit mode's content. Save is the sheet's
-/// one primary action; Delete sits under it in the destructive colour and
-/// only asks for the confirmation — `deleteConfirmation` does the asking.
+/// Save and Delete on one row, pinned under an edit mode's content. Save is
+/// the sheet's one primary action; Delete sits beside it in the destructive
+/// colour and only asks for the confirmation — `deleteConfirmation` does the
+/// asking. With no `onDelete` (new mode) there is Save only. No bar behind
+/// them: the sheet's own surface is the background.
 public struct EditFooter: View {
     private let canSave: Bool
     private let identifierPrefix: String
     private let onSave: () -> Void
-    private let onDelete: () -> Void
+    private let onDelete: (() -> Void)?
 
-    /// What the footer adds to a sheet's stated height: Save at 56, Delete
-    /// at 44, and the padding around them.
-    public static let height: CGFloat = 136
-
-    public init(canSave: Bool, identifierPrefix: String, onSave: @escaping () -> Void, onDelete: @escaping () -> Void) {
+    public init(canSave: Bool, identifierPrefix: String, onSave: @escaping () -> Void, onDelete: (() -> Void)?) {
         self.canSave = canSave
         self.identifierPrefix = identifierPrefix
         self.onSave = onSave
@@ -88,7 +92,18 @@ public struct EditFooter: View {
     }
 
     public var body: some View {
-        VStack(spacing: 8) {
+        HStack(spacing: 12) {
+            if let onDelete {
+                Button(role: .destructive, action: onDelete) {
+                    Text(EditChromeCopy.delete)
+                        .fixedSize(horizontal: false, vertical: true)
+                        // The style's 12 pt padding either side: Save's 56.
+                        .frame(minHeight: 32)
+                }
+                .buttonStyle(.tracker(Palette.destructive, cornerRadius: 20))
+                .accessibilityIdentifier(identifierPrefix + ".delete")
+            }
+
             Button(action: onSave) {
                 Text(EditChromeCopy.save)
                     .font(.headline)
@@ -98,21 +113,10 @@ public struct EditFooter: View {
             .disabled(!canSave)
             .opacity(canSave ? 1 : 0.5)
             .accessibilityIdentifier(identifierPrefix + ".save")
-
-            Button(role: .destructive, action: onDelete) {
-                Text(EditChromeCopy.delete)
-                    .font(.body.weight(.semibold))
-                    .foregroundStyle(Palette.destructive)
-                    .frame(maxWidth: .infinity, minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .buttonStyle(.plain)
-            .accessibilityIdentifier(identifierPrefix + ".delete")
         }
         .padding(.horizontal, 20)
-        .padding(.top, 12)
+        .padding(.top, 8)
         .padding(.bottom, 8)
-        .background(.bar)
     }
 }
 
@@ -141,19 +145,22 @@ private struct EditFooterModifier: ViewModifier {
     let canSave: Bool
     let identifierPrefix: String
     let onSave: () -> Void
-    let onDelete: () -> Void
+    /// Nil in new mode: no Delete, and so no confirmation behind it.
+    let onDelete: (() -> Void)?
     @State private var isConfirmingDelete = false
 
     func body(content: Content) -> some View {
         if isPresented {
-            content
-                .safeAreaInset(edge: .bottom, spacing: 0) {
-                    EditFooter(canSave: canSave, identifierPrefix: identifierPrefix, onSave: onSave) {
-                        isConfirmingDelete = true
-                    }
-                }
+            // Under the content, not over it as a safe-area inset: an inset
+            // reached a freshly shown panel late, so Save and Delete popped in.
+            VStack(spacing: 0) {
+                content
+                EditFooter(canSave: canSave, identifierPrefix: identifierPrefix, onSave: onSave,
+                           onDelete: onDelete.map { _ in { isConfirmingDelete = true } })
+            }
+                // The dialog is never shown without the button that asks for it.
                 .deleteConfirmation(isPresented: $isConfirmingDelete, identifierPrefix: identifierPrefix,
-                                    onDelete: onDelete)
+                                    onDelete: onDelete ?? {})
         } else {
             content
         }
@@ -256,13 +263,14 @@ public extension View {
 
     /// The edit-mode footer, pinned under the content so a Form scrolls
     /// behind it rather than pushing it off the sheet, with Delete's
-    /// confirmation. Does nothing when `isPresented` is false.
+    /// confirmation. Does nothing when `isPresented` is false. A nil
+    /// `onDelete` (new mode) hides Delete.
     func editFooter(
         isPresented: Bool = true,
         canSave: Bool,
         identifierPrefix: String,
         onSave: @escaping () -> Void,
-        onDelete: @escaping () -> Void
+        onDelete: (() -> Void)?
     ) -> some View {
         modifier(EditFooterModifier(isPresented: isPresented, canSave: canSave, identifierPrefix: identifierPrefix,
                                     onSave: onSave, onDelete: onDelete))

@@ -2,11 +2,11 @@ package family
 
 import (
 	"context"
-	"encoding/json"
 	"time"
 
 	"babytracker/server/internal/access"
-	"babytracker/server/internal/security"
+	"babytracker/server/internal/authority"
+	"github.com/jackc/pgx/v5"
 )
 
 type RecoveryStatus struct {
@@ -16,160 +16,109 @@ type RecoveryStatus struct {
 	CanRecover bool      `json:"can_recover"`
 }
 
+func recoveryStatusOf(status authority.RecoveryStatus) RecoveryStatus {
+	return RecoveryStatus{FamilyID: status.FamilyID, State: status.State, PurgeAfter: status.PurgeAfter.UTC(), CanRecover: status.CanRecover}
+}
+
+// ScheduleDeletion schedules the owner's family for deletion and returns its
+// recovery window. An exact retry returns the window of the family the
+// original command scheduled, read now (legacy recoveryStatusFromState).
 func (service *Service) ScheduleDeletion(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (RecoveryStatus, error) {
 	if !confirmed {
 		return RecoveryStatus{}, ErrConfirmationRequired
 	}
-	if service == nil || service.security == nil || !validUUID(commandID) {
+	if service == nil || service.authority == nil || !validUUID(commandID) {
 		return RecoveryStatus{}, ErrInvalidRequest
 	}
-	var receipt security.ReceiptView
-	var replay bool
-	var status RecoveryStatus
-	var slot security.FamilySlotView
-	var members []security.MembershipView
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, replay = view.Receipt(principal.AccountID, commandID)
-		if replay {
-			if receipt.Kind != "family_deletion_scheduled" || len(receipt.FamilyIDs) != 1 {
-				return ErrCommandIDReused
-			}
-			var err error
-			status, err = service.recoveryStatusFromState(view, principal.AccountID, receipt.FamilyIDs[0])
-			return err
-		}
-		var ok bool
-		slot, ok = view.FamilySlot(principal.AccountID)
-		if !ok || slot.State != "active" {
-			return ErrFamilyUnavailable
-		}
-		members = view.Memberships(slot.FamilyID)
-		return nil
-	})
+	result, err := service.authority.ScheduleDeletion(ctx, authority.ScheduleDeletion{CommandID: commandID, OwnerAccountID: principal.AccountID,
+		Principal: principal})
 	if err != nil {
 		return RecoveryStatus{}, familyError(err)
 	}
-	if replay {
-		return status, nil
+	status, err := service.authority.FamilyRecoveryStatus(ctx, principal.AccountID, result.FamilyID)
+	if err != nil {
+		return RecoveryStatus{}, familyError(err)
 	}
-	if _, err := service.Authorize(ctx, principal, slot.FamilyID, "delete_family"); err != nil {
+	return recoveryStatusOf(status), nil
+}
+
+// RecoveryStatus is the deletion-pending family a live family_recovery
+// session may recover. Every other caller, a dead or non-recovery session
+// included, is recovery_only.
+func (service *Service) RecoveryStatus(ctx context.Context, principal access.Principal) (RecoveryStatus, error) {
+	if service == nil || service.authority == nil {
+		return RecoveryStatus{}, ErrUnavailable
+	}
+	if err := service.requireRecoverySession(ctx, principal); err != nil {
 		return RecoveryStatus{}, err
 	}
-	memberIDs, roles := make([]string, 0, len(members)), make([]string, 0, len(members))
-	for _, member := range members {
-		if member.Status == "active" {
-			memberIDs, roles = append(memberIDs, member.AccountID), append(roles, member.Role)
-		}
-	}
-	payload := security.FamilyLifecyclePayload{Version: "v1", FamilyID: slot.FamilyID, ClaimOwnerAccountID: principal.AccountID,
-		PreviousMemberIDs: memberIDs, PreviousRoles: roles}
-	raw, _ := json.Marshal(payload)
-	command := security.Command{ID: commandID, Kind: "family_deletion_scheduled", AffectedAccountIDs: memberIDs,
-		AffectedFamilyIDs: []string{slot.FamilyID}, Payload: raw}
-	if _, err := service.security.Execute(ctx, principal, command); err != nil {
+	status, err := service.authority.RecoveryStatus(ctx, principal.AccountID)
+	if err != nil {
 		return RecoveryStatus{}, familyError(err)
 	}
-	err = service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		var err error
-		status, err = service.recoveryStatusFromState(view, principal.AccountID, slot.FamilyID)
-		return err
-	})
-	return status, familyErrorOrNil(err)
+	return recoveryStatusOf(status), nil
 }
 
-func (service *Service) RecoveryStatus(ctx context.Context, principal access.Principal) (RecoveryStatus, error) {
-	if service == nil || service.security == nil {
-		return RecoveryStatus{}, ErrUnavailable
+// requireRecoverySession admits only a principal authenticated with the
+// family_recovery scope whose session is still live and still recovery
+// scoped (legacy liveLifecyclePrincipal). The authority's family read is the
+// check: for a live recovery session it answers recovery_only, for a live
+// session of any other scope it grants or refuses on family policy, and for
+// a dead session it refuses before policy. Only an operational failure is
+// reported as such; every other outcome is recovery_only, as legacy said.
+func (service *Service) requireRecoverySession(ctx context.Context, principal access.Principal) error {
+	if principal.Scope != "family_recovery" {
+		return ErrRecoveryOnly
 	}
-	var status RecoveryStatus
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		if principal.Scope != "family_recovery" || !liveLifecyclePrincipal(view, principal, service.now().UTC()) {
-			return ErrRecoveryOnly
-		}
-		slot, ok := view.FamilySlot(principal.AccountID)
-		if !ok || slot.State != "family_recovery" {
-			return ErrRecoveryOnly
-		}
-		var err error
-		status, err = service.recoveryStatusFromState(view, principal.AccountID, slot.FamilyID)
-		return err
-	})
-	return status, familyErrorOrNil(err)
-}
-
-func (service *Service) Recover(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
-	return service.executeRecoveryLifecycle(ctx, principal, commandID, confirmed, "family_recovered")
-}
-
-func (service *Service) Forfeit(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (security.CommandResult, error) {
-	return service.executeRecoveryLifecycle(ctx, principal, commandID, confirmed, "recovery_forfeited")
-}
-
-func (service *Service) executeRecoveryLifecycle(ctx context.Context, principal access.Principal, commandID string, confirmed bool, kind security.EventKind) (security.CommandResult, error) {
-	if !confirmed {
-		return security.CommandResult{}, ErrConfirmationRequired
-	}
-	if service == nil || service.security == nil || !validUUID(commandID) {
-		return security.CommandResult{}, ErrInvalidRequest
-	}
-	var receipt security.ReceiptView
-	var exists bool
-	err := service.security.WithAuthorityView(ctx, func(view security.AuthorityView) error {
-		receipt, exists = view.Receipt(principal.AccountID, commandID)
+	err := service.authority.WithFamilyReadTx(ctx, principal, "read", func(pgx.Tx, access.Grant) error { return nil })
+	switch authority.CodeOf(err) {
+	case "recovery_only":
 		return nil
-	})
-	if err != nil {
-		return security.CommandResult{}, familyError(err)
+	case "service_unavailable", "scope_failed":
+		return familyError(err)
+	default:
+		return ErrRecoveryOnly
 	}
-	if exists {
-		if receipt.Kind != kind || len(receipt.FamilyIDs) != 1 {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		command := recoveryLifecycleCommand(commandID, kind, principal.AccountID, receipt.FamilyIDs[0])
-		hash, hashErr := security.CanonicalCommandHash(principal, command)
-		if hashErr != nil || hash != receipt.CommandHash {
-			return security.CommandResult{}, ErrCommandIDReused
-		}
-		return receipt.Result, nil
-	}
-	status, err := service.RecoveryStatus(ctx, principal)
-	if err != nil {
-		return security.CommandResult{}, err
-	}
-	command := recoveryLifecycleCommand(commandID, kind, principal.AccountID, status.FamilyID)
-	result, err := service.security.Execute(ctx, principal, command)
-	return result, familyErrorOrNil(err)
 }
 
-func recoveryLifecycleCommand(commandID string, kind security.EventKind, accountID, familyID string) security.Command {
-	payload := security.FamilyLifecyclePayload{Version: "v1", FamilyID: familyID, ClaimOwnerAccountID: accountID}
-	raw, _ := json.Marshal(payload)
-	return security.Command{ID: commandID, Kind: kind, AffectedAccountIDs: []string{accountID}, AffectedFamilyIDs: []string{familyID}, Payload: raw}
+func (service *Service) Recover(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (authority.Result, error) {
+	return service.executeRecoveryLifecycle(ctx, principal, commandID, confirmed, authority.KindFamilyRecovered)
 }
 
-func (service *Service) recoveryStatusFromState(state security.AuthorityView, accountID, familyID string) (RecoveryStatus, error) {
-	family, familyOK := state.Family(familyID)
-	claim, claimOK := state.RecoveryClaim(familyID, accountID)
-	if !familyOK || !claimOK || family.Status != "deletion_pending" {
-		if claimOK && claim.Status == "forfeited" {
-			return RecoveryStatus{}, ErrRecoveryForfeited
+func (service *Service) Forfeit(ctx context.Context, principal access.Principal, commandID string, confirmed bool) (authority.Result, error) {
+	return service.executeRecoveryLifecycle(ctx, principal, commandID, confirmed, authority.KindRecoveryForfeited)
+}
+
+// executeRecoveryLifecycle recovers or forfeits the family the caller's
+// recovery session names. As in the legacy service, an exact retry is
+// answered first (from any later session of the account), and only a first
+// attempt must pass RecoveryStatus before the command runs.
+func (service *Service) executeRecoveryLifecycle(ctx context.Context, principal access.Principal, commandID string, confirmed bool, kind authority.Kind) (authority.Result, error) {
+	if !confirmed {
+		return authority.Result{}, ErrConfirmationRequired
+	}
+	if service == nil || service.authority == nil || !validUUID(commandID) {
+		return authority.Result{}, ErrInvalidRequest
+	}
+	execute := func() (authority.Result, error) {
+		if kind == authority.KindFamilyRecovered {
+			return commandResult(service.authority.RecoverFamily(ctx, authority.RecoverFamily{CommandID: commandID, AccountID: principal.AccountID,
+				Principal: principal}))
 		}
-		return RecoveryStatus{}, ErrFamilyUnavailable
+		return commandResult(service.authority.ForfeitRecovery(ctx, authority.ForfeitRecovery{CommandID: commandID, AccountID: principal.AccountID,
+			Principal: principal}))
 	}
-	purgeAfter, err := time.Parse(time.RFC3339Nano, family.PurgeAfter)
-	if err != nil {
-		return RecoveryStatus{}, ErrUnavailable
+	if validUUID(principal.AccountID) {
+		_, found, err := service.authority.CommandReceipt(ctx, principal.AccountID, commandID)
+		if err != nil {
+			return authority.Result{}, familyError(err)
+		}
+		if found {
+			return execute()
+		}
 	}
-	canRecover := claim.Status == "active" && service.now().UTC().Before(purgeAfter)
-	return RecoveryStatus{FamilyID: familyID, State: family.Status, PurgeAfter: purgeAfter, CanRecover: canRecover}, nil
-}
-
-func liveLifecyclePrincipal(state security.AuthorityView, principal access.Principal, now time.Time) bool {
-	account, accountOK := state.Account(principal.AccountID)
-	device, deviceOK := state.Device(principal.DeviceID)
-	session, sessionOK := state.Session(principal.SessionID)
-	expiresAt, err := time.Parse(time.RFC3339Nano, session.ExpiresAt)
-	return accountOK && account.Status == "active" && deviceOK && device.Status == "active" && device.AccountID == principal.AccountID &&
-		sessionOK && session.Status == "active" && session.AccountID == principal.AccountID && session.DeviceID == principal.DeviceID &&
-		session.RecoveryEpoch == principal.RecoveryEpoch && session.SecurityRevision == principal.SecurityRevision && err == nil && now.Before(expiresAt)
+	if _, err := service.RecoveryStatus(ctx, principal); err != nil {
+		return authority.Result{}, err
+	}
+	return execute()
 }

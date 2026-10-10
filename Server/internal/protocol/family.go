@@ -9,7 +9,7 @@ func FamilyCapabilities() []string {
 func RecoveryCapabilities() []string { return []string{CapabilityRecoveryV1} }
 
 func ServerCapabilities() []string {
-	return []string{CapabilityIdentityV1, CapabilityFamilyLifecycleV1, CapabilityRecoveryV1, CapabilityRecordsV1, CapabilitySnapshotV1, CapabilityTimerCommandsV1, CapabilityImportResolverV1, CapabilityLiveHintsV1, CapabilityExportV1}
+	return []string{CapabilityIdentityV1, CapabilityFamilyLifecycleV1, CapabilityRecoveryV1, CapabilityRecordsV1, CapabilitySnapshotV1, CapabilityTimerCommandsV1, CapabilityImportResolverV1, CapabilityLiveHintsV1, CapabilityExportV1, CapabilityPushTokenV1}
 }
 
 func ValidateFamilyRequestCapabilities(request any) error {

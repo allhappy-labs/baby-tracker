@@ -1,3 +1,5 @@
+Superseded: the homelab was cut over on 2026-10-10 by docs/verification/2026-10-10-homelab-cutover-runbook.md, which keeps Live Activity push on through deploy/unraid/push.yaml.
+
 # Family Live Activity push — rollout and two-phone acceptance
 
 **Status: not executed.** This runbook was written and checked against the tree on 2026-10-04 at branch `feat/family-live-activity-push`, `87c6f50`, and re-checked after the final review fix wave at its gate commit (recorded in the [verification note](../verification/2026-10-03-family-live-activity-push.md)). Nothing in it has been run against Apple, the phones or the Unraid server.

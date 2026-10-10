@@ -18,10 +18,10 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/auth"
+	"babytracker/server/internal/authority"
 	"babytracker/server/internal/family"
 	"babytracker/server/internal/limits"
 	"babytracker/server/internal/protocol"
-	"babytracker/server/internal/security"
 	"github.com/jackc/pgx/v5/pgconn"
 )
 
@@ -52,7 +52,7 @@ func TestServerFaultsLogOnceWithCauseAndClientGone(t *testing.T) {
 	}
 
 	// A genuine failure, with its Postgres cause, at ERROR.
-	cause := fmt.Errorf("%w: %w", security.ErrUnavailable, &pgconn.PgError{Code: "57P01", Message: "terminating connection due to administrator command"})
+	cause := fmt.Errorf("%w: %w", authority.ErrUnavailable, &pgconn.PgError{Code: "57P01", Message: "terminating connection due to administrator command"})
 	recorder := httptest.NewRecorder()
 	writeSyncFamilyError(recorder, request(context.Background()), options, cause)
 	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"code":"service_unavailable"`) {
@@ -72,7 +72,7 @@ func TestServerFaultsLogOnceWithCauseAndClientGone(t *testing.T) {
 	gone, cancel := context.WithCancel(context.Background())
 	cancel()
 	recorder = httptest.NewRecorder()
-	writeSyncFamilyError(recorder, request(gone), options, fmt.Errorf("%w: %w", security.ErrUnavailable, context.Canceled))
+	writeSyncFamilyError(recorder, request(gone), options, fmt.Errorf("%w: %w", authority.ErrUnavailable, context.Canceled))
 	if recorder.Code != http.StatusServiceUnavailable || !strings.Contains(recorder.Body.String(), `"code":"service_unavailable"`) {
 		t.Fatalf("status=%d body=%s", recorder.Code, recorder.Body.String())
 	}
@@ -122,7 +122,7 @@ func TestSyncLimiterFailureLogsItsCause(t *testing.T) {
 	options.InstanceID, options.RecoveryEpoch = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", 1
 	var logs bytes.Buffer
 	options.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
-	options.SyncService = syncServiceStub{apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
+	options.SyncService = syncServiceStub{principal: p, apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
 		t.Fatal("service called after a limiter failure")
 		return protocol.SyncResponse{}, nil
 	}}
@@ -159,7 +159,7 @@ func TestSyncLimiterFailureLogsItsCause(t *testing.T) {
 // A data exception (SQLSTATE class 22) quotes the offending value, which may
 // be the client's own input: only the code is logged for that class.
 func TestDescribeCauseOmitsDataExceptionText(t *testing.T) {
-	data := describeCause(fmt.Errorf("%w: %w", security.ErrUnavailable, &pgconn.PgError{Code: "22P02", Message: `invalid input syntax for type uuid: "client-value"`}))
+	data := describeCause(fmt.Errorf("%w: %w", authority.ErrUnavailable, &pgconn.PgError{Code: "22P02", Message: `invalid input syntax for type uuid: "client-value"`}))
 	if data != "service_unavailable; sqlstate 22P02" {
 		t.Fatalf("data exception described as %q", data)
 	}
@@ -168,21 +168,70 @@ func TestDescribeCauseOmitsDataExceptionText(t *testing.T) {
 	}
 }
 
+// syncServiceStub serves a sync or snapshot request as the authenticated
+// principal: stubAuthorize applies the request's hooks to principal and its
+// grant (grant, or by default principal's session family as owner), then
+// apply or snapshot serves it.
 type syncServiceStub struct {
-	apply    func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error)
-	snapshot func(context.Context, access.Principal, protocol.SnapshotRequest) (protocol.SnapshotResponse, error)
+	principal access.Principal
+	grant     *access.Grant
+	apply     func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error)
+	snapshot  func(context.Context, access.Principal, protocol.SnapshotRequest) (protocol.SnapshotResponse, error)
+}
+
+// stubAuthorize applies req as the authority's request seam would for an
+// authenticated principal p whose family policy grants g: no digests is
+// session_revoked, then Admit(p), then Charge(p, g).
+func stubAuthorize(req authority.Request, p access.Principal, g access.Grant) (access.Principal, access.Grant, error) {
+	if len(req.Digests) == 0 {
+		return access.Principal{}, access.Grant{}, authority.ErrSessionRevoked
+	}
+	if req.Admit != nil {
+		if err := req.Admit(p); err != nil {
+			return access.Principal{}, access.Grant{}, err
+		}
+	}
+	if req.Charge != nil {
+		if err := req.Charge(p, g); err != nil {
+			return access.Principal{}, access.Grant{}, err
+		}
+	}
+	return p, g, nil
+}
+
+// requestAuthorizerStub authorizes every request as principal, with grant
+// (by default the principal's session family, as its owner), running Admit
+// and Charge as the authority does (stubAuthorize).
+type requestAuthorizerStub struct {
+	principal access.Principal
+	grant     *access.Grant
+}
+
+func (s requestAuthorizerStub) AuthorizeRequest(_ context.Context, req authority.Request, _ string) (access.Principal, access.Grant, error) {
+	g := access.Grant{AccountID: s.principal.AccountID, FamilyID: s.principal.SessionFamilyID, Role: "owner"}
+	if s.grant != nil {
+		g = *s.grant
+	}
+	return stubAuthorize(req, s.principal, g)
+}
+
+func (s syncServiceStub) authorize(req authority.Request) (access.Principal, error) {
+	g := access.Grant{AccountID: s.principal.AccountID, FamilyID: s.principal.SessionFamilyID, Role: "owner"}
+	if s.grant != nil {
+		g = *s.grant
+	}
+	p, _, err := stubAuthorize(req, s.principal, g)
+	return p, err
 }
 
 func TestSnapshotHTTPUsesExactCapabilitiesQueryShapeAndTwoPullCharges(t *testing.T) {
 	p := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", DeviceID: "21000000-0000-4000-8000-000000000001", Scope: "family", SessionScope: "family", SessionFamilyID: "30000000-0000-4000-8000-000000000001"}
 	familyID := "30000000-0000-4000-8000-000000000001"
 	var charged []limits.Charge
-	options := familyHandlerOptions(t, p, familyServiceStub{current: func(context.Context, access.Principal) (family.FamilyView, error) {
-		return family.FamilyView{ID: familyID}, nil
-	}}, func(got []limits.Charge) { charged = append([]limits.Charge(nil), got...) })
+	options := familyHandlerOptions(t, p, familyServiceStub{}, func(got []limits.Charge) { charged = append([]limits.Charge(nil), got...) })
 	effective := protocol.DefaultLimits()
 	options.SyncLimits = &effective
-	options.SyncService = syncServiceStub{snapshot: func(_ context.Context, got access.Principal, request protocol.SnapshotRequest) (protocol.SnapshotResponse, error) {
+	options.SyncService = syncServiceStub{principal: p, snapshot: func(_ context.Context, got access.Principal, request protocol.SnapshotRequest) (protocol.SnapshotResponse, error) {
 		if got != p || request.PageToken == nil || *request.PageToken != "opaque" {
 			t.Fatalf("principal=%+v request=%+v", got, request)
 		}
@@ -204,13 +253,11 @@ func TestSnapshotHTTPUsesExactCapabilitiesQueryShapeAndTwoPullCharges(t *testing
 
 func TestSyncRateDenialLeavesServiceUncalled(t *testing.T) {
 	p := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", DeviceID: "21000000-0000-4000-8000-000000000001", Scope: "family", SessionScope: "family", SessionFamilyID: "30000000-0000-4000-8000-000000000001"}
-	options := familyHandlerOptions(t, p, familyServiceStub{current: func(context.Context, access.Principal) (family.FamilyView, error) {
-		return family.FamilyView{ID: "30000000-0000-4000-8000-000000000001"}, nil
-	}}, nil)
+	options := familyHandlerOptions(t, p, familyServiceStub{}, nil)
 	effective := protocol.DefaultLimits()
 	options.SyncLimits = &effective
 	options.InstanceID, options.RecoveryEpoch = "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d", 1
-	options.SyncService = syncServiceStub{apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
+	options.SyncService = syncServiceStub{principal: p, apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
 		t.Fatal("service called after rate denial")
 		return protocol.SyncResponse{}, nil
 	}}
@@ -262,10 +309,18 @@ func TestSyncErrorHandlersMatchFrozenFixtures(t *testing.T) {
 	})
 }
 
-func (s syncServiceStub) ApplyAndPull(ctx context.Context, p access.Principal, r protocol.SyncRequest) (protocol.SyncResponse, error) {
+func (s syncServiceStub) ServeSync(ctx context.Context, req authority.Request, r protocol.SyncRequest) (protocol.SyncResponse, error) {
+	p, err := s.authorize(req)
+	if err != nil {
+		return protocol.SyncResponse{}, err
+	}
 	return s.apply(ctx, p, r)
 }
-func (s syncServiceStub) FullSnapshot(ctx context.Context, p access.Principal, r protocol.SnapshotRequest) (protocol.SnapshotResponse, error) {
+func (s syncServiceStub) ServeSnapshot(ctx context.Context, req authority.Request, r protocol.SnapshotRequest) (protocol.SnapshotResponse, error) {
+	p, err := s.authorize(req)
+	if err != nil {
+		return protocol.SnapshotResponse{}, err
+	}
 	return s.snapshot(ctx, p, r)
 }
 
@@ -280,13 +335,11 @@ func TestSyncHTTPChargesFiveScopesOnceAndAcceptsConfiguredBodyAboveOneMiB(t *tes
 	}
 	body = append(body, []byte(strings.Repeat(" ", 1<<20))...)
 	var charged []limits.Charge
-	options := familyHandlerOptions(t, p, familyServiceStub{current: func(context.Context, access.Principal) (family.FamilyView, error) {
-		return family.FamilyView{ID: familyID}, nil
-	}}, func(got []limits.Charge) { charged = append([]limits.Charge(nil), got...) })
+	options := familyHandlerOptions(t, p, familyServiceStub{}, func(got []limits.Charge) { charged = append([]limits.Charge(nil), got...) })
 	effective := protocol.DefaultLimits()
 	effective.SyncBodyBytes = 2 << 20
 	options.SyncLimits = &effective
-	options.SyncService = syncServiceStub{apply: func(_ context.Context, got access.Principal, input protocol.SyncRequest) (protocol.SyncResponse, error) {
+	options.SyncService = syncServiceStub{principal: p, apply: func(_ context.Context, got access.Principal, input protocol.SyncRequest) (protocol.SyncResponse, error) {
 		if got != p || len(input.Mutations) != 1 {
 			t.Fatalf("principal=%+v request=%+v", got, input)
 		}
@@ -316,15 +369,12 @@ func TestSyncHTTPChargesFiveScopesOnceAndAcceptsConfiguredBodyAboveOneMiB(t *tes
 
 func TestSyncHTTPRejectsOversizeAndInvalidContinuationBeforeCharging(t *testing.T) {
 	p := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", DeviceID: "21000000-0000-4000-8000-000000000001", Scope: "family", SessionScope: "family", SessionFamilyID: "30000000-0000-4000-8000-000000000001"}
-	familyID := "30000000-0000-4000-8000-000000000001"
 	charged := 0
-	options := familyHandlerOptions(t, p, familyServiceStub{current: func(context.Context, access.Principal) (family.FamilyView, error) {
-		return family.FamilyView{ID: familyID}, nil
-	}}, func([]limits.Charge) { charged++ })
+	options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { charged++ })
 	effective := protocol.DefaultLimits()
 	effective.SyncBodyBytes = 65536
 	options.SyncLimits = &effective
-	options.SyncService = syncServiceStub{apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
+	options.SyncService = syncServiceStub{principal: p, apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
 		t.Fatal("service called")
 		return protocol.SyncResponse{}, nil
 	}}
@@ -357,7 +407,7 @@ func TestSyncHTTPCompatibilityStatusCodes(t *testing.T) {
 	options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { t.Fatal("compatibility failure charged") })
 	effective := protocol.DefaultLimits()
 	options.SyncLimits = &effective
-	options.SyncService = syncServiceStub{}
+	options.SyncService = syncServiceStub{principal: p}
 	for _, test := range []struct {
 		name, protocol, capabilities string
 		want                         int
@@ -387,12 +437,9 @@ func TestSyncHTTPCompatibilityStatusCodes(t *testing.T) {
 
 func TestSyncHTTPTimerCapabilityIsSelectedFromDecodedMutationsBeforeAdmission(t *testing.T) {
 	p := access.Principal{AccountID: "20000000-0000-4000-8000-000000000001", DeviceID: "21000000-0000-4000-8000-000000000001", Scope: "family", SessionScope: "family", SessionFamilyID: "30000000-0000-4000-8000-000000000001"}
-	options := familyHandlerOptions(t, p, familyServiceStub{current: func(context.Context, access.Principal) (family.FamilyView, error) {
-		t.Fatal("capability failure reached family resolution")
-		return family.FamilyView{}, nil
-	}}, func([]limits.Charge) { t.Fatal("capability failure charged") })
+	options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { t.Fatal("capability failure charged") })
 	effective := protocol.DefaultLimits()
-	options.SyncLimits, options.SyncService = &effective, syncServiceStub{}
+	options.SyncLimits, options.SyncService = &effective, syncServiceStub{principal: p}
 	timer := `{"mutation_id":"01000000-0000-4000-8000-000000000008","entity_id":"50000000-0000-4000-8000-000000000001","entity_kind":"timer","operation":"timer_start","payload_version":5,"observed_entity_version":0,"client_mutation_time":"2026-09-20T15:00:00Z","import_id":null,"payload":{"baby_id":"10000000-0000-4000-8000-000000000001","timer_kind":"feed","started_at":"2026-09-20T15:00:00Z","time_zone_id":"Europe/Zurich","completed_components":[],"current_side":"left","current_side_started_at":"2026-09-20T15:00:00Z","session_id":null}}`
 	for _, test := range []struct {
 		name, capabilities, mutations string
@@ -420,7 +467,7 @@ func TestSyncHTTPClassifiesBodyNegotiationBeforeCharging(t *testing.T) {
 	options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { t.Fatal("negotiation failure charged") })
 	effective := protocol.DefaultLimits()
 	options.SyncLimits = &effective
-	options.SyncService = syncServiceStub{}
+	options.SyncService = syncServiceStub{principal: p}
 	for _, test := range []struct {
 		name, body, code string
 		want             int
@@ -456,7 +503,7 @@ func TestSyncHTTPRejectsNonFamilyScopesBeforeAdmission(t *testing.T) {
 				options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { t.Fatal("non-family scope charged") })
 				effective := protocol.DefaultLimits()
 				options.SyncLimits = &effective
-				options.SyncService = syncServiceStub{
+				options.SyncService = syncServiceStub{principal: p,
 					apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
 						t.Fatal("sync service called")
 						return protocol.SyncResponse{}, nil
@@ -494,7 +541,7 @@ func TestSyncHTTPRequiresPersistedFamilySessionBeforeAdmission(t *testing.T) {
 			options := familyHandlerOptions(t, p, familyServiceStub{}, func([]limits.Charge) { t.Fatal("unrefreshed family session charged") })
 			effective := protocol.DefaultLimits()
 			options.SyncLimits = &effective
-			options.SyncService = syncServiceStub{
+			options.SyncService = syncServiceStub{principal: p,
 				apply: func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
 					t.Fatal("sync service called")
 					return protocol.SyncResponse{}, nil

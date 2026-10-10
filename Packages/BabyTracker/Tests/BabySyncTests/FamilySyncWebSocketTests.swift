@@ -394,6 +394,33 @@ struct FamilySyncWebSocketTests {
         #expect(await live.socket.state == .stopped)
     }
 
+    @Test func stopJoinsNativeReceiveWithoutItsCallbackAndIgnoresLateCallbacks() async throws {
+        let native = WithheldNativeReceiveTask()
+        let socket = URLSessionLiveSocket(task: native)
+        let live = LiveHarness()
+        live.connector.script = [.socket(socket)]
+        _ = await live.socket.start(realm: SyncFixtures.realm, serverInfo: serverInfo(liveHints: true))
+        try await until { native.callback { $0 != nil } }
+        let stopped = Locked(false)
+        let stop = Task {
+            await live.socket.stop()
+            stopped { $0 = true }
+        }
+        try await until { stopped { $0 } }
+        let joinedWithoutCallback = stopped { $0 }
+        #expect(joinedWithoutCallback)
+        #expect(native.closeCodes { $0.contains(.normalClosure) })
+        // Release old-code RED too, then issue duplicate callbacks against
+        // the real adapter. The test never leaves an unjoined runner behind.
+        native.deliver(.failure(URLError(.cancelled)))
+        await stop.value
+        if joinedWithoutCallback {
+            native.deliver(.success(.string("{}")))
+            native.deliver(.failure(URLError(.networkConnectionLost)))
+        }
+        #expect(await live.socket.state == .stopped)
+    }
+
     /// The engine may stop the socket from inside a callback the runner is
     /// awaiting — a revocation found by the unauthorized sync, say. Waiting
     /// for the runner there would wait for itself.
@@ -583,7 +610,7 @@ final class FakeLiveSocket: LiveSocket, @unchecked Sendable {
 /// A scripted dialler. Once the script runs out, `open` waits until the
 /// runner is cancelled, like a dial into a server that never answers.
 final class FakeLiveSocketConnector: LiveSocketConnecting, @unchecked Sendable {
-    enum Outcome { case socket(FakeLiveSocket), fail(LiveSocketError) }
+    enum Outcome { case socket(any LiveSocket), fail(LiveSocketError) }
     private let state = Locked((script: [Outcome](), tokens: [String]()))
 
     var script: [Outcome] {
@@ -756,4 +783,21 @@ struct BackgroundSyncTests {
     @Test func backgroundRefreshIdentifierIsSingular() {
         #expect(BackgroundSync.refreshTaskIdentifier == "com.olhapi.babytracker.sync.refresh")
     }
+}
+
+/// Reproduces the observed Foundation boundary: close/cancel may not call a
+/// pending receive handler. The real production adapter and runner are used.
+final class WithheldNativeReceiveTask: NativeLiveSocketTask, @unchecked Sendable {
+    typealias Message = URLSessionWebSocketTask.Message
+    typealias CloseCode = URLSessionWebSocketTask.CloseCode
+    let callback = Locked<(@Sendable (Result<Message, any Error>) -> Void)?>(nil)
+    let closeCodes = Locked<[CloseCode]>([])
+    var closeCode: CloseCode { closeCodes { $0.last ?? .invalid } }
+    var closeReason: Data? { nil }
+    func receive(completionHandler: @escaping @Sendable (Result<Message, any Error>) -> Void) {
+        callback { $0 = completionHandler }
+    }
+    func sendPing(pongReceiveHandler: @escaping @Sendable ((any Error)?) -> Void) { pongReceiveHandler(nil) }
+    func cancel(with closeCode: CloseCode, reason: Data?) { closeCodes { $0.append(closeCode) } }
+    func deliver(_ result: Result<Message, any Error>) { callback { $0 }?(result) }
 }

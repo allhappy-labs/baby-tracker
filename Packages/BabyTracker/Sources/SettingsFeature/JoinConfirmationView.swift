@@ -99,41 +99,43 @@ struct JoinConfirmationView<Model: FamilySyncSettingsModel>: View {
     }
 
     var body: some View {
-        VStack(spacing: 20) {
-            switch confirmation.state {
-            case .loading:
-                ProgressView(JoinConfirmationCopy.checking)
-                    .accessibilityIdentifier("joinConfirmation.loading")
-            case .ready(let familyName), .joining(let familyName):
-                Text(JoinConfirmationCopy.title(familyName: familyName))
-                    .font(.title2.bold())
-                    .multilineTextAlignment(.center)
-                    .accessibilityAddTraits(.isHeader)
-                    .accessibilityIdentifier("joinConfirmation.title")
-                Button {
-                    Task { await confirmation.join() }
-                } label: {
-                    Text(JoinConfirmationCopy.join).frame(maxWidth: .infinity, minHeight: 44)
+        ScrollView {
+            VStack(spacing: 20) {
+                switch confirmation.state {
+                case .loading:
+                    ProgressView(JoinConfirmationCopy.checking)
+                        .accessibilityIdentifier("joinConfirmation.loading")
+                case .ready(let familyName), .joining(let familyName):
+                    Text(JoinConfirmationCopy.title(familyName: familyName))
+                        .font(.title2.bold())
+                        .multilineTextAlignment(.center)
+                        .accessibilityAddTraits(.isHeader)
+                        .accessibilityIdentifier("joinConfirmation.title")
+                    Button {
+                        Task { await confirmation.join() }
+                    } label: {
+                        Text(JoinConfirmationCopy.join).frame(maxWidth: .infinity, minHeight: 44)
+                    }
+                    .buttonStyle(.borderedProminent)
+                    .disabled(confirmation.state != .ready(familyName: familyName))
+                    .accessibilityIdentifier("joinConfirmation.join")
+                    cancelButton(JoinConfirmationCopy.cancel)
+                case .failed(let message):
+                    Text(message)
+                        .multilineTextAlignment(.center)
+                        .foregroundStyle(Palette.destructive)
+                        .accessibilityIdentifier("joinConfirmation.problem")
+                    cancelButton(JoinConfirmationCopy.close)
+                case .joined:
+                    EmptyView()
                 }
-                .buttonStyle(.borderedProminent)
-                .disabled(confirmation.state != .ready(familyName: familyName))
-                .accessibilityIdentifier("joinConfirmation.join")
-                cancelButton(JoinConfirmationCopy.cancel)
-            case .failed(let message):
-                Text(message)
-                    .multilineTextAlignment(.center)
-                    .foregroundStyle(Palette.destructive)
-                    .accessibilityIdentifier("joinConfirmation.problem")
-                cancelButton(JoinConfirmationCopy.close)
-            case .joined:
-                EmptyView()
             }
+            .padding(24)
+            .frame(maxWidth: .infinity)
         }
-        .padding(24)
-        .frame(maxWidth: .infinity)
-        // As tall as what it says, in every state: a spinner, a question
-        // with two buttons, or a reason with one.
-        .sheetHeight(confirmation.state.sheetHeight)
+        // Presented with `fittedSheet`: as tall as what it says in each
+        // state — a spinner, a question with two buttons, or a reason with one.
+        .scrollBounceBehavior(.basedOnSize)
         .interactiveDismissDisabled(confirmation.state.isJoining)
         .task { await confirmation.load() }
         .onChange(of: confirmation.state) { _, state in
@@ -154,17 +156,6 @@ private extension JoinConfirmation.State {
     var isJoining: Bool {
         if case .joining = self { return true }
         return false
-    }
-
-    /// Points at the default text size; `sheetHeight` scales them, and goes
-    /// full height at the accessibility sizes. Room for a family name or a
-    /// server address that wraps onto a second line.
-    var sheetHeight: CGFloat {
-        switch self {
-        case .loading, .joined: 140
-        case .ready, .joining: 220
-        case .failed: 200
-        }
     }
 }
 

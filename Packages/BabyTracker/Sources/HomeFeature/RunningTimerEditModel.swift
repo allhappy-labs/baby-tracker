@@ -24,6 +24,11 @@ enum RunningTimerEditCopy {
     static let nowHeader = HomeL10n.text("Now")
     static let nowFooter = HomeL10n.text("The part that's running keeps counting. Stop it to finish.")
     static let contentsLabel = HomeL10n.text("Contents")
+    /// A part's rows: when it began and ended, and the length that makes.
+    static let partStart = HomeL10n.text("Start")
+    static let partEnd = HomeL10n.text("End")
+    static let running = HomeL10n.text("Running")
+    static let length = HomeL10n.text("Length")
 
     /// On the dial, for VoiceOver: a tappable time is not otherwise obviously
     /// an editor.
@@ -35,14 +40,12 @@ enum RunningTimerEditCopy {
     static func bottlePart(_ number: Int, of count: Int) -> String {
         count > 1 ? HomeL10n.format("Bottle %d", number) : HomeL10n.text("Bottle")
     }
-    static func runningSide(_ side: BreastSide, since time: String) -> String {
-        HomeL10n.format(side == .left ? "Left breast · since %@" : "Right breast · since %@", time)
-    }
-    /// A stepper shows a bare figure; without a name VoiceOver reads "10m"
-    /// and never says what it measures.
-    static func durationAccessibilityLabel(_ part: String) -> String { HomeL10n.format("%@ duration", part) }
     static func volumeAccessibilityLabel(_ part: String) -> String { HomeL10n.format("%@ volume", part) }
     static func contentsAccessibilityLabel(_ part: String) -> String { HomeL10n.format("%@ contents", part) }
+    /// A finished part's Start and End pickers are otherwise announced only
+    /// as "Start"/"End", with no word of which part that is.
+    static func partStartAccessibilityLabel(_ part: String) -> String { HomeL10n.format("%@ start", part) }
+    static func partEndAccessibilityLabel(_ part: String) -> String { HomeL10n.format("%@ end", part) }
 
     static let startInFuture = HomeL10n.text("The start can't be in the future.")
     /// `TimerEditError.startInFuture` also covers a start more than a week
@@ -91,15 +94,48 @@ public final class RunningTimerEditModel: Identifiable {
         public let id: UUID
         public let kind: Kind
         public let title: String
-        public var seconds: Int
+        /// Nil on an old part recorded without its times; it is shown with
+        /// its length only and sent back unchanged.
+        public var start: Date?
+        public var end: Date?
         public var volumeML: Double
         public var contents: BottleContents
+        /// The length recorded before any edit, for a part without times —
+        /// and for one whose times are untouched, so a stored length the
+        /// bounds would round differently is not sent as a change.
+        let storedSeconds: Int?
+        private let storedStart: Date?
+        private let storedEnd: Date?
+
+        init(id: UUID, kind: Kind, title: String, start: Date?, end: Date?,
+             volumeML: Double, contents: BottleContents, storedSeconds: Int?) {
+            self.id = id
+            self.kind = kind
+            self.title = title
+            self.start = start
+            self.end = end
+            self.volumeML = volumeML
+            self.contents = contents
+            self.storedSeconds = storedSeconds
+            self.storedStart = start
+            self.storedEnd = end
+        }
+
+        /// Whole seconds between Start and End, as `RunningTimerEdit` counts
+        /// them (it refuses a length that is not `end − start`).
+        public var seconds: Int? {
+            guard let start, let end else { return storedSeconds }
+            if start == storedStart, end == storedEnd, let storedSeconds { return storedSeconds }
+            return max(0, Int(end.timeIntervalSince(start)))
+        }
 
         var component: FeedComponent {
             switch kind {
-            case .breast(let side): .breast(id: id, side: side, seconds: seconds)
-            case .bottle: .bottle(id: id, volumeML: volumeML, contents: contents,
-                                  seconds: seconds > 0 ? seconds : nil)
+            case .breast(let side):
+                .breast(id: id, side: side, seconds: seconds ?? 0, startedAt: start, endedAt: end)
+            case .bottle:
+                .bottle(id: id, volumeML: volumeML, contents: contents,
+                        seconds: seconds.flatMap { $0 > 0 ? $0 : nil }, startedAt: start, endedAt: end)
             }
         }
     }
@@ -108,12 +144,44 @@ public final class RunningTimerEditModel: Identifiable {
     /// keys on.
     public nonisolated let id: UUID
     public let title: String
-    /// The running side, read-only. A side that began with the timer moves
-    /// with the start being edited, so its "since" follows the picker.
-    public var runningSideText: String? {
+    /// The part still running: its title and when it began. Read-only. A
+    /// side that began with the timer moves with the start being edited, so
+    /// its Start follows the picker.
+    public var runningPart: (title: String, start: Date)? {
         guard let currentSide, let currentSideStartedAt else { return nil }
-        let since = sideMovesWithStart ? startedAt : currentSideStartedAt
-        return RunningTimerEditCopy.runningSide(currentSide, since: HomeCopy.clockTime(since, zone: timeZoneID))
+        return (RunningTimerEditCopy.breastPart(currentSide), sideMovesWithStart ? startedAt : currentSideStartedAt)
+    }
+
+    /// The running part's Start, date and time in the timer's zone — a side
+    /// begun before midnight is on the other day.
+    public var runningStartText: String? {
+        runningPart.map {
+            var style = Date.FormatStyle(date: .abbreviated, time: .shortened)
+            style.timeZone = TimeZone(identifier: timeZoneID) ?? .gmt
+            return $0.start.formatted(style)
+        }
+    }
+
+    /// When whatever still runs began — the side or the bottle, whichever is
+    /// earlier — following the start being edited when it began with the
+    /// timer. Nil when nothing runs.
+    private var runningSince: Date? {
+        let side = currentSideStartedAt.map { sideMovesWithStart ? startedAt : $0 }
+        let bottle = currentBottleStartedAt.map {
+            RunningTimerEdit.sideMovesWithStart(startedAt: originalStart, currentSideStartedAt: $0) ? startedAt : $0
+        }
+        return [side, bottle].compactMap { $0 }.min()
+    }
+
+    /// The latest a finished part's Start or End may be: when the running
+    /// part began, or now when nothing runs.
+    public var latestPartEnd: Date { min(runningSince ?? store.now, store.now) }
+
+    /// A finished part ending inside the running one. `RunningTimerEdit`
+    /// only sums lengths, so a part moved later without growing passes it.
+    private var partEndsPastRunning: Bool {
+        guard let runningSince else { return false }
+        return parts.contains { part in part.end.map { $0 > runningSince } ?? false }
     }
     /// What the picker offers: back to a day ago (or the current start, if
     /// that is further) — but never before the previous part of the session
@@ -170,17 +238,17 @@ public final class RunningTimerEditModel: Identifiable {
         // rather than offered a control this editor does not have.
         self.parts = timer.completedComponents.compactMap { component in
             switch component {
-            case let .breast(id, side, seconds, _, _):
+            case let .breast(id, side, seconds, start, end):
                 return Part(
                     id: id, kind: .breast(side), title: RunningTimerEditCopy.breastPart(side),
-                    seconds: seconds, volumeML: 0, contents: .formula
+                    start: start, end: end, volumeML: 0, contents: .formula, storedSeconds: seconds
                 )
-            case let .bottle(id, volumeML, contents, seconds, _, _):
+            case let .bottle(id, volumeML, contents, seconds, start, end):
                 bottleNumber += 1
                 return Part(
                     id: id, kind: .bottle,
                     title: RunningTimerEditCopy.bottlePart(bottleNumber, of: bottleCount),
-                    seconds: seconds ?? 0, volumeML: volumeML, contents: contents
+                    start: start, end: end, volumeML: volumeML, contents: contents, storedSeconds: seconds
                 )
             case .solids:
                 return nil
@@ -207,7 +275,7 @@ public final class RunningTimerEditModel: Identifiable {
     /// The edit as the store would take it, or why it would not.
     private var evaluation: Result<RunningTimerEdit, TimerEditError> {
         do {
-            return .success(try RunningTimerEdit(
+            let edit = try RunningTimerEdit(
                 startedAt: originalStart,
                 currentSideStartedAt: currentSideStartedAt,
                 currentBottleStartedAt: currentBottleStartedAt,
@@ -216,7 +284,9 @@ public final class RunningTimerEditModel: Identifiable {
                 // Every part: `RunningTimerEdit` keeps only those that changed.
                 changedComponents: parts.map(\.component),
                 now: store.now
-            ))
+            )
+            if partEndsPastRunning { return .failure(.partsExceedElapsed) }
+            return .success(edit)
         } catch let error as TimerEditError {
             return .failure(error)
         } catch {
@@ -335,9 +405,8 @@ public final class RunningTimerEditModel: Identifiable {
 
     // MARK: - Display
 
-    public func durationText(for part: Part) -> String {
-        ElapsedFormatter.precise(part.seconds)
-    }
+    /// A part's length, or nil for a bottle whose length was never known.
+    public func lengthText(for part: Part) -> String? { part.seconds.map(ElapsedFormatter.precise) }
 
     public func volumeText(for part: Part) -> String {
         Volume(millilitres: part.volumeML).formatted(as: unit)
@@ -349,37 +418,6 @@ public final class RunningTimerEditModel: Identifiable {
     /// Derived from the display unit: 5 ml, or half an ounce.
     public var volumeStep: Double {
         unit == .millilitres ? 5 : Volume(ounces: 0.5).millilitres
-    }
-
-    /// A finished side is at least a second long (the server refuses zero)
-    /// and steps by the minute, as the history editor's does. The top is the
-    /// history editor's four hours, or the part's own length if longer.
-    public func durationRange(for part: Part) -> ClosedRange<Int> {
-        1...max(14_400, part.seconds)
-    }
-
-    /// The sheet's height at the default text size, stated from what is on
-    /// it rather than measured — measuring feeds back into the detent and
-    /// never settles (see `SheetHeight.swift`). Each figure is a row's height
-    /// in the inset-grouped Form, read off the simulator.
-    public var sheetHeight: Double {
-        var height = 290.0                          // nav bar, start picker and nudges, bottom inset
-        if !parts.isEmpty || currentSide != nil {
-            height += 44                            // section header
-        }
-        for part in parts {
-            switch part.kind {
-            case .breast: height += 70              // two-line stepper row
-            case .bottle: height += 70 + 70         // stepper row and contents picker
-            }
-        }
-        if currentSide != nil {
-            height += 56 + 60                       // running-side line and its two-line footer
-        }
-        if validationMessage != nil {
-            height += 104                           // a two-line message in its own section
-        }
-        return height
     }
 
     public var cancelLabel: String { RunningTimerEditCopy.cancel }
