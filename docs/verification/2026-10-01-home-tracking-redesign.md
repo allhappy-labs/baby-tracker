@@ -2,7 +2,7 @@
 
 Branch `feat/home-redesign` (worktree `.worktrees/home-redesign`). Spec: `docs/superpowers/specs/2026-10-01-home-tracking-redesign-design.md`. Approved mockups: `mockups/2026-10-01-home-redesign/`.
 
-All simulator work ran on the one shared device, `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853` (iPhone 17 Pro). Nothing was pushed, deployed, or installed on a phone.
+All simulator work ran on the one shared device, `platform=iOS Simulator,id=<simulator-udid>` (iPhone 17 Pro). Nothing was pushed, deployed, or installed on a phone.
 
 ## The walkthrough found five real defects, all now fixed
 
@@ -31,14 +31,14 @@ There is also one test-only fix. `dc881e0` changed `FeedingHistoryLayoutTests.te
 | `make server-smoke` | exit 0 — "post-migration proof: readiness 200; … contiguous schema 26; …"; cleanup proof: zero containers and zero volumes |
 | `make server-protocol-e2e` | exit 0 — `✔ Test run with 13 tests in 6 suites passed`; cleanup proof: zero containers and zero volumes |
 | `python3 scripts/verify-localizations.py` | exit 1, as on `main`. 256 problems, against 268 in the `main` baseline. `comm -13 loc-baseline-main.txt loc-now.txt` prints **nothing**, so there are 0 new problems (ruling R11). |
-| `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'` | exit 0 — `** BUILD SUCCEEDED **` |
-| `make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'` | exit 0 — `Executed 142 tests, with 0 failures (0 unexpected)`, `** TEST SUCCEEDED **` (14:49–15:44; a watcher saw no other `xcodebuild test` on the device the whole time) |
+| `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0 — `** BUILD SUCCEEDED **` |
+| `make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0 — `Executed 142 tests, with 0 failures (0 unexpected)`, `** TEST SUCCEEDED **` (14:49–15:44; a watcher saw no other `xcodebuild test` on the device the whole time) |
 
 The only container left after the runs is `buildx_buildkit_plainpost-release-v0290`, which predates them.
 
 Earlier runs, for the record:
 - **At `be9c016`:** `make test-ui` gave 141 tests with 1 failure, the time-of-day `FeedingHistoryLayoutTests` failure fixed in `dc881e0`.
-- **The first run at `e02cdc0`:** 142 tests with 15 failures, all in `CaregiversScreenUITests` and `CompositeFeedFlowTests`. Another project's session (Plainpost) was running its own UI suite on the same shared simulator at the time. Its own watcher logged the overlap. The run above was started only once that device was free, and stayed clean.
+- **The first run at `e02cdc0`:** 142 tests with 15 failures, all in `CaregiversScreenUITests` and `CompositeFeedFlowTests`. Another project's session (another app) was running its own UI suite on the same shared simulator at the time. Its own watcher logged the overlap. The run above was started only once that device was free, and stayed clean.
 
 ## Step 2 — simulator walkthrough (English)
 

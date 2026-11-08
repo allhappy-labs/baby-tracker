@@ -114,6 +114,8 @@ public extension BabyStore {
             for row in try context.fetch(FetchDescriptor<SleepEntry>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
             for row in try context.fetch(FetchDescriptor<DiaperEntry>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
             for row in try context.fetch(FetchDescriptor<SupplementEntry>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
+            for row in try context.fetch(FetchDescriptor<ImmunizationEntry>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
+            for row in try context.fetch(FetchDescriptor<PumpEntry>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
             for row in try context.fetch(FetchDescriptor<GrowthProfile>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
             for row in try context.fetch(FetchDescriptor<MeasurementCheckIn>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }
             for row in try context.fetch(FetchDescriptor<ActiveTimer>(predicate: #Predicate { $0.realmKey == sourceKey })) { row.realmKey = targetKey }

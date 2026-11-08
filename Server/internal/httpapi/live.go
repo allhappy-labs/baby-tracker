@@ -42,12 +42,14 @@ func liveHandler(options Options) http.HandlerFunc {
 		}
 		token, err := auth.BearerToken(request)
 		if err != nil {
-			writeSyncFamilyCode(w, request, options, auth.Code(err))
+			writeSyncFamilyFault(w, request, options, auth.Code(err), err)
 			return
 		}
 		digests, err := options.SessionService.AccessDigests(token)
 		if err != nil {
-			writeSyncFamilyCode(w, request, options, auth.Code(err))
+			// A refusal (session_revoked) logs nothing; any other failure
+			// is a 5xx whose fault line carries err.
+			writeSyncFamilyFault(w, request, options, auth.Code(err), err)
 			return
 		}
 		if options.RequestAuthorizer == nil {

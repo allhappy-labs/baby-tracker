@@ -523,7 +523,7 @@ func TestFamilyPoliciesAreExactAndCommandMaterialIsIsolated(t *testing.T) {
 
 func TestFamilySchemaHasExactTablesPoliciesAndPrivileges(t *testing.T) {
 	fixture := testpg.New(t)
-	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 37); err != nil {
 		t.Fatalf("schema-30 exact privilege snapshot rejected: %v", err)
 	}
 	if got := tableSet(t, fixture, familyTables); !equalStrings(got, sortedCopy(familyTables)) {

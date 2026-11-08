@@ -16,7 +16,14 @@ type AccountView struct {
 
 type FamilySlot struct{ FamilyID, State string }
 
-type RefreshSubject struct{ AccountID, DeviceID string }
+// RefreshSubject is a refresh's quota subject. A recoverable refresh's
+// subject also carries the session it resolved (unexported), which
+// RefreshRecoverable takes from RecoverableRefreshInput.Subject instead of
+// reading it again.
+type RefreshSubject struct {
+	AccountID, DeviceID string
+	parent              *authority.RefreshParent
+}
 
 type SessionBundle struct {
 	AccessToken, RefreshToken, DeviceID string

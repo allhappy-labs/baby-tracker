@@ -48,11 +48,16 @@ func New(o Options) *Service {
 // Exchanged is what one sync request did inside its transaction: the
 // response, the high water to publish after the commit (nil when nothing
 // was written), and Fatal, the refusal to return after the commit (the
-// mutations before it are written and must be committed).
+// mutations before it are written and must be committed). Exchange
+// returns it complete; only the service's own requests (ServeSync,
+// ApplyAndPull) read a pull with the commit, leaving page for settle.
 type Exchanged struct {
 	Response protocol.SyncResponse
 	Publish  *protocol.Cursor
 	Fatal    error
+	// page is the pull page read with the commit (pullAtCommit), for
+	// settle.
+	page *pageAtCommit
 }
 
 // Exchange is everything one sync request does, inside tx, a transaction
@@ -66,18 +71,33 @@ type Exchanged struct {
 //   - Mutations: care.ApplyBatch locks the family row, applies the batch and
 //     reads the first page in its write round trip.
 //
+// Exchange sends every statement itself, in tx, and stores a page's
+// binding before the commit: its Exchanged is complete when it returns,
+// in any transaction. (ServeSync and ApplyAndPull instead send a pull with
+// the COMMIT of their request transaction and settle it afterwards,
+// exchangeRequest with atCommit; that state never leaves the service.)
+//
 // A returned error means roll back. The caller commits, then publishes
-// Publish and returns Fatal or Response. An incompletely composed service
-// (no family policy, page keys, clock or valid limits) and a grant of
-// another account than p refuse before any statement.
+// Publish and returns Fatal or Response. An incompletely composed service (no family policy, page keys,
+// clock or valid limits) and a grant of another account than p refuse
+// before any statement.
 func (s *Service) Exchange(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, request protocol.SyncRequest) (Exchanged, error) {
+	return s.exchangeRequest(ctx, tx, p, g, request, false)
+}
+
+// exchangeRequest is Exchange; with atCommit, in a request transaction
+// (authority.CommitPipeline), a pull's one statement goes with the COMMIT
+// (pullAtCommit, continuationAtCommit) and the page is served from its
+// results after the commit, so the caller must settle the Exchanged
+// before using it.
+func (s *Service) exchangeRequest(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, request protocol.SyncRequest, atCommit bool) (Exchanged, error) {
 	if err := s.seamReady(p, g); err != nil {
 		return Exchanged{}, err
 	}
 	if err := s.validateSync(request, g.FamilyID); err != nil {
 		return Exchanged{}, err
 	}
-	return s.exchange(ctx, tx, p, g, request)
+	return s.exchange(ctx, tx, p, g, request, atCommit)
 }
 
 // errUnavailable refuses a request to an incompletely composed service.
@@ -95,9 +115,14 @@ func (s *Service) seamReady(p access.Principal, g access.Grant) error {
 	return nil
 }
 
-// exchange is Exchange of a request validateSync accepted.
-func (s *Service) exchange(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, request protocol.SyncRequest) (Exchanged, error) {
+// exchange is exchangeRequest of a request validateSync accepted.
+func (s *Service) exchange(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, request protocol.SyncRequest, atCommit bool) (Exchanged, error) {
+	pipeline, ok := tx.(authority.CommitPipeline)
+	atCommit = atCommit && ok
 	if request.PageToken != nil {
+		if atCommit {
+			return s.continuationAtCommit(pipeline, p, g, *request.PageToken)
+		}
 		response, err := s.syncContinuation(ctx, tx, p, g, *request.PageToken)
 		return Exchanged{Response: response}, err
 	}
@@ -107,6 +132,9 @@ func (s *Service) exchange(ctx context.Context, tx pgx.Tx, p access.Principal, g
 	}
 	limit := s.limits.SyncPageSize + 1
 	if len(request.Mutations) == 0 {
+		if atCommit {
+			return s.pullAtCommit(pipeline, p, g, after, limit), nil
+		}
 		highWater, changes, err := care.ReadPull(ctx, tx, g.FamilyID, after, limit)
 		if err != nil {
 			return Exchanged{}, err
@@ -114,7 +142,7 @@ func (s *Service) exchange(ctx context.Context, tx pgx.Tx, p access.Principal, g
 		if after > highWater {
 			return Exchanged{}, ErrSnapshotRequired
 		}
-		response, err := s.syncPage(ctx, tx, p, g, s.firstRange(after, highWater), changes, []protocol.Outcome{}, nil)
+		response, err := s.syncPage(p, g, s.firstRange(after, highWater), changes, []protocol.Outcome{}, nil, s.issuedIn(ctx, tx))
 		return Exchanged{Response: response}, err
 	}
 	if err := s.firstRefused(g, request.Mutations[0]); err != nil {
@@ -134,7 +162,7 @@ func (s *Service) exchange(ctx context.Context, tx pgx.Tx, p access.Principal, g
 		out.Fatal = ErrSnapshotRequired
 		return out, nil
 	}
-	out.Response, err = s.syncPage(ctx, tx, p, g, s.firstRange(after, result.HighWater), result.Changes, result.Outcomes, nil)
+	out.Response, err = s.syncPage(p, g, s.firstRange(after, result.HighWater), result.Changes, result.Outcomes, nil, s.issuedIn(ctx, tx))
 	return out, err
 }
 

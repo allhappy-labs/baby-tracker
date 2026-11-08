@@ -59,6 +59,8 @@ type Harness struct {
 	// authorityOptions builds Authority; AuthorityOn reuses them on
 	// another pool.
 	authorityOptions authority.Options
+	// authOptions builds Auth; AuthOn reuses them over another authority.
+	authOptions auth.Options
 	// composition is what Compose built the services with (identity, keys,
 	// origin), every default filled in.
 	composition Composition
@@ -304,11 +306,26 @@ func (h *Harness) configureIdentity(t *testing.T, verifier identity.IdentityVeri
 	if err != nil {
 		t.Fatal(err)
 	}
-	h.Auth, err = auth.New(auth.Options{Identity: h.Identity, Verifier: verifier, Authority: h.Authority, Mode: config.ModeSelfHosted,
-		Origin: c.Origin, InstanceID: c.InstanceID, TokenKeys: c.TokenKeys, DeviceKeys: c.ContinuityKeys, ActorIDKey: c.ActorKey, Now: clock})
+	h.authOptions = auth.Options{Identity: h.Identity, Verifier: verifier, Authority: h.Authority, Mode: config.ModeSelfHosted,
+		Origin: c.Origin, InstanceID: c.InstanceID, TokenKeys: c.TokenKeys, DeviceKeys: c.ContinuityKeys, ActorIDKey: c.ActorKey, Now: clock}
+	h.Auth, err = auth.New(h.authOptions)
 	if err != nil {
 		t.Fatal(err)
 	}
+}
+
+// AuthOn is the harness auth service over pool (an AuthorityOn pool), for
+// round-trip tests of the auth routes: its session commands reach the
+// database only through pool.
+func (h *Harness) AuthOn(t *testing.T, pool *pgxpool.Pool) *auth.Service {
+	t.Helper()
+	options := h.authOptions
+	options.Authority = h.AuthorityOn(t, pool)
+	service, err := auth.New(options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return service
 }
 
 // authorityExec runs one statement as the table owner inside an authority

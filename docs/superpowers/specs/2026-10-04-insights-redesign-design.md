@@ -200,7 +200,7 @@ Sessions come from the existing projections (`store.feedingSessions`, `store.sle
 - **View model tests:** range switching, volume unit change and reload on revision.
 - **Ask tests:** the new facts and keys, and old saved sources mapping to sections and ranges.
 - **History focus test:** a growth filter focus applies the filter and shows the clear chip.
-- **UI tests** on the shared simulator (`platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`):
+- **UI tests** on the shared simulator (`platform=iOS Simulator,id=<simulator-udid>`):
   - `GrowthFlowUITests` is rewritten for the Growth section: chips, chip switch, reference info, and All check-ins landing in History filtered to Growth;
   - Insights range switching.
 - **Accessibility audits** on Insights. **Ukrainian at the largest accessibility size** layout smoke.

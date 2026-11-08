@@ -5,7 +5,6 @@ import (
 	"context"
 	"crypto/hmac"
 	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"fmt"
 	"regexp"
@@ -117,6 +116,12 @@ type Refresh struct {
 	AccessTTL, RefreshTTL         time.Duration
 	Mode                          Mode
 	Material                      func(RefreshStage) ([]byte, [32]byte, error)
+	// Parent is the session ResolveRefreshParent found for these
+	// candidates, which then need not be looked up again: Refresh locks it
+	// and re-reads it under the lock as it does the session it looks up
+	// itself. nil: Refresh looks the session up. A parent no candidate (or
+	// more than one) names is invalid_command.
+	Parent *RefreshParent
 }
 
 // RefreshResult is a rotation's outcome, or the committed rotation recovered
@@ -148,12 +153,15 @@ func insertSessionArgs(row SessionRow) []any {
 		row.DeadlineAt, row.CreatedAt}
 }
 
-func scanSession(row pgx.Row) (SessionRow, error) {
+// scanSession reads a row that starts with sessionColumns; extra receives
+// the columns that follow them.
+func scanSession(row pgx.Row, extra ...any) (SessionRow, error) {
 	var s SessionRow
 	var access, refresh []byte
-	if err := row.Scan(&s.ID, &s.AccountID, &s.DeviceID, &s.LineageRootID, &s.ParentID, &s.FamilyID, &s.Scope, &s.Role, &s.Status, &s.RecoveryEpoch,
+	dest := []any{&s.ID, &s.AccountID, &s.DeviceID, &s.LineageRootID, &s.ParentID, &s.FamilyID, &s.Scope, &s.Role, &s.Status, &s.RecoveryEpoch,
 		&s.IssuedSeq, &s.TokenKeyID, &access, &refresh, &s.AccessExpiresAt, &s.RefreshExpiresAt, &s.DeadlineAt, &s.LineageStartedAt, &s.CreatedAt,
-		&s.ConsumedAt, &s.RevokedAt, &s.ConsumedAttemptID, &s.ChildID); err != nil {
+		&s.ConsumedAt, &s.RevokedAt, &s.ConsumedAttemptID, &s.ChildID}
+	if err := row.Scan(append(dest, extra...)...); err != nil {
 		return SessionRow{}, err
 	}
 	if len(access) != 32 || len(refresh) != 32 {
@@ -272,12 +280,9 @@ type accountAuthority struct {
 	entitlementExpiresAt     *time.Time
 }
 
-// readAccountAuthority reads accountID's authority in one statement.
-func readAccountAuthority(ctx context.Context, tx pgx.Tx, accountID, deviceID string) (accountAuthority, error) {
-	var a accountAuthority
-	var deviceID2, origin, keyID, slotFamily, slotState, role, memberStatus, familyStatus, deviceStatus, entitlement *string
-	var digest []byte
-	err := tx.QueryRow(ctx, `SELECT d.id::text, d.status::text, d.canonical_origin, d.continuity_key_id, d.continuity_digest,
+// accountAuthoritySQL reads account $1's authority with its device $2 in
+// one statement.
+const accountAuthoritySQL = `SELECT d.id::text, d.status::text, d.canonical_origin, d.continuity_key_id, d.continuity_digest,
 			a.display_name, a.profile_required, EXISTS (SELECT 1 FROM account_identities i WHERE i.account_id=a.id AND i.live),
 			s.family_id::text, s.state::text, m.role::text, m.status::text, f.status::text, e.status::text, e.expires_at
 		FROM accounts a
@@ -286,7 +291,19 @@ func readAccountAuthority(ctx context.Context, tx pgx.Tx, accountID, deviceID st
 		LEFT JOIN memberships m ON m.family_id=s.family_id AND m.account_id=a.id
 		LEFT JOIN families f ON f.id=s.family_id
 		LEFT JOIN family_entitlements e ON e.family_id=s.family_id AND e.entitlement_key='family_sync'
-		WHERE a.id=$1`, accountID, deviceID).Scan(&deviceID2, &deviceStatus, &origin, &keyID, &digest, &a.displayName, &a.profileRequired, &a.identityLive,
+		WHERE a.id=$1`
+
+// readAccountAuthority reads accountID's authority in one statement.
+func readAccountAuthority(ctx context.Context, tx pgx.Tx, accountID, deviceID string) (accountAuthority, error) {
+	return scanAccountAuthority(tx.QueryRow(ctx, accountAuthoritySQL, accountID, deviceID), accountID)
+}
+
+// scanAccountAuthority reads accountAuthoritySQL's row for accountID.
+func scanAccountAuthority(row pgx.Row, accountID string) (accountAuthority, error) {
+	var a accountAuthority
+	var deviceID2, origin, keyID, slotFamily, slotState, role, memberStatus, familyStatus, deviceStatus, entitlement *string
+	var digest []byte
+	err := row.Scan(&deviceID2, &deviceStatus, &origin, &keyID, &digest, &a.displayName, &a.profileRequired, &a.identityLive,
 		&slotFamily, &slotState, &role, &memberStatus, &familyStatus, &entitlement, &a.entitlementExpiresAt)
 	if errors.Is(err, pgx.ErrNoRows) {
 		return accountAuthority{}, ErrSessionRevoked
@@ -403,14 +420,27 @@ func proofOf(binding *DeviceBinding, prove func(DeviceBinding) bool) func(Device
 // exactly one row whose refresh digest and token key match one candidate
 // (auth/refresh.go:329-348). It returns the matching configured key.
 func (s *Service) findParent(ctx context.Context, tx pgx.Tx, candidates []KeyedDigest) (SessionRow, identity.DigestKey, error) {
+	rows, err := tx.Query(ctx, findParentSQL, refreshDigests(candidates))
+	if err != nil {
+		return SessionRow{}, identity.DigestKey{}, fmt.Errorf("authority: find refresh session: %w", errors.Join(err, ErrUnavailable))
+	}
+	return s.matchParent(rows, candidates)
+}
+
+// findParentSQL reads the sessions whose refresh digest is one of $1.
+const findParentSQL = `SELECT ` + sessionColumns + ` FROM sessions WHERE refresh_digest = ANY($1::bytea[])`
+
+// refreshDigests is the candidates' digests, the lookup's $1.
+func refreshDigests(candidates []KeyedDigest) [][]byte {
 	digests := make([][]byte, 0, len(candidates))
 	for _, candidate := range candidates {
 		digests = append(digests, append([]byte(nil), candidate.Sum[:]...))
 	}
-	rows, err := tx.Query(ctx, `SELECT `+sessionColumns+` FROM sessions WHERE refresh_digest = ANY($1::bytea[])`, digests)
-	if err != nil {
-		return SessionRow{}, identity.DigestKey{}, fmt.Errorf("authority: find refresh session: %w", errors.Join(err, ErrUnavailable))
-	}
+	return digests
+}
+
+// matchParent is findParent over findParentSQL's rows, which it closes.
+func (s *Service) matchParent(rows pgx.Rows, candidates []KeyedDigest) (SessionRow, identity.DigestKey, error) {
 	defer rows.Close()
 	var matched SessionRow
 	var key identity.DigestKey
@@ -420,21 +450,39 @@ func (s *Service) findParent(ctx context.Context, tx pgx.Tx, candidates []KeyedD
 		if err != nil {
 			return SessionRow{}, identity.DigestKey{}, fmt.Errorf("authority: find refresh session: %w", errors.Join(err, ErrUnavailable))
 		}
-		for _, candidate := range candidates {
-			if candidate.KeyID != row.TokenKeyID || candidate.Sum != row.RefreshDigest {
-				continue
-			}
-			configured, ok := s.tokenKey(candidate.KeyID)
-			if !ok {
-				continue
-			}
+		if configured, n := s.candidateKey(row, candidates); n > 0 {
 			matched, key = row, configured
-			matches++
+			matches += n
 		}
 	}
 	if err := rows.Err(); err != nil {
 		return SessionRow{}, identity.DigestKey{}, fmt.Errorf("authority: find refresh session: %w", errors.Join(err, ErrUnavailable))
 	}
+	return parentMatch(matched, key, matches)
+}
+
+// candidateKey counts the candidates that name row (its token key and
+// refresh digest, under a configured key) and returns the configured key of
+// the last one.
+func (s *Service) candidateKey(row SessionRow, candidates []KeyedDigest) (identity.DigestKey, int) {
+	var key identity.DigestKey
+	n := 0
+	for _, candidate := range candidates {
+		if candidate.KeyID != row.TokenKeyID || candidate.Sum != row.RefreshDigest {
+			continue
+		}
+		configured, ok := s.tokenKey(candidate.KeyID)
+		if !ok {
+			continue
+		}
+		key = configured
+		n++
+	}
+	return key, n
+}
+
+// parentMatch is findParent's refusal over its match count.
+func parentMatch(matched SessionRow, key identity.DigestKey, matches int) (SessionRow, identity.DigestKey, error) {
 	switch matches {
 	case 0:
 		return SessionRow{}, identity.DigestKey{}, ErrSessionRevoked
@@ -457,14 +505,16 @@ func validCandidates(candidates []KeyedDigest) bool {
 	return true
 }
 
-// Refresh rotates a session (session_rotated), returns the committed child
-// to an exact lost-acknowledgement retry, or revokes the lineage on reuse
+// Refresh rotates a session, returns the committed child to an exact
+// lost-acknowledgement retry, or revokes the lineage on reuse
 // (session_revoked; refresh_reused, or refresh_attempt_conflict for a
 // recoverable attempt). Locks: the parent's account row, then the parent
 // session row (the global order is accounts, families, sessions); a reuse
-// also locks the lineage's active sessions. A rotation writes no command
-// receipt (the consumed parent row records it); a recoverable rotation
-// writes the refresh_receipts row its lost-acknowledgement retry restores.
+// also locks the lineage's active sessions. A routine rotation appends no
+// audit row (owner decision D1, 2026-10-16) and writes no command receipt:
+// the consumed parent and the child rows record it, and a recoverable
+// rotation writes the refresh_receipts row its lost-acknowledgement retry
+// restores. Reuse detection still appends its session_revoked row.
 func (s *Service) Refresh(ctx context.Context, in Refresh) (RefreshResult, error) {
 	outputKeyID := in.OutputKeyID
 	if outputKeyID == "" {
@@ -478,38 +528,20 @@ func (s *Service) Refresh(ctx context.Context, in Refresh) (RefreshResult, error
 		(!recoverable && (in.Continuity != nil || in.ProveContinuity != nil)) {
 		return RefreshResult{}, ErrInvalidCommand
 	}
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return RefreshResult{}, errors.Join(err, ErrUnavailable)
+	if in.Parent != nil {
+		if _, n := s.candidateKey(in.Parent.session, in.ParentRefreshDigestCandidates); n != 1 {
+			return RefreshResult{}, ErrInvalidCommand
+		}
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
-
-	found, key, err := s.findParent(ctx, tx, in.ParentRefreshDigestCandidates)
-	if err != nil {
-		return RefreshResult{}, err
+	tx, locked, err := s.lockRefresh(ctx, in)
+	if tx != nil {
+		defer tx.Rollback(context.WithoutCancel(ctx))
 	}
-	if found.RecoveryEpoch != s.epoch {
-		return RefreshResult{}, ErrEpochChanged
-	}
-	accounts, err := lockAccounts(ctx, tx, found.AccountID)
 	if err != nil {
 		return RefreshResult{}, err
 	}
-	account, accountOK := accounts[found.AccountID]
-	// Re-read the parent under its lock: it may have been consumed or
-	// revoked since the unlocked read.
-	parent, ok, err := sessionByID(ctx, tx, found.ID, "FOR UPDATE")
-	if err != nil {
-		return RefreshResult{}, err
-	}
-	if !ok || parent.RefreshDigest != found.RefreshDigest || parent.TokenKeyID != found.TokenKeyID {
-		return RefreshResult{}, ErrSessionRevoked
-	}
+	account, accountOK, parent, key, authority := locked.account, locked.accountOK, locked.parent, locked.key, locked.authority
 	now := s.at(in.At)
-	authority, err := readAccountAuthority(ctx, tx, parent.AccountID, parent.DeviceID)
-	if err != nil {
-		return RefreshResult{}, err
-	}
 	// The device proof is checked first and never leads to a revocation
 	// (refresh_recovery.go:88-95).
 	if recoverable {
@@ -588,29 +620,33 @@ func (op refreshOp) rotate(ctx context.Context, outputKey identity.DigestKey) (R
 	if !validID(derived.CommandID) || !validID(derived.SessionID) || derived.SessionID == parent.ID || derived.AccessToken == "" || derived.RefreshToken == "" {
 		return RefreshResult{}, fmt.Errorf("authority: invalid refresh derivation: %w", ErrUnavailable)
 	}
-	if op.account.Chain.Seq >= maxWireInteger {
-		return RefreshResult{}, fmt.Errorf("authority: account chain exhausted: %w", ErrUnavailable)
+	// A rotation appends no audit row (owner decision D1, 2026-10-16), so the
+	// append no longer refuses a failed account chain for it: the rotation
+	// does, before any write, as every transaction of a failed scope is
+	// refused (scope_failed).
+	if op.account.Chain.Failed {
+		return RefreshResult{}, ErrScopeFailed
 	}
+	// The child is issued at the account's current security revision: a
+	// later account invalidation (a higher seq) still reaches it, and one
+	// already committed does not (realtime.Hub compares the two), so the head
+	// does not move. Issuing a session appends to the account's chain, so an
+	// account with a session has a head of at least 1; a head of 0 has no
+	// revision to issue at and fails closed.
+	if op.account.Chain.Seq == 0 {
+		return RefreshResult{}, fmt.Errorf("authority: refresh: account %s has no audit chain to issue at: %w", parent.AccountID, ErrUnavailable)
+	}
+	issued := op.account.Chain.Seq
 	child := SessionRow{ID: derived.SessionID, AccountID: parent.AccountID, DeviceID: parent.DeviceID, LineageRootID: parent.LineageRootID,
 		ParentID: parent.ID, FamilyID: familyID, Scope: scope, Role: role, Status: "active", RecoveryEpoch: parent.RecoveryEpoch,
-		IssuedSeq: op.account.Chain.Seq + 1, TokenKeyID: outputKey.ID, AccessDigest: tokenDigest(outputKey, "access", derived.AccessToken),
+		IssuedSeq: issued, TokenKeyID: outputKey.ID, AccessDigest: tokenDigest(outputKey, "access", derived.AccessToken),
 		RefreshDigest: tokenDigest(outputKey, "refresh", derived.RefreshToken), AccessExpiresAt: input.AccessExpiresAt, RefreshExpiresAt: refreshExpires,
 		DeadlineAt: parent.DeadlineAt, LineageStartedAt: parent.LineageStartedAt, CreatedAt: now}
+	// The stage is encoded (and checked) for every rotation; only a
+	// recoverable one persists it, in its refresh receipt.
 	material, materialDigest, err := op.material(RefreshStage{Input: input, Child: child, EffectiveDeadline: deadline})
 	if err != nil {
 		return RefreshResult{}, err
-	}
-	payload := map[string]any{"session_id": child.ID, "parent_session_id": parent.ID, "lineage_root_session_id": parent.LineageRootID,
-		"material_digest": hex.EncodeToString(materialDigest[:])}
-	if recoverable {
-		payload["refresh_attempt_id"] = op.in.AttemptID
-	}
-	seq, _, err := appendAudit(ctx, op.tx, op.account.Chain, KindSessionRotated, derived.CommandID, parent.AccountID, now, payload)
-	if err != nil {
-		return RefreshResult{}, err
-	}
-	if seq != child.IssuedSeq {
-		return RefreshResult{}, fmt.Errorf("authority: rotation seq %d, want %d: %w", seq, child.IssuedSeq, ErrUnavailable)
 	}
 	steps := []batchStep{
 		{`UPDATE sessions SET status='consumed', consumed_at=$2, consumed_attempt_id=NULLIF($3,'')::uuid, child_id=$4 WHERE id=$1 AND status='active'`,
@@ -648,7 +684,7 @@ func (op refreshOp) rotate(ctx context.Context, outputKey identity.DigestKey) (R
 	}
 	consumed := parent
 	consumed.Status, consumed.ConsumedAt, consumed.ConsumedAttemptID, consumed.ChildID = "consumed", &now, op.in.AttemptID, child.ID
-	return RefreshResult{Result: Result{CommandID: derived.CommandID, Outcome: "committed", Code: "ok", Revision: seq}, Child: child, Parent: consumed,
+	return RefreshResult{Result: Result{CommandID: derived.CommandID, Outcome: "committed", Code: "ok", Revision: child.IssuedSeq}, Child: child, Parent: consumed,
 		AccessToken: derived.AccessToken, RefreshToken: derived.RefreshToken, EffectiveDeadline: deadline, FamilySlot: copySlot(op.authority.slot), Account: view}, nil
 }
 
@@ -804,6 +840,11 @@ func (op refreshOp) restore(child SessionRow, receipt refreshReceipt) (RefreshRe
 	if err := op.validateChild(child); err != nil {
 		return RefreshResult{}, err
 	}
+	// A failed account chain freezes the scope: no session of it is served,
+	// a restored one included (the rotation refuses it the same way).
+	if op.account.Chain.Failed {
+		return RefreshResult{}, ErrScopeFailed
+	}
 	if !op.now.Before(receiptDeadline) {
 		return RefreshResult{}, ErrReauthenticationRequired
 	}
@@ -928,18 +969,17 @@ func runBatch(ctx context.Context, tx pgx.Tx, steps []batchStep) error {
 // ResolveRefreshSubject returns the account and device a refresh token
 // belongs to without consuming it, for quota charging (auth/refresh.go:118-145):
 // unknown → session_revoked, another epoch → epoch_changed, an inactive
-// account or a missing device → session_revoked. It takes no lock and runs
-// in one read-only transaction.
+// account or a missing device → session_revoked. It takes no lock and is
+// one read-only transaction of one round trip (readRefreshSubject).
 func (s *Service) ResolveRefreshSubject(ctx context.Context, candidates []KeyedDigest) (string, string, error) {
 	if !validCandidates(candidates) {
 		return "", "", ErrSessionRevoked
 	}
-	tx, err := s.beginReadOnly(ctx)
+	found, err := s.readRefreshSubject(ctx, candidates)
 	if err != nil {
-		return "", "", errors.Join(err, ErrUnavailable)
+		return "", "", err
 	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
-	return s.refreshSubject(ctx, tx, candidates)
+	return found.session.AccountID, found.session.DeviceID, nil
 }
 
 // RefreshDevice is ResolveRefreshSubject (same refusals) plus the continuity
@@ -948,26 +988,29 @@ func (s *Service) ResolveRefreshSubject(ctx context.Context, candidates []KeyedD
 // binding's key before Refresh, which compares it with the row again under
 // its locks.
 func (s *Service) RefreshDevice(ctx context.Context, candidates []KeyedDigest) (DeviceBinding, string, error) {
-	if !validCandidates(candidates) {
-		return DeviceBinding{}, "", ErrSessionRevoked
-	}
-	tx, err := s.beginReadOnly(ctx)
-	if err != nil {
-		return DeviceBinding{}, "", errors.Join(err, ErrUnavailable)
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
-	accountID, deviceID, err := s.refreshSubject(ctx, tx, candidates)
+	parent, err := s.ResolveRefreshParent(ctx, candidates)
 	if err != nil {
 		return DeviceBinding{}, "", err
 	}
-	binding, status, err := readDevice(ctx, tx, accountID, deviceID)
-	if err != nil {
-		return DeviceBinding{}, "", err
-	}
-	if status == "" {
-		return DeviceBinding{}, "", ErrSessionRevoked
-	}
+	binding, status := parent.Device()
 	return binding, status, nil
+}
+
+// ResolveRefreshParent is RefreshDevice returning the session it found as
+// well, for Refresh (Refresh.Parent): the read is not repeated there.
+func (s *Service) ResolveRefreshParent(ctx context.Context, candidates []KeyedDigest) (*RefreshParent, error) {
+	if !validCandidates(candidates) {
+		return nil, ErrSessionRevoked
+	}
+	found, err := s.readRefreshSubject(ctx, candidates)
+	if err != nil {
+		return nil, err
+	}
+	// readDevice's refusal, after the subject's.
+	if len(found.deviceDigest) != 32 {
+		return nil, fmt.Errorf("authority: corrupt device digest: %w", ErrUnavailable)
+	}
+	return &RefreshParent{session: found.session, device: found.binding(), deviceStatus: found.deviceStatus}, nil
 }
 
 // Device reads accountID's device deviceID: its continuity binding and
@@ -1005,27 +1048,6 @@ func readDevice(ctx context.Context, tx pgx.Tx, accountID, deviceID string) (Dev
 	}
 	copy(binding.CredentialDigest[:], digest)
 	return binding, status, nil
-}
-
-// refreshSubject is ResolveRefreshSubject inside tx.
-func (s *Service) refreshSubject(ctx context.Context, tx pgx.Tx, candidates []KeyedDigest) (string, string, error) {
-	parent, _, err := s.findParent(ctx, tx, candidates)
-	if err != nil {
-		return "", "", err
-	}
-	if parent.RecoveryEpoch != s.epoch {
-		return "", "", ErrEpochChanged
-	}
-	var active bool
-	err = tx.QueryRow(ctx, `SELECT a.status='active' AND EXISTS (SELECT 1 FROM devices d WHERE d.id=$2 AND d.account_id=a.id)
-		FROM accounts a WHERE a.id=$1`, parent.AccountID, parent.DeviceID).Scan(&active)
-	if errors.Is(err, pgx.ErrNoRows) || (err == nil && !active) {
-		return "", "", ErrSessionRevoked
-	}
-	if err != nil {
-		return "", "", fmt.Errorf("authority: resolve refresh subject: %w", errors.Join(err, ErrUnavailable))
-	}
-	return parent.AccountID, parent.DeviceID, nil
 }
 
 // principalSession checks p against its session and account
@@ -1070,91 +1092,6 @@ func validPrincipal(p access.Principal) bool {
 // receipt makes it a no-op.
 func (s *Service) AcknowledgeRefresh(ctx context.Context, p access.Principal, attemptID string, continuity DeviceBinding) error {
 	return s.ProveAndAcknowledgeRefresh(ctx, p, attemptID, proofOf(&continuity, nil))
-}
-
-// ProveAndAcknowledgeRefresh is AcknowledgeRefresh with the device proof
-// evaluated in the transaction: prove is called with the caller's device row
-// binding after the session checks, so the acknowledgement is one
-// transaction. A false (or nil) prove is device_continuity_invalid.
-func (s *Service) ProveAndAcknowledgeRefresh(ctx context.Context, p access.Principal, attemptID string, prove func(stored DeviceBinding) bool) error {
-	if !validID(attemptID) {
-		return ErrInvalidRequest
-	}
-	if p.RecoveryEpoch != s.epoch {
-		return ErrEpochChanged
-	}
-	if !validPrincipal(p) {
-		return ErrSessionRevoked
-	}
-	now := s.at(time.Time{})
-	if !now.Before(p.AccessExpiresAt) {
-		return ErrAccessExpired
-	}
-	tx, err := s.begin(ctx)
-	if err != nil {
-		return errors.Join(err, ErrUnavailable)
-	}
-	defer tx.Rollback(context.WithoutCancel(ctx))
-	var accountStatus string
-	err = tx.QueryRow(ctx, `SELECT status::text FROM accounts WHERE id=$1`, p.AccountID).Scan(&accountStatus)
-	if err != nil && !errors.Is(err, pgx.ErrNoRows) {
-		return fmt.Errorf("authority: read account: %w", errors.Join(err, ErrUnavailable))
-	}
-	session, _, err := principalSession(ctx, tx, p, accountRow{ID: p.AccountID, Status: accountStatus}, err == nil, "")
-	if err != nil {
-		return err
-	}
-	if session.Status != "active" {
-		return ErrSessionRevoked
-	}
-	// The policy deadline, with the one-year lineage cap applied whatever the
-	// mode (AcknowledgeRefresh has no mode). Self-hosted this is exactly
-	// Refresh's effective deadline; hosted it equals deadline_at whenever the
-	// hosted absolute age is at most a year (default 30 days), and is only
-	// stricter otherwise, which merely keeps a receipt until cleanup.
-	if !now.Before(effectiveDeadline(session, ModeSelfHosted)) || !now.Before(session.RefreshExpiresAt) {
-		return ErrReauthenticationRequired
-	}
-	if !now.Before(session.AccessExpiresAt) {
-		return ErrAccessExpired
-	}
-	authority, err := readAccountAuthority(ctx, tx, p.AccountID, p.DeviceID)
-	if err != nil {
-		return err
-	}
-	if !authority.proves(p.AccountID, p.DeviceID, prove) {
-		return ErrDeviceContinuityInvalid
-	}
-	rows, err := tx.Query(ctx, `SELECT r.child_id::text, coalesce(c.lineage_root_id::text,'') FROM refresh_receipts r LEFT JOIN sessions c ON c.id=r.child_id
-		WHERE r.account_id=$1 AND r.device_id=$2 AND r.attempt_id=$3 ORDER BY r.parent_id`, p.AccountID, p.DeviceID, attemptID)
-	if err != nil {
-		return fmt.Errorf("authority: read refresh receipts: %w", errors.Join(err, ErrUnavailable))
-	}
-	type receipt struct{ child, lineage string }
-	receipts, err := pgx.CollectRows(rows, func(row pgx.CollectableRow) (receipt, error) {
-		var r receipt
-		err := row.Scan(&r.child, &r.lineage)
-		return r, err
-	})
-	if err != nil {
-		return fmt.Errorf("authority: read refresh receipts: %w", errors.Join(err, ErrUnavailable))
-	}
-	if len(receipts) == 0 {
-		return nil
-	}
-	for _, r := range receipts {
-		if r.lineage != session.LineageRootID {
-			return ErrSessionRevoked
-		}
-	}
-	if _, err := tx.Exec(ctx, `DELETE FROM refresh_receipts r USING sessions c WHERE r.child_id=c.id AND r.account_id=$1 AND r.device_id=$2
-			AND r.attempt_id=$3 AND c.lineage_root_id=$4`, p.AccountID, p.DeviceID, attemptID, session.LineageRootID); err != nil {
-		return fmt.Errorf("authority: delete refresh receipt: %w", errors.Join(err, ErrUnavailable))
-	}
-	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("authority: commit acknowledgement: %w", errors.Join(err, ErrUnavailable))
-	}
-	return nil
 }
 
 // Logout revokes the principal's device binding and every live session on

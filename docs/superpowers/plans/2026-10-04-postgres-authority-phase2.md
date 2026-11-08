@@ -1127,7 +1127,7 @@ Test disposition table (no skip survives this task):
 - RefreshRecovery under `BT_RECOVERY_E2E_MODE`;
 - the non-live CapacityMatrix and ForegroundLatency cases.
 
-They need no simulator. If any `xcodebuild` step is added, it must use only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`, one run at a time, and must never create, reset or erase a simulator. The live CapacityMatrix cells need `sync-performance.sh`, which still reads the retired `security_projection_head` (line 210), so they are a Phase 5 obligation.
+They need no simulator. If any `xcodebuild` step is added, it must use only `platform=iOS Simulator,id=<simulator-udid>`, one run at a time, and must never create, reset or erase a simulator. The live CapacityMatrix cells need `sync-performance.sh`, which still reads the retired `security_projection_head` (line 210), so they are a Phase 5 obligation.
 
 - [ ] **Step 1: Client contract review.** Record in the task report, with line citations:
   - `Packages/BabyTracker/Sources/BabyStore/BabyStore+RemoteApply.swift:57-93` applies each change by entity version and records the cursor only when `next_page_token` is nil.

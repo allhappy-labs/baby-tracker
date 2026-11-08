@@ -1172,7 +1172,7 @@ public enum BabySchema {
 
     /// The App Group is what lets the app, the widget extension, and Live
     /// Activity intents read one database instead of three.
-    public static let appGroupID = "group.com.olhapi.babytracker"
+    public static let appGroupID = "group.com.example.babytracker"
 
     public static func container(inMemory: Bool) throws -> ModelContainer {
         let schema = Schema(all)
@@ -4891,7 +4891,7 @@ Create a new iOS App project named `BabyTracker`, interface SwiftUI, at the repo
 1. Delete the generated `ContentView.swift`.
 2. `File > Add Package Dependencies… > Add Local…` and select `Packages/BabyTracker`.
 3. In the app target's **General > Frameworks, Libraries, and Embedded Content**, add `BabyCore`, `BabyStore`, `BabySync`, `BabyUI`, `HomeFeature`, `LoggingFeature`, `HistoryFeature`, `InsightsFeature`, `BabyFeature`.
-4. **Signing & Capabilities >  + Capability > App Groups**, add `group.com.olhapi.babytracker`. The identifier must match `BabySchema.appGroupID` exactly or the widget reads an empty database.
+4. **Signing & Capabilities >  + Capability > App Groups**, add `group.com.example.babytracker`. The identifier must match `BabySchema.appGroupID` exactly or the widget reads an empty database.
 5. Set the deployment target to iOS 26.0.
 6. **Build Settings > Swift Language Version** to 6, and **Strict Concurrency Checking** to Complete.
 

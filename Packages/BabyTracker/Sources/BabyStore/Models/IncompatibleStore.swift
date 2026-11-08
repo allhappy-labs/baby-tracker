@@ -28,8 +28,8 @@ public enum StoreOpenError: Error, Equatable {
 /// version — so an older store never fails to open. The check compares the
 /// entity version hashes the store recorded with the model of every schema
 /// the migration plan lists; a store matching none of them is incompatible.
-/// Today that is V9 (the baseline) and V10: a V9 store matches the plan and
-/// is migrated in place by the lightweight stage, not moved.
+/// Today that is V9 (the baseline) to V12: a V9, V10 or V11 store matches the
+/// plan and is migrated in place by the lightweight stages, not moved.
 ///
 /// It acts only on positive evidence. No file, metadata that cannot be read
 /// (not a store, or the device still locked) or no model to compare with all

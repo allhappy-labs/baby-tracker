@@ -12,7 +12,7 @@ struct ProtocolFixtureConformanceTests {
         let result = try fixtures.verifyManifest()
 
         #expect(result.version == "v1")
-        #expect(result.verifiedFileCount == 21)
+        #expect(result.verifiedFileCount == 23)
     }
 
     @Test func decodesMutationSyncSnapshotAndImportFixtures() throws {
@@ -67,6 +67,8 @@ struct ProtocolFixtureConformanceTests {
         ("supplement.json", nil, "5fcc3ae7f9374061cfa8f72b225fe6f8e52ca73e9241bfa25736f970421ce30e"),
         ("growth-profile.json", nil, "c5c274fb7b44c8f91f79a32a78def410d021bd7c074fb885c34ec02ab752c220"),
         ("measurement.json", nil, "e99207fb7e59b99f2629a2af12052fa690fc9266a9d057b11992b5fa7a86b510"),
+        ("immunization.json", nil, "1a166da84b7e1497b8531b9a3c4799996ee6f344787f96e6894671b81d03b85e"),
+        ("pump.json", nil, "cce6767c7c2e55770663827c23b1bab50c31e773ee80b02a2a955f0bd9fdb6ed"),
         ("timer-feed.json", nil, "4b3df663c3674fc2b755e8a35d09752ede55c0088446bc4e20a3e7b9d5949c77"),
         ("timer-sleep.json", nil, "5454d2982ab7d0a1a57d7ca8301bc70faae2d347c2f3d75d79770cfa2a2d8a21"),
         ("mutations.json", "delete_baby", "e7f1d0a8928958c575ae858747f808acc12daea4ce85d5bb67662367afe43cf4"),

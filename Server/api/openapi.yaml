@@ -1411,7 +1411,7 @@ components:
       type: object
       additionalProperties: false
       description: Stable ordered family archive containing members, canonical records, journal, audit, and an empty v1 attachment manifest.
-      required: [version, server_instance_id, recovery_epoch, family_id, captured_at, high_water, security_revision, members, babies, feeds, sleeps, diapers, supplements, growth_profiles, measurements, active_timers, journal, audit, attachments]
+      required: [version, server_instance_id, recovery_epoch, family_id, captured_at, high_water, security_revision, members, babies, feeds, sleeps, diapers, supplements, growth_profiles, measurements, immunizations, pumps, active_timers, journal, audit, attachments]
       properties:
         version: {type: string, const: v1}
         server_instance_id: {$ref: '#/components/schemas/CanonicalUUID'}
@@ -1428,6 +1428,8 @@ components:
         supplements: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
         growth_profiles: {type: array, description: 'Raw canonical growth profiles, including tombstones. No calculated percentiles.', items: {$ref: '#/components/schemas/CanonicalEntity'}}
         measurements: {type: array, description: 'Raw canonical check-ins, including tombstones. No calculated percentiles.', items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        immunizations: {type: array, description: 'Raw canonical immunizations, including tombstones.', items: {$ref: '#/components/schemas/CanonicalEntity'}}
+        pumps: {type: array, description: 'Raw canonical pumping sessions, including tombstones.', items: {$ref: '#/components/schemas/CanonicalEntity'}}
         active_timers: {type: array, items: {$ref: '#/components/schemas/CanonicalEntity'}}
         journal: {type: array, items: {$ref: '#/components/schemas/JournalChange'}}
         audit: {type: array, items: {type: object}}
@@ -1940,6 +1942,29 @@ components:
         time_zone_id: {type: string, minLength: 1, maxLength: 255}
         name: {type: string, minLength: 1, maxLength: 64, description: 'Trimmed NFC text; at most 256 UTF-8 bytes.'}
         note: {type: [string, 'null'], maxLength: 4096}
+    ImmunizationPayload:
+      type: object
+      additionalProperties: false
+      required: [baby_id, given_at, time_zone_id, vaccine, dose, note]
+      properties:
+        baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
+        given_at: {type: string, format: date-time, description: 'When the vaccine was given. The server checks neither the future nor the birth date; the client does.'}
+        time_zone_id: {type: string, minLength: 1, maxLength: 255}
+        vaccine: {type: string, minLength: 1, maxLength: 64, description: 'Trimmed NFC text; at most 256 UTF-8 bytes.'}
+        dose: {type: [integer, 'null'], minimum: 1, maximum: 10, description: 'Always present; null when the caregiver gave no dose number.'}
+        note: {type: [string, 'null'], maxLength: 4096, description: 'Always present.'}
+    PumpPayload:
+      type: object
+      additionalProperties: false
+      description: A pumping session, owned by the family. No baby_id. Running while ended_at is null; at most one running per family.
+      required: [started_at, ended_at, time_zone_id, side, volume_ml, note]
+      properties:
+        started_at: {type: string, format: date-time}
+        ended_at: {type: [string, 'null'], format: date-time, description: 'Not before started_at; at most 6 hours after it.'}
+        time_zone_id: {type: string, minLength: 1, maxLength: 255}
+        side: {type: string, enum: [left, right, both]}
+        volume_ml: {type: [number, 'null'], minimum: 0, maximum: 1000, description: 'At most 2 decimal places.'}
+        note: {type: [string, 'null'], maxLength: 4096}
     DiaperPayload:
       type: object
       additionalProperties: false
@@ -2034,7 +2059,7 @@ components:
       properties:
         mutation_id: {$ref: '#/components/schemas/CanonicalUUID'}
         entity_id: {$ref: '#/components/schemas/CanonicalUUID'}
-        entity_kind: {type: string, enum: [baby, feed, sleep, diaper, supplement, growth_profile, measurement, timer]}
+        entity_kind: {type: string, enum: [baby, feed, sleep, diaper, supplement, growth_profile, measurement, immunization, pump, timer]}
         operation: {type: string, enum: [create, update, delete, timer_start, timer_finish_bottle, timer_stop]}
         payload_version:
           type: integer
@@ -2086,6 +2111,16 @@ components:
                 payload_version: {const: 1}
                 payload: {$ref: '#/components/schemas/SupplementPayload'}
             - properties:
+                entity_kind: {const: immunization}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/ImmunizationPayload'}
+            - properties:
+                entity_kind: {const: pump}
+                operation: {enum: [create, update]}
+                payload_version: {const: 1}
+                payload: {$ref: '#/components/schemas/PumpPayload'}
+            - properties:
                 entity_kind: {const: timer}
                 operation: {const: timer_start}
                 payload_version: {const: 5}
@@ -2106,7 +2141,7 @@ components:
                 payload_version: {const: 5}
                 payload: {$ref: '#/components/schemas/TimerEditPayload'}
             - properties:
-                entity_kind: {const: baby}
+                entity_kind: {enum: [baby, pump]}
                 operation: {const: delete}
                 payload_version: {const: 1}
                 payload: {$ref: '#/components/schemas/BabyDeletePayload'}
@@ -2121,7 +2156,7 @@ components:
                 payload_version: {minimum: 1, maximum: 2}
                 payload: {$ref: '#/components/schemas/RecordDeletePayload'}
             - properties:
-                entity_kind: {enum: [diaper, supplement, growth_profile, measurement]}
+                entity_kind: {enum: [diaper, supplement, growth_profile, measurement, immunization]}
                 operation: {const: delete}
                 payload_version: {const: 1}
                 payload: {$ref: '#/components/schemas/RecordDeletePayload'}
@@ -2220,7 +2255,7 @@ components:
       required: [record_id, entity_kind, local_baby_id, content_sha256]
       properties:
         record_id: {$ref: '#/components/schemas/CanonicalUUID'}
-        entity_kind: {type: string, enum: [feed, sleep, diaper, supplement, growth_profile, measurement, timer]}
+        entity_kind: {type: string, enum: [feed, sleep, diaper, supplement, growth_profile, measurement, immunization, timer]}
         local_baby_id: {$ref: '#/components/schemas/CanonicalUUID'}
         content_sha256: {type: string, pattern: '^[0-9a-f]{64}$'}
     ImportResolveRequest:
@@ -2316,7 +2351,7 @@ components:
         unfinished_import_family_limit: {type: integer, const: 4}
         socket_device_limit: {type: integer, minimum: 1, maximum: 5}
         socket_account_limit: {type: integer, minimum: 1, maximum: 10}
-        socket_process_limit: {type: integer, minimum: 10, maximum: 10000}
+        socket_process_limit: {type: integer, minimum: 10, maximum: 65536}
         socket_attempt_ip_per_minute: {type: integer, minimum: 1, maximum: 10000}
         socket_attempt_device_per_minute: {type: integer, minimum: 1, maximum: 10000}
         socket_attempt_account_per_minute: {type: integer, minimum: 1, maximum: 10000}

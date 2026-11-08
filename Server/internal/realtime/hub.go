@@ -10,6 +10,7 @@ import (
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/authority"
+	"babytracker/server/internal/diagnostics"
 	"babytracker/server/internal/protocol"
 )
 
@@ -132,6 +133,12 @@ type Hub struct {
 	flushTimer    *time.Timer
 	armed         bool
 	pendingClosed bool
+	// Re-check observations since start, under statsMu (never held with mu):
+	// each sweep's CheckMany duration and the sockets closed because a
+	// re-check could not answer.
+	statsMu       sync.Mutex
+	sweepDuration diagnostics.Histogram
+	sweepClosed   uint64
 }
 
 type Reservation struct {
@@ -359,6 +366,41 @@ func (hub *Hub) releaseCountsLocked(principal access.Principal) {
 	}
 }
 
+// writeContext bounds one ping or hint write by the hub's write timeout,
+// apart from the lease's own cancellation. coder/websocket closes the
+// transport when a write's context ends (setupWriteTimeout), so a write
+// under the lease's context, cancelled by an invalidation, a sweep or a
+// domain change releasing the lease, dropped the socket under the close
+// that releaser was sending: the client saw no frame. The lease's end is
+// checked before each write and after it (ended, writeFailed).
+func (item *lease) writeContext() (context.Context, context.CancelFunc) {
+	return context.WithTimeout(context.WithoutCancel(item.ctx), item.hub.writeTimeout)
+}
+
+// ended is the lease's end once its context is done: the socket's lifetime
+// closes 1000 "maximum lifetime"; any other end (an invalidation, a sweep,
+// a domain change, shutdown) was released by a path that sends its own
+// close, so it is left to that close.
+func (item *lease) ended() {
+	if errors.Is(item.ctx.Err(), context.DeadlineExceeded) {
+		item.release()
+		_ = item.connection.Close(CloseNormal, "maximum lifetime")
+	}
+}
+
+// writeFailed ends the lease after a failed ping or hint write. A lease
+// that ended meanwhile is ended's (closing here raced 1013 "slow consumer"
+// against the sweep's 1008 "authorization changed", and the client saw
+// either); only a write that failed on its own is a slow consumer.
+func (item *lease) writeFailed() {
+	if item.ctx.Err() != nil {
+		item.ended()
+		return
+	}
+	item.release()
+	_ = item.connection.Close(CloseTryAgainLater, "slow consumer")
+}
+
 func (item *lease) run() {
 	defer item.release()
 	remaining := item.deadline.Sub(item.hub.now().UTC())
@@ -374,22 +416,22 @@ func (item *lease) run() {
 	for {
 		select {
 		case <-item.ctx.Done():
-			if errors.Is(item.ctx.Err(), context.DeadlineExceeded) {
-				item.release()
-				_ = item.connection.Close(CloseNormal, "maximum lifetime")
-			}
+			item.ended()
 			return
 		case <-lifetime.C:
 			item.release()
 			_ = item.connection.Close(CloseNormal, "maximum lifetime")
 			return
 		case <-ping.C:
-			ctx, cancel := context.WithTimeout(item.ctx, item.hub.writeTimeout)
+			if item.ctx.Err() != nil {
+				item.ended()
+				return
+			}
+			ctx, cancel := item.writeContext()
 			err := item.connection.Ping(ctx)
 			cancel()
 			if err != nil {
-				item.release()
-				_ = item.connection.Close(CloseTryAgainLater, "slow consumer")
+				item.writeFailed()
 				return
 			}
 		case <-item.wake:
@@ -404,12 +446,11 @@ func (item *lease) run() {
 			if hint == nil {
 				continue
 			}
-			ctx, cancel := context.WithTimeout(item.ctx, item.hub.writeTimeout)
+			ctx, cancel := item.writeContext()
 			err := item.connection.WriteHint(ctx, *hint)
 			cancel()
 			if err != nil {
-				item.release()
-				_ = item.connection.Close(CloseTryAgainLater, "slow consumer")
+				item.writeFailed()
 				return
 			}
 		}
@@ -724,7 +765,7 @@ func (hub *Hub) runSweep() {
 			_ = hub.sweep(hub.ctx)
 		case <-hub.recheck:
 			if hub.authorizer == nil {
-				hub.closeAll(ClosePolicyViolation, "authorization unavailable")
+				hub.countSweepClosed(hub.closeAll(ClosePolicyViolation, "authorization unavailable"))
 				continue
 			}
 			_ = hub.sweep(hub.ctx)
@@ -732,15 +773,28 @@ func (hub *Hub) runSweep() {
 	}
 }
 
-func (hub *Hub) closeAll(code int, reason string) {
+// closeAll detaches and closes every lease; it returns how many it detached.
+func (hub *Hub) closeAll(code int, reason string) int {
 	hub.mu.Lock()
 	items := make([]*lease, 0, len(hub.leases))
 	for _, item := range hub.leases {
 		items = append(items, item)
 	}
 	hub.mu.Unlock()
-	hub.detach(items)
+	detached := hub.detach(items)
 	hub.closeDetached(items, code, reason)
+	return detached
+}
+
+// countSweepClosed adds sockets a re-check closed as "authorization
+// unavailable" to the hub's stats.
+func (hub *Hub) countSweepClosed(n int) {
+	if n <= 0 {
+		return
+	}
+	hub.statsMu.Lock()
+	hub.sweepClosed += uint64(n)
+	hub.statsMu.Unlock()
 }
 
 func (hub *Hub) sweep(ctx context.Context) error {
@@ -760,18 +814,23 @@ func (hub *Hub) sweep(ctx context.Context) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, hub.sweepTimeout)
 	defer cancel()
+	started := time.Now()
 	allowed, err := hub.authorizer.CheckMany(ctx, leasing)
+	elapsed := time.Since(started)
+	hub.statsMu.Lock()
+	hub.sweepDuration.Observe(elapsed)
+	hub.statsMu.Unlock()
 	if err == nil && ctx.Err() != nil {
 		// Answered, but after the deadline: fail closed as if it had not.
 		err = ctx.Err()
 	}
 	if err != nil {
-		hub.detach(items)
+		hub.countSweepClosed(hub.detach(items))
 		hub.closeDetached(items, ClosePolicyViolation, "authorization unavailable")
 		return err
 	}
 	if len(allowed) != len(items) {
-		hub.detach(items)
+		hub.countSweepClosed(hub.detach(items))
 		hub.closeDetached(items, ClosePolicyViolation, "authorization unavailable")
 		return errors.New("live authorizer returned wrong result count")
 	}
@@ -786,14 +845,19 @@ func (hub *Hub) sweep(ctx context.Context) error {
 	return nil
 }
 
-func (hub *Hub) detach(items []*lease) {
+// detach releases the items still bound here and returns how many it
+// released (an item another path released first is not counted).
+func (hub *Hub) detach(items []*lease) int {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
+	released := 0
 	for _, item := range items {
 		if hub.leases[item.id] == item {
 			item.releaseLocked()
+			released++
 		}
 	}
+	return released
 }
 
 func (hub *Hub) Context() context.Context {
@@ -919,6 +983,32 @@ func (hub *Hub) DeviceConnected(deviceID string) bool {
 	hub.mu.Lock()
 	defer hub.mu.Unlock()
 	return hub.deviceCount[deviceID] > 0
+}
+
+// HubStats is the hub's occupancy now: bound connections (Leases) and
+// reservations not bound yet; and, since start, each sweep's CheckMany
+// duration (SweepDuration) and the sockets closed because a re-check failed,
+// answered late or answered wrongly (SweepClosed; denied leases are not
+// counted). It carries counts only, never an identifier.
+type HubStats struct {
+	Leases, Reservations int
+	SweepDuration        diagnostics.Histogram
+	SweepClosed          uint64
+}
+
+// Stats reads the hub's occupancy under its lock (the resource sampler, every
+// few seconds).
+func (hub *Hub) Stats() HubStats {
+	if hub == nil {
+		return HubStats{}
+	}
+	hub.mu.Lock()
+	stats := HubStats{Leases: len(hub.leases), Reservations: len(hub.reservations)}
+	hub.mu.Unlock()
+	hub.statsMu.Lock()
+	stats.SweepDuration, stats.SweepClosed = hub.sweepDuration, hub.sweepClosed
+	hub.statsMu.Unlock()
+	return stats
 }
 
 // HasRegisteredFamily checks bound leases only; notifications cannot create registrations.

@@ -226,6 +226,22 @@ private func makeModel(_ store: BabyStore, _ baby: UUID, _ chats: AskConversatio
     #expect(model.sourceLabel(source).contains("unavailable"))
 }
 
+/// Vaccinations are months apart: a source names the day, not a clock time.
+@MainActor
+@Test func aVaccineSourceNamesItsDay() throws {
+    let (store, baby, chats, root, fake) = try setup()
+    defer { try? FileManager.default.removeItem(at: root) }
+    let mira = try #require(try store.baby(baby))
+    try store.updateBabyAndGrowthProfile(mira, name: mira.name, birthDate: store.now.addingTimeInterval(-200 * 86_400),
+                                         referenceSex: .girls, expectedDueDate: nil)
+    let given = store.now.addingTimeInterval(-40 * 86_400)
+    let shot = try store.logImmunization(vaccine: "MMR", dose: 1, for: baby, at: given)
+    let model = makeModel(store, baby, chats, fake)
+    let day = given.formatted(Date.FormatStyle(timeZone: TimeZone(identifier: shot.timeZoneID) ?? .current)
+        .day().month(.abbreviated).year())
+    #expect(model.sourceLabel(.entry(kind: "immunization", id: shot.id)) == "Vaccine · \(day)")
+}
+
 @MainActor
 @Test func oldInsightsLinksInSavedChatsAreNotShown() {
     let entry = AskSource.entry(kind: "diaper", id: UUID())

@@ -141,15 +141,23 @@ func equalTyped(a, b typed) bool {
 }
 
 func TestKindCodesMatchSchema(t *testing.T) {
-	raw, err := os.ReadFile("../../migrations/000032_baseline.sql")
-	if err != nil {
-		t.Fatal(err)
+	// The baseline states every code; 000033 restated the two care-kind
+	// comments when it added immunization, 000034 when it added pump. The
+	// latest comment on a column wins.
+	var raw []byte
+	for _, name := range []string{"000032_baseline.sql", "000033_immunizations.sql", "000034_pumping.sql"} {
+		part, err := os.ReadFile("../../migrations/" + name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		raw = append(raw, part...)
 	}
 	comment := func(column, label string) map[int16]string {
-		match := regexp.MustCompile(`COMMENT ON COLUMN public\.` + regexp.QuoteMeta(column) + ` IS '` + label + `: ([^']*)'`).FindSubmatch(raw)
-		if match == nil {
+		all := regexp.MustCompile(`COMMENT ON COLUMN public\.`+regexp.QuoteMeta(column)+` IS '`+label+`: ([^']*)'`).FindAllSubmatch(raw, -1)
+		if all == nil {
 			t.Fatalf("no comment on %s", column)
 		}
+		match := all[len(all)-1]
 		codes := map[int16]string{}
 		for _, pair := range strings.Split(string(match[1]), ", ") {
 			code, name, _ := strings.Cut(pair, " ")
@@ -165,7 +173,7 @@ func TestKindCodesMatchSchema(t *testing.T) {
 	if resume := comment("sync_page_bindings.resume_kind", "care kind"); !maps.Equal(resume, kinds) {
 		t.Fatalf("resume_kind comment %v differs from kind comment %v", resume, kinds)
 	}
-	if len(kinds) != 8 {
+	if len(kinds) != 10 {
 		t.Fatalf("schema names %d care kinds", len(kinds))
 	}
 	for code, name := range kinds {
@@ -177,8 +185,8 @@ func TestKindCodesMatchSchema(t *testing.T) {
 		}
 	}
 	constants := map[int16]string{care.KindBaby: "baby", care.KindFeed: "feed", care.KindSleep: "sleep", care.KindDiaper: "diaper",
-		care.KindTimer: "timer", care.KindSupplement: "supplement", care.KindGrowthProfile: "growth_profile", care.KindMeasurement: "measurement"}
-	if len(constants) != 8 {
+		care.KindTimer: "timer", care.KindSupplement: "supplement", care.KindGrowthProfile: "growth_profile", care.KindMeasurement: "measurement", care.KindImmunization: "immunization", care.KindPump: "pump"}
+	if len(constants) != 10 {
 		t.Fatalf("care kind constants collide: %v", constants)
 	}
 	for code, name := range constants {
@@ -203,7 +211,7 @@ func TestKindCodesMatchSchema(t *testing.T) {
 			t.Errorf("KindCode(%q) accepted", unknown)
 		}
 	}
-	for _, code := range []int16{0, 9, -1} {
+	for _, code := range []int16{0, 11, -1} {
 		if _, ok := care.KindName(code); ok {
 			t.Errorf("KindName(%d) accepted", code)
 		}
@@ -382,6 +390,13 @@ func TestWireServedVerbatimEscapesLikeEncoder(t *testing.T) {
 		if !bytes.Contains(row.Wire, []byte("Zo\u00e9")) || bytes.Contains(row.Wire, []byte("e\u0301")) {
 			t.Fatalf("%s: wire is not NFC: %s", entity.EntityKind, row.Wire)
 		}
+		// The stored wire is a fixed point of encoding/json's compaction
+		// with HTML escaping, which is why the direct encoders
+		// (protocol.AppendChange, SyncResponse.AppendJSON) append it
+		// verbatim.
+		if again, err := json.Marshal(json.RawMessage(row.Wire)); err != nil || !bytes.Equal(again, row.Wire) {
+			t.Fatalf("%s: compaction changes the stored wire: %s (%v)", entity.EntityKind, again, err)
+		}
 		sequence := uint64(index + 1)
 		journal := protocol.JournalChange{Cursor: cursor(sequence), EntityKind: entity.EntityKind, EntityID: entity.Meta.ID,
 			EntityVersion: entity.Meta.EntityVersion, ActorAccountID: accountA, DeviceID: deviceA, Operation: "create",
@@ -412,6 +427,12 @@ func TestWireServedVerbatimEscapesLikeEncoder(t *testing.T) {
 		Changes: changes, HighWater: highWater, NextPageToken: &token})
 	if !bytes.Equal(verbatim, todayBytes) {
 		t.Fatalf("sync page served verbatim differs from today's encoding:\n got %s\nwant %s", verbatim, todayBytes)
+	}
+	// The HTTP layer's direct encoder writes the same bytes.
+	direct, err := protocol.SyncResponse{ServerInstanceID: server.InstanceID, RecoveryEpoch: 1, Outcomes: []protocol.Outcome{},
+		EncodedChanges: encodedChanges, HighWater: highWater, NextPageToken: &token}.AppendJSON(nil)
+	if err != nil || !bytes.Equal(append(direct, '\n'), todayBytes) {
+		t.Fatalf("sync page through AppendJSON differs from today's encoding (%v):\n got %s\nwant %s", err, direct, todayBytes)
 	}
 	for _, raw := range []string{"<", ">", "&", "\u2028", "\u2029"} {
 		if bytes.Contains(verbatim, []byte(raw)) {

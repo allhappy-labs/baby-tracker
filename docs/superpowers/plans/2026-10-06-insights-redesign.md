@@ -21,7 +21,7 @@
   - Every task that adds or removes tests sets `EXPECTED_TESTS` to the count `make test` reports ("counted N"), in the same commit.
   - When the total drops, the commit message says which tests were deleted and why.
 - **Focused runs.** From `Packages/BabyTracker`, run one module with `swift test --filter <TestTarget>`.
-- **Simulator.** Use only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`. Never create or clone simulators.
+- **Simulator.** Use only `platform=iOS Simulator,id=<simulator-udid>`. Never create or clone simulators.
   - Check `pgrep -fl xcodebuild` first and wait if another run is active.
   - Never use `make build` or `make test-ui`, which select the simulator by name.
 - **Comparisons are factual.** Comparison copy is never evaluative and never coloured: ▲/▼/≈ in `Palette.secondaryText`.
@@ -2439,7 +2439,7 @@ The Ask cases stay `case .insight, .insightRange: break`, as set in Task 1. Make
 
 ```bash
 cd Packages/BabyTracker && swift test --filter "HistoryFeatureTests|InsightsFeatureTests|AskFeatureTests" && cd ../..
-pgrep -fl xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build
+pgrep -fl xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build
 ```
 Expected: tests PASS and `** BUILD SUCCEEDED **`.
 
@@ -2625,7 +2625,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ```bash
 pgrep -fl xcodebuild && echo "another run is active — wait" || \
-xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/GrowthFlowUITests \
   -only-testing:BabyTrackerUITests/AccessibilityAuditTests/testAuditInsights \
@@ -2642,16 +2642,16 @@ Also run the AX5 test that visits the Insights tab. Find its name with `grep -n 
 
 ```bash
 make test
-pgrep -fl xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build
+pgrep -fl xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build
 ```
 Expected: `OK: <EXPECTED_TESTS> tests` and `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 4: Screenshots against the mockups.**
-  1. Boot the shared simulator if needed (`xcrun simctl boot D17101C9-01EB-488D-AFE1-58E6C089B853`).
-  2. Install the built app (`xcrun simctl install D17101C9-01EB-488D-AFE1-58E6C089B853 <path from the build's .app>`).
+  1. Boot the shared simulator if needed (`xcrun simctl boot <simulator-udid>`).
+  2. Install the built app (`xcrun simctl install <simulator-udid> <path from the build's .app>`).
   3. Launch it with the launch arguments `Harness.Launch(seedFixture: true, historySessions: true)` produces. Read them from `UITestHarness.swift`'s `launch` function; they are `-uiTest…` flags.
   4. Open Insights, then capture screenshots:
-     - `xcrun simctl io D17101C9-01EB-488D-AFE1-58E6C089B853 screenshot work/insights-week.png`
+     - `xcrun simctl io <simulator-udid> screenshot work/insights-week.png`
      - after switching the range to All, `work/insights-all.png`
      - after scrolling to Growth, `work/insights-growth.png`
   5. Compare them by eye with `mockups/2026-10-04-insights-redesign/insights-full.html` (Week, All). Note each difference in the verification doc as either fixed or accepted with a reason.

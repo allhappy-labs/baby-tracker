@@ -202,13 +202,13 @@ public struct MeasurementSheet: View {
 
     @ViewBuilder
     private var fields: some View {
-        PanelSection {
+        CardSection {
             field("Weight (kg)", text: $model.weight, field: .weight)
             field("Length / height (cm)", text: $model.length, field: .length)
             if !model.length.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
                 // Outside a Form a menu picker shows no label: the row
                 // names it.
-                LabeledContent(LoggingL10n.text("Measured position")) {
+                LabeledRow(LoggingL10n.text("Measured position")) {
                     Picker(LoggingL10n.text("Measured position"), selection: $model.lengthPosition) {
                         Text(LoggingL10n.text("Choose position")).tag(Optional<LengthPosition>.none)
                         Text(LoggingL10n.text("Lying down")).tag(Optional(LengthPosition.lying))
@@ -223,7 +223,7 @@ public struct MeasurementSheet: View {
         } footer: {
             Text(LoggingL10n.text("Enter at least one positive value. For length or height, choose the measured position."))
         }
-        PanelSection {
+        CardSection {
             // In the check-in's own zone, so the day it shows is the
             // day the date validation checks.
             EditTimeRow(date: $model.when, latest: model.latestAllowedDate, identifier: "measurement.time")
@@ -231,12 +231,12 @@ public struct MeasurementSheet: View {
             validation(.date)
         }
         if let error = model.errorMessage {
-            PanelSection { Text(error).foregroundStyle(.red).accessibilityIdentifier("measurement.error") }
+            InlineError(error).accessibilityIdentifier("measurement.error")
         }
     }
 
     private func field(_ key: String, text: Binding<String>, field: MeasurementSheetModel.Field) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
             Text(LoggingL10n.text(key)).font(.subheadline)
             TextField(LoggingL10n.text(key), text: text)
                 #if os(iOS)
@@ -265,10 +265,7 @@ public struct MeasurementSheet: View {
     @ViewBuilder
     private func validation(_ field: MeasurementSheetModel.Field) -> some View {
         if let message = model.validationMessage(for: field) {
-            Text(message)
-                .font(.footnote)
-                .foregroundStyle(.red)
-                .fixedSize(horizontal: false, vertical: true)
+            InlineError(message)
                 .accessibilityIdentifier("measurement.validation." + field.rawValue)
         }
     }

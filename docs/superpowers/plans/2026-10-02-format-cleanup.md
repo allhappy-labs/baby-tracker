@@ -6,7 +6,7 @@ Spec: `docs/superpowers/specs/2026-10-02-format-cleanup-design.md` (binding; its
 
 - Work only in `<repo>/.worktrees/format-cleanup` on branch `feat/format-cleanup`.
 - Migrations 000001–000026 are immutable. Every edit to `000027_format_cleanup.sql` re-pins its sha256 in `Server/internal/migrate/compatibility.json` (min = max = 27).
-- Simulator: only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`; never create, clone or erase simulators.
+- Simulator: only `platform=iOS Simulator,id=<simulator-udid>`; never create, clone or erase simulators.
 - Docker: remove only containers/volumes your own runs created; other sessions share this machine.
 - Run gates with output redirected to a log file and report the real exit code; never pipe a gate through `tail`. Keep `EXPECTED_TESTS` in the Makefile in step with added/removed Swift tests.
 - Never touch production. No SSH, no deploys; the controller does rollout.
@@ -16,7 +16,7 @@ Spec: `docs/superpowers/specs/2026-10-02-format-cleanup-design.md` (binding; its
 Gates used below:
 - `make test` (keep `EXPECTED_TESTS` in the Makefile in step whenever tests are added or removed);
 - `make server-test`, `make server-smoke`, `make server-protocol-e2e`, `make build`;
-- UI tests: `xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' -only-testing:BabyTrackerUITests`.
+- UI tests: `xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' -only-testing:BabyTrackerUITests`.
 
 ## Task 1: S1 — Fixtures and vectors in current shapes (no Sources changes)
 

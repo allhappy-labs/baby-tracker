@@ -14,21 +14,25 @@ enum HistoryReportHTML {
         <p class="generated">\(escape(HistoryCopy.generated(report.generatedText)))</p></header>
 
         """
+        let hasNotes = report.hasNotes
         for day in report.days {
             html += "<section><h2>\(escape(day.title))</h2>"
             if !day.totalsLine.isEmpty {
                 html += "<p class=\"totals\">\(escape(day.totalsLine))</p>"
             }
             html += "<table><colgroup>"
-                + columnWidths.map { "<col style=\"width: \(Int(($0 * 100).rounded()))%\">" }.joined()
+                + columnWidths(hasNotes: hasNotes).map { "<col style=\"width: \(Int(($0 * 100).rounded()))%\">" }.joined()
                 + "</colgroup><thead><tr>"
-                + columns.map { "<th>\(escape($0))</th>" }.joined()
+                + columns(hasNotes: hasNotes).map { "<th>\(escape($0))</th>" }.joined()
                 + "</tr></thead><tbody>"
             for entry in day.entries {
                 html += "<tr class=\"entry\"><td class=\"time\">\(escape(entry.time))</td>"
                     + "<td class=\"type\">\(escape(entry.type))</td>"
                     + "<td>\(escape(entry.details))</td>"
-                    + "<td class=\"note\">\(entry.note.map(multiline) ?? "")</td></tr>"
+                if hasNotes {
+                    html += "<td class=\"note\">\(entry.note.map(multiline) ?? "")</td>"
+                }
+                html += "</tr>"
             }
             html += "</tbody></table></section>\n"
         }
@@ -37,11 +41,15 @@ enum HistoryReportHTML {
 
     /// The table's columns and their shares of the page width. The printer
     /// draws the same headings at the same places at the top of every later
-    /// page, so both read from here.
-    static var columns: [String] {
-        [HistoryCopy.columnTime, HistoryCopy.columnType, HistoryCopy.columnDetails, HistoryCopy.columnNote]
+    /// page, so both read from here. A report with no notes has no Note
+    /// column; Details takes its width.
+    static func columns(hasNotes: Bool) -> [String] {
+        [HistoryCopy.columnTime, HistoryCopy.columnType, HistoryCopy.columnDetails]
+            + (hasNotes ? [HistoryCopy.columnNote] : [])
     }
-    static let columnWidths: [CGFloat] = [0.17, 0.12, 0.36, 0.35]
+    static func columnWidths(hasNotes: Bool) -> [CGFloat] {
+        hasNotes ? [0.17, 0.12, 0.36, 0.35] : [0.17, 0.12, 0.71]
+    }
     /// A cell's left and right padding, in points.
     static let cellPadding: CGFloat = 4
 

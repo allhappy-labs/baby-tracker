@@ -12,6 +12,8 @@ public final class InsightsViewModel {
     /// Growth keeps its own model: its readings are not day-bucketed and it
     /// ignores the range.
     public let growth: GrowthViewModel
+    /// The baby's vaccinations: all time, whatever the range.
+    public let immunizations: ImmunizationsViewModel
     /// A preference that can change while the screen is alive; the view sets
     /// it and reloads.
     public var volumeUnit: VolumeUnit
@@ -25,6 +27,7 @@ public final class InsightsViewModel {
         self.babyID = babyID
         self.volumeUnit = volumeUnit
         self.growth = GrowthViewModel(store: store, babyID: babyID)
+        self.immunizations = ImmunizationsViewModel(store: store, babyID: babyID)
     }
 
     /// One fetch per kind over the period and the period before it (or all
@@ -34,6 +37,7 @@ public final class InsightsViewModel {
     public func load() throws {
         do {
             try growth.load()
+            try immunizations.load()
             let zone = TimeZone.current
             let now = store.now
             var calendar = Calendar(identifier: .gregorian)
@@ -52,6 +56,8 @@ public final class InsightsViewModel {
                 case .sleep(let entry): sleepsByID[entry.id] = entry
                 case .diaper(let entry): input.diapers.append(entry.startedAt)
                 case .supplement: break
+                case .immunization: break
+                case .pump: break
                 }
             }
             input.feeds = try store.feedingSessions(for: babyID, from: start, to: end).map { session in
@@ -81,6 +87,7 @@ public final class InsightsViewModel {
             // A realm switch or failed read must not leave another family's
             // previous feeding/sleep/diaper stats presented as current data.
             summary = .empty
+            immunizations.reset()
             throw error
         }
     }

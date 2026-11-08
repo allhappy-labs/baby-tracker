@@ -5,13 +5,12 @@ import BabyCore
 public enum FeedPart: Equatable, Sendable { case breast(BreastSide), bottle(BottleContents) }
 public enum PartError: Error, Equatable {
     case tooShort, startBeforePreviousPart, missingFeed, missingComponent, notASingleBottle, invalidVolume
-    /// An edited part's start moved past the start of the part after it in
-    /// its session, which would reorder the session (ruling H-R15).
-    case startAfterNextPart
+    /// An edited part's new times run into another part of its session.
+    case overlapsPart
 }
 
 /// What `startPartStoppingRunning` did: the part now running, and the timed
-/// bottle it had to stop first, if any — saved at the usual amount, which
+/// bottle it had to stop first, if any — saved at the previous bottle's amount, which
 /// nobody was asked to confirm.
 @MainActor
 public struct StartedPart {
@@ -52,7 +51,7 @@ public extension BabyStore {
                     try discardZeroLengthBottle(on: running, expectedWriteContext: expectedWriteContext)
                     _ = try stopFeed(running, expectedWriteContext: expectedWriteContext)
                 } else if running.currentBottleStartedAt != nil {
-                    stoppedBottle = try stopBottle(running, volumeML: try LogDefaults(store: self).mostUsedBottleVolumeML(for: babyID),
+                    stoppedBottle = try stopBottle(running, volumeML: try LogDefaults(store: self).lastBottleVolumeML(for: babyID),
                                                    expectedWriteContext: expectedWriteContext)
                 } else {
                     _ = try stopFeed(running, expectedWriteContext: expectedWriteContext)
@@ -82,13 +81,15 @@ public extension BabyStore {
         return StartedPart(timer: timer, stoppedBottle: stoppedBottle)
     }
 
+    /// `contents`: what the caregiver chose on the amount screen. Without one
+    /// it is what the bottle was started with — and a bottle this device
+    /// didn't start carries none (`startBottle` sets none), so the best guess
+    /// is what was logged last, not the generic fallback: the same reasoning
+    /// `LogDefaults` already applies to a fresh Bottle sheet.
     @discardableResult
-    func stopBottle(_ timer: ActiveTimer, volumeML: Double, expectedWriteContext: RealmWriteContext? = nil) throws -> FeedEntry? {
-        // A bottle this device didn't start carries no contents (`startBottle`
-        // sets none); the best guess is what was logged last, not the generic
-        // fallback — the same reasoning `LogDefaults` already applies to a
-        // fresh Bottle sheet.
-        let contents = try timer.bottleContents ?? LogDefaults(store: self).lastBottleContents(for: timer.babyID)
+    func stopBottle(_ timer: ActiveTimer, volumeML: Double, contents chosen: BottleContents? = nil,
+                    expectedWriteContext: RealmWriteContext? = nil) throws -> FeedEntry? {
+        let contents = try chosen ?? timer.bottleContents ?? LogDefaults(store: self).lastBottleContents(for: timer.babyID)
         try finishBottle(volumeML: volumeML, contents: contents, on: timer, expectedWriteContext: expectedWriteContext)
         return try stopFeed(timer, expectedWriteContext: expectedWriteContext)
     }
@@ -140,10 +141,25 @@ public extension BabyStore {
         }
     }
 
-    /// Rewrites the single bottle component's volume on a feed logged earlier.
-    /// Refuses a feed with no bottle component or more than one — which one
-    /// would this volume belong to? — and a volume that is not positive.
-    func setBottleVolume(_ volumeML: Double, onFeed feedID: UUID) throws {
+    /// The single bottle of a feed logged earlier, or nil when the feed is
+    /// gone or does not hold exactly one.
+    func bottlePart(onFeed feedID: UUID) throws -> (volumeML: Double, contents: BottleContents)? {
+        let realmKey = activeRealm.encodedKey
+        guard let feed = try context.fetch(FetchDescriptor<FeedEntry>(predicate: #Predicate {
+            $0.id == feedID && $0.realmKey == realmKey && !$0.isTombstoned
+        })).first else { return nil }
+        let bottles = feed.components.filter { $0.bottleContents != nil }
+        guard bottles.count == 1, let volume = bottles[0].volumeML, let contents = bottles[0].bottleContents else {
+            return nil
+        }
+        return (volume, contents)
+    }
+
+    /// Rewrites the single bottle component's volume and contents on a feed
+    /// logged earlier, in one write. Refuses a feed with no bottle component
+    /// or more than one — which one would these belong to? — and a volume
+    /// that is not positive.
+    func setBottle(volumeML: Double, contents: BottleContents, onFeed feedID: UUID) throws {
         guard volumeML > 0 else { throw PartError.invalidVolume }
         let realmKey = activeRealm.encodedKey
         guard let feed = try context.fetch(FetchDescriptor<FeedEntry>(predicate: #Predicate {
@@ -153,7 +169,7 @@ public extension BabyStore {
             throw PartError.notASingleBottle
         }
         feed.components = feed.components.map { component in
-            guard case let .bottle(id, _, contents, seconds, startedAt, endedAt) = component else { return component }
+            guard case let .bottle(id, _, _, seconds, startedAt, endedAt) = component else { return component }
             return .bottle(id: id, volumeML: volumeML, contents: contents, seconds: seconds, startedAt: startedAt, endedAt: endedAt)
         }
         try update(feed)

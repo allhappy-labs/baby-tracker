@@ -17,7 +17,7 @@
 ## Global Constraints
 
 - **Workspace.** Work in a worktree on branch `feat/history-redesign`, cut from `main` at `add33b7` or later.
-- **Simulator.** Use only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`. Never create, clone or erase simulators.
+- **Simulator.** Use only `platform=iOS Simulator,id=<simulator-udid>`. Never create, clone or erase simulators.
 - **Copy rule.**
   - Times only: no "ago", and no "just now" on these screens.
   - No title words that repeat the icon ("Feeding session", "Diaper", "Med").
@@ -188,7 +188,7 @@ cd Packages/BabyTracker && rtk proxy swift test --disable-sandbox --filter Sessi
   - In edit mode, the title row shows the entry's time as an `EditTimeRow`. The tap-to-save choice buttons become select-then-Save. The footer shows **Save** (primary fill) and **Delete** (destructive, with a confirmation).
   - Create mode is unchanged.
   - Heights: use the existing `.sheetHeight`, plus room for the footer.
-- [ ] **Step 4: Run the tests until they pass, then run `make test` and `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`.**
+- [ ] **Step 4: Run the tests until they pass, then run `make test` and `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`.**
 - [ ] **Step 5: Commit.** Message: `feat(logging): edit modes for diaper, meds and solids`.
 
 ### Task 3: Part editors — bottle, breast and sleep (with Join row), and growth Delete
@@ -457,7 +457,7 @@ rtk proxy grep -rn "EntryEdit" Packages Apps UITests
   - Add the History XXXL Ukrainian case: rows and chips wrap without mid-word hyphenation, and the session sheet stays usable.
 - [ ] **Step 4: Run all gates.**
   - `make test`, `make build`.
-  - `make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`, with 0 failures.
+  - `make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`, with 0 failures.
   - `make server-protocol-e2e`.
   - The localization gate (Global Constraints), printing nothing.
   - Save the History screenshots to `docs/verification/2026-10-03-history-redesign/`, and write `docs/verification/2026-10-03-history-redesign.md` with the gate results.

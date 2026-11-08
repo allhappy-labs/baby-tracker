@@ -1,4 +1,5 @@
 import BabyProtocol
+import BabyCore
 import BabyStore
 import Foundation
 
@@ -130,7 +131,7 @@ public final class LiveActivityRegistrationStore: @unchecked Sendable {
 
     public enum StoreError: Error, Equatable, Sendable { case unreadable }
 
-    static let keychainService = "com.olhapi.babytracker.liveactivity"
+    static let keychainService = AppIdentity.identifier("liveactivity")
     static let bindingAccount = "installation-binding"
 
     public let directory: URL

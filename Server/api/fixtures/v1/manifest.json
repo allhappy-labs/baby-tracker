@@ -22,6 +22,8 @@
     "timer-sleep.json": "25d9d76bb0a117e1732e416e26925fcdd8e07c4609be6120836f0f9da0d149b8",
     "supplement.json": "ab787587adc859aae8abaa390cbb9c623c530c0d12c0b567f4f50cf1b6d09e8f",
     "growth-profile.json": "dcb4af7d11c92d0530b4ab0f9fd50651086700e942e1b2de42137b919128764f",
-    "measurement.json": "121ea2b5865b994e614613d195c706faf394bd8982b180d84b98cd3d15708c25"
+    "measurement.json": "121ea2b5865b994e614613d195c706faf394bd8982b180d84b98cd3d15708c25",
+    "immunization.json": "11a8adb5b08130ee429ec6772204e130789f1fac0759972d30adb11e0e5e91b1",
+    "pump.json": "9e374ee340e4a179df85c55737e215add2093cc7ea5eeeff7014e1a5a1398877"
   }
 }

@@ -24,7 +24,7 @@ import BabyCore
         model.volumeML = 80
         model.step(1)
         try await model.done()
-        #expect(try store.lastFeed(for: baby)?.totalBottleVolumeML == 90)
+        #expect(try store.lastFeed(for: baby)?.totalBottleVolumeML == 85)
         #expect(try store.activeTimers(for: baby).isEmpty)
     }
 
@@ -72,5 +72,57 @@ import BabyCore
         model.step(-1)
         #expect(model.volumeML == 0)
         #expect(!model.canDone)
+    }
+
+    @Test func theAmountScreenStartsFromTheBottlesOwnContents() throws {
+        let (store, baby, clock) = try fixture()
+        _ = try store.logBottle(volumeML: 80, contents: .formula, for: baby)
+        clock.advance(by: 3_600)
+        let timer = try store.startPart(.bottle(.breastMilk), for: baby)
+        let stopped = BottleSheetModel(store: store, babyID: baby, unit: .millilitres, mode: .stopped(timerID: timer.id))
+        #expect(stopped.contents == .breastMilk)
+        // The previous bottle's amount.
+        #expect(stopped.volumeML == 80)
+    }
+
+    @Test func doneAfterATimedBottleSavesTheChosenContents() async throws {
+        let (store, baby, clock) = try fixture()
+        let timer = try store.startPart(.bottle(.breastMilk), for: baby)
+        clock.advance(by: 400)
+        let model = BottleSheetModel(store: store, babyID: baby, unit: .millilitres, mode: .stopped(timerID: timer.id))
+        model.contents = .formula
+        model.volumeML = 70
+        try await model.done()
+        let saved = try #require(try store.lastFeed(for: baby))
+        #expect(saved.bottleComponents.first?.bottleContents == .formula)
+        #expect(saved.totalBottleVolumeML == 70)
+    }
+
+    @Test func setAmountStartsFromTheSavedBottleAndSavesContentsWithIt() async throws {
+        let (store, baby, _) = try fixture()
+        let feed = try store.logBottle(volumeML: 60, contents: .breastMilk, for: baby)
+        let model = BottleSheetModel(store: store, babyID: baby, unit: .millilitres, mode: .amount(feedID: feed.id))
+        #expect(model.contents == .breastMilk)
+        #expect(model.volumeML == 60)
+        model.contents = .mixed
+        model.volumeML = 100
+        try await model.done()
+        #expect(feed.bottleComponents.first?.bottleContents == .mixed)
+        #expect(feed.totalBottleVolumeML == 100)
+    }
+
+    /// Stopped from the other phone while this screen was open: nothing is
+    /// saved, and the screen says so rather than writing a second bottle.
+    @Test func doneAfterTheTimerIsGoneSavesNothing() async throws {
+        let (store, baby, clock) = try fixture()
+        let timer = try store.startPart(.bottle(.breastMilk), for: baby)
+        clock.advance(by: 400)
+        let model = BottleSheetModel(store: store, babyID: baby, unit: .millilitres, mode: .stopped(timerID: timer.id))
+        model.contents = .formula
+        _ = try store.stopBottle(timer, volumeML: 50)
+        await #expect(throws: BottleTimerError.timerChanged) { try await model.done() }
+        let saved = try #require(try store.lastFeed(for: baby))
+        #expect(saved.bottleComponents.first?.bottleContents == .breastMilk)
+        #expect(saved.totalBottleVolumeML == 50)
     }
 }

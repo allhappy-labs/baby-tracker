@@ -580,7 +580,7 @@ private func dayKey(_ date: Date) -> DayKey {
     let (store, baby, _) = try makeStore()
     let model = HistoryViewModel(store: store, babyID: baby)
 
-    #expect(model.filter == [.feed, .sleep, .diaper, .supplement, .growth])
+    #expect(model.filter == [.feed, .sleep, .diaper, .supplement, .growth, .vaccine, .pump])
     #expect(!model.isFiltered)
     model.filter.remove(.growth)
     #expect(model.isFiltered)

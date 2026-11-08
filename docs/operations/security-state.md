@@ -5,7 +5,11 @@ sessions, families, memberships, invitations, entitlements, recovery claims,
 integration grants and command receipts are relational rows written by
 transactional command handlers. Every security change also appends one audit
 row to the hash chain of the scope it changes (the family, or the account) in
-the same transaction. There is no file ledger, trusted head, projector role,
+the same transaction. The one exception is a routine refresh rotation (owner
+decision D1, 2026-10-16): it appends no row, and the consumed parent session,
+the child session and, for a recoverable refresh, the refresh receipt are its
+record; reuse detection still appends `session_revoked`. Audit rows are kept
+for at least 13 months (see "Audit retention" below). There is no file ledger, trusted head, projector role,
 projection function or in-memory replay any more, and no state volume: the
 database is the whole security history.
 
@@ -112,8 +116,8 @@ baby-tracker-admin authority verify
 
 It first checks the actor-ID key commitment (and, when set,
 `BT_SERVER_INSTANCE_ID`/`BT_RECOVERY_EPOCH`) against `server_state`, then walks
-every account and family chain from genesis, also holding each chain to its
-checkpoint. It prints one `failed scope=<account|family> id=<uuid>` line per
+every account and family chain from genesis (or from its retention anchor,
+below), also holding each chain to its checkpoint. It prints one `failed scope=<account|family> id=<uuid>` line per
 failed chain and a summary `instance_id=… epoch=… scopes=… rows=… failed=…
 result=verified|failed`, and exits 1 when any chain failed or could not be
 verified.
@@ -149,6 +153,72 @@ pass marks it failed again. How clients see a failed scope:
 
 This split is deliberate (decided with Phase 1): the family surface keeps its
 legacy code set, and nothing client-visible differs.
+
+### Audit retention
+
+Audit rows are kept for **at least** 13 months (owner decision D1,
+2026-10-16). Retention drops whole partitions of `security_audit_events`, so a
+row is kept until its whole partition's range ended 13 months ago:
+
+- from 2027 the partitions are monthly, so a row is kept 13 to 14 months;
+- 2026 is one yearly partition: its rows are kept until its end
+  (2027-01-01) is 13 months old, about February 2028, up to about 25 months;
+- the default partition (legacy rows, or a row stamped outside every
+  partition) is never dropped. Its rows stay, but once a chain's retention
+  anchor passes them they are below the anchor and no longer verified.
+
+The `audit-retention` maintenance loop runs hourly on the maintenance pool and
+calls `app.drop_expired_audit_partition`, which drops the oldest partition
+whose range ended more than 13 months ago, one per call:
+
+- it takes the partition roll's advisory lock and a 1 s lock timeout;
+- before anchoring it checks every chain with rows in the partition: the chain
+  is not failed, its account or family row exists with a head at or past the
+  new anchor, and its rows from its previous anchor (or its start) through the
+  new anchor, wherever they live (a neighbouring month near a boundary, the
+  default partition), are exactly one per seq and link by `prev_hash`. If any
+  chain does not, it changes nothing and raises XX001 `audit retention
+  refused`; the server logs `audit partition not dropped: a chain in it does
+  not verify; it needs an operator` at error level with the partition, chain,
+  seq and reason, and the partition (and every later one) stays until the
+  chain is settled. This stops a backdated duplicate of a seq, which the
+  runtime credential could insert, from moving an anchor past rows nobody
+  verified, and an anchor from ever being taken over a failed chain. Treat an
+  XX001 as a possible tampering signal, not only as stale data: the runtime
+  credential can insert audit rows (a duplicate or a row of no account into
+  the oldest expired partition) or fail a chain, and either stalls retention
+  this way until an operator investigates. Nothing is lost while it stalls;
+  the partitions are only kept longer;
+- it then records the retention anchor per chain in `audit_retention_anchors`
+  (the seq and hash of the chain's last dropped row; it only moves forward),
+  detaches the partition and drops it, in the same transaction;
+- it never drops the default partition, the current or the next partition, or
+  anything holding rows from the last 13 months by the database's own clock,
+  whatever clock the caller passes.
+
+Lock behaviour. The check and anchors read the expiring partition under
+`SHARE` (nothing writes there). The detach takes `ACCESS EXCLUSIVE` on the
+audit table: it waits behind every open reader of the audit table (a verifier
+walk, an export page, a `pg_dump`), and while it waits every audit insert,
+which is every security command (sign-in, revocations, family commands),
+queues behind it. The 1 s lock timeout bounds that: behind a reader still
+running after a second the drop gives up (55P03), changes nothing, and the
+loop waits a whole hour (not a minute) before the next try, so a long reader
+such as a backup stalls security commands for at most one second an hour.
+Uncontended, the exclusive lock is held only for the detach, the drop and the
+commit, once a month.
+
+Both verifiers walk a chain from its anchor: the first kept row's `prev_hash`
+must be the anchor's hash, and a chain whose rows all expired must have its
+head at the anchor. A kept row above the anchor that was changed, removed or
+reordered still fails the chain closed. Rows at or below the anchor are not
+walked, but each anchor records the end of the partition it was dropped with
+(`dropped_before`): a row at or below the anchor stamped more than a day after
+that end can only have been inserted after the drop, and the full verify
+(`authority verify`; the incremental pass only revisits chains whose head
+moved) fails its chain. Each verifier transaction takes
+`ACCESS SHARE` on the audit table before its snapshot, so a drop never
+commits between the anchor and the rows a walk reads.
 
 Without an external witness, a writer holding the runtime credential who
 appends rows that extend a chain consistently, or an owner-level writer who

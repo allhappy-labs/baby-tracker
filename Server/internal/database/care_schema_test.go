@@ -21,10 +21,10 @@ import (
 func TestCareSchemaIsVersionThirty(t *testing.T) {
 	f := testpg.New(t)
 	var v int64
-	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 32 {
+	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 37 {
 		t.Fatalf("version=%d err=%v", v, err)
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 37); err != nil {
 		t.Fatal(err)
 	}
 	var parts int
@@ -65,7 +65,7 @@ func TestCareSchemaIsVersionThirty(t *testing.T) {
 // comments in 000030 and 000032); nothing else is indexed.
 func TestCareSchemaIndexesAreNamedQueries(t *testing.T) {
 	f := testpg.New(t)
-	want := []string{"care_entities_baby_match_idx", "care_entities_history_idx", "care_entities_latest_breast_idx", "care_entities_latest_milk_idx", "care_entities_one_growth_profile", "care_entities_one_live_timer",
+	want := []string{"care_entities_baby_match_idx", "care_entities_history_idx", "care_entities_latest_breast_idx", "care_entities_latest_milk_idx", "care_entities_one_growth_profile", "care_entities_one_live_timer", "care_entities_one_open_pump",
 		"care_entities_pkey", "care_entities_seq_key", "care_entities_session_idx", "care_entities_snapshot_idx"}
 	rows, err := f.Owner.Query(t.Context(), `SELECT indexrelid::regclass::text FROM pg_index WHERE indrelid='public.care_entities'::regclass ORDER BY 1`)
 	if err != nil {
@@ -139,12 +139,13 @@ func TestCareSchemaFamilyCountersAreTenantWritable(t *testing.T) {
 
 // The care kind codes are fixed (000030 section 1): 1 baby, 2 feed, 3 sleep,
 // 4 diaper, 5 timer, 6 supplement, 7 growth_profile, 8 measurement, in the
-// legacy snapshot key order; timer kinds 1 feed, 2 sleep. The column comments
+// legacy snapshot key order, 9 immunization (000033) and 10 pump (000034); timer kinds 1 feed,
+// 2 sleep. The column comments
 // state the mapping, and the kind-shape CHECK pins it: each record shape is
 // accepted by exactly the codes of the kinds that may take that shape.
 func TestCareSchemaKindCodesArePinned(t *testing.T) {
 	f := testpg.New(t)
-	const careKinds = "care kind: 1 baby, 2 feed, 3 sleep, 4 diaper, 5 timer, 6 supplement, 7 growth_profile, 8 measurement"
+	const careKinds = "care kind: 1 baby, 2 feed, 3 sleep, 4 diaper, 5 timer, 6 supplement, 7 growth_profile, 8 measurement, 9 immunization, 10 pump"
 	for column, want := range map[string]string{
 		"care_entities.kind": careKinds, "sync_page_bindings.resume_kind": careKinds, "care_entities.timer_kind": "timer kind: 1 feed, 2 sleep",
 		"care_entities.feed_kind": "feed kind: 1 breast, 2 bottle, 3 solids",
@@ -204,15 +205,19 @@ func TestCareSchemaKindCodesArePinned(t *testing.T) {
 		{"timer kind 3", shape{baby: baby, started: started, timerKind: int16(3)}, nil},
 		{"labelled", shape{baby: baby, started: started, label: "Vitamin D"}, []int16{6}},
 		{"undated", shape{baby: baby}, []int16{7}},
-		{"dated", shape{baby: baby, started: started}, []int16{2, 3, 4, 8}},
+		{"dated", shape{baby: baby, started: started}, []int16{2, 3, 4, 8, 9}},
 		// 000032: a live feed has a feed kind (1..3); nothing else does.
 		{"ended with a feed kind", shape{baby: baby, started: started, ended: ended, feedKind: int16(1)}, []int16{2}},
 		{"ended with solids", shape{baby: baby, started: started, ended: ended, feedKind: int16(3)}, []int16{2}},
 		{"feed kind 4", shape{baby: baby, started: started, ended: ended, feedKind: int16(4)}, nil},
 		{"ended without a feed kind", shape{baby: baby, started: started, ended: ended, noFeedKind: true}, []int16{3, 4}},
+		// 000034: a pump has no baby, a start, and may have an end.
+		{"family-owned, dated", shape{started: started}, []int16{10}},
+		{"family-owned, ended", shape{started: started, ended: ended}, []int16{10}},
+		{"family-owned, undated", shape{}, nil},
 	} {
 		var accepted []int16
-		for code := int16(0); code <= 9; code++ {
+		for code := int16(0); code <= 11; code++ {
 			sp, err := tx.Begin(t.Context())
 			if err != nil {
 				t.Fatal(err)
@@ -289,7 +294,7 @@ func TestCareSchemaPlansKeepIndexConditionsUnderRLS(t *testing.T) {
 		}
 		parents[child] = parent
 	}
-	if rows.Err() != nil || len(parents) != 16*10 {
+	if rows.Err() != nil || len(parents) != 16*11 {
 		t.Fatalf("partition indexes %d err=%v", len(parents), rows.Err())
 	}
 
@@ -473,7 +478,7 @@ func TestLegacyCareStorageIsGone(t *testing.T) {
 	if listed, err = pgx.CollectRows(rows, pgx.RowTo[string]); err != nil || len(listed) != 0 {
 		t.Fatalf("the current manifest still lists %v (err=%v)", listed, err)
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 37); err != nil {
 		t.Fatal(err)
 	}
 }

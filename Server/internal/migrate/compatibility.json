@@ -1,11 +1,36 @@
 {
-  "min": 32,
-  "max": 32,
+  "min": 37,
+  "max": 37,
   "known": [
     {
       "version": 32,
       "name": "000032_baseline.sql",
       "sha256": "c157a7e3e8df3d98ce57ca557ca5282872eedd4355b35707db3ecc8cfe31da8b"
+    },
+    {
+      "version": 33,
+      "name": "000033_immunizations.sql",
+      "sha256": "40380fddef9683b640b825ffc7e5afa2b990554f978afb8b26053e8e6bf59b82"
+    },
+    {
+      "version": 34,
+      "name": "000034_pumping.sql",
+      "sha256": "47f5ed52e73a915db7cb07f2ce66dd9522bc87e74d3a0d35aa746402066f245d"
+    },
+    {
+      "version": 35,
+      "name": "000035_audit_retention.sql",
+      "sha256": "d2f260885db3d56e6aa396482cddc6ca1fdea32d30097089bc5b6df23dad6c65"
+    },
+    {
+      "version": 36,
+      "name": "000036_request_authority_family_key.sql",
+      "sha256": "8c116b63d0fef8bb623c5117d83084bea126f05b514efda5e68b367dea414a5d"
+    },
+    {
+      "version": 37,
+      "name": "000037_family_delete_cascade.sql",
+      "sha256": "c2818a07407d7a25e3dd3d4f268b69b6e9f907e6d99bd7abf360d9531acc4cfc"
     }
   ]
 }

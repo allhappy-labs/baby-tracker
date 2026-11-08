@@ -98,6 +98,40 @@ func ValidateMutation(mutation protocol.Mutation, limits protocol.Limits) error 
 			return err
 		}
 		return validateOptionalText(payload.Note, limits.MaxNoteBytes, 0, true)
+	case protocol.PumpPayload:
+		if mutation.EntityKind != "pump" || (mutation.Operation != "create" && mutation.Operation != "update") {
+			return protocol.ErrInvalidMutation
+		}
+		if !validTimeZone(payload.TimeZoneID) || !oneOf(payload.Side, "left", "right", "both") {
+			return protocol.ErrInvalidMutation
+		}
+		if err := validatePumpTimes(payload.StartedAt, payload.EndedAt); err != nil {
+			return err
+		}
+		if payload.VolumeML != nil && (payload.VolumeML.CmpInteger(0) < 0 || payload.VolumeML.CmpInteger(1000) > 0 || payload.VolumeML.Scale() > 2) {
+			return protocol.ErrInvalidDecimal
+		}
+		return validateOptionalText(payload.Note, limits.MaxNoteBytes, 0, true)
+	case protocol.ImmunizationPayload:
+		if mutation.EntityKind != "immunization" || (mutation.Operation != "create" && mutation.Operation != "update") {
+			return protocol.ErrInvalidMutation
+		}
+		if !protocol.ValidUUID(payload.BabyID) || !validTimeZone(payload.TimeZoneID) {
+			return protocol.ErrInvalidMutation
+		}
+		if err := validateTimestamp(payload.GivenAt); err != nil {
+			return err
+		}
+		if strings.TrimSpace(payload.Vaccine) == "" {
+			return protocol.ErrInvalidText
+		}
+		if err := validateOptionalText(&payload.Vaccine, 256, 64, false); err != nil {
+			return err
+		}
+		if payload.Dose != nil && (*payload.Dose < 1 || *payload.Dose > 10) {
+			return protocol.ErrInvalidMutation
+		}
+		return validateOptionalText(payload.Note, limits.MaxNoteBytes, 0, true)
 	case protocol.DiaperPayload:
 		if mutation.EntityKind != "diaper" || (mutation.Operation != "create" && mutation.Operation != "update") {
 			return protocol.ErrInvalidMutation
@@ -150,10 +184,10 @@ func ValidateMutation(mutation protocol.Mutation, limits protocol.Limits) error 
 		// session-only edit is content on its own.
 		return nil
 	case protocol.DeletePayload:
-		if mutation.Operation != "delete" || !oneOf(mutation.EntityKind, "baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement") {
+		if mutation.Operation != "delete" || !oneOf(mutation.EntityKind, "baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "immunization", "pump") {
 			return protocol.ErrInvalidMutation
 		}
-		if mutation.EntityKind == "baby" {
+		if mutation.EntityKind == "baby" || mutation.EntityKind == "pump" {
 			if payload.BabyID != nil {
 				return protocol.ErrInvalidMutation
 			}
@@ -426,6 +460,29 @@ func validateTimeRange(start string, end *string) error {
 	startTime, _ := time.Parse("2006-01-02T15:04:05.000000Z", startNormalized)
 	endTime, _ := time.Parse("2006-01-02T15:04:05.000000Z", endNormalized)
 	if endTime.Before(startTime) || endTime.Sub(startTime) > 7*24*time.Hour {
+		return protocol.ErrInvalidTimestamp
+	}
+	return nil
+}
+
+// validatePumpTimes: a pumping session's end, when it has one, is not before
+// its start and at most six hours after it. Whether either is in the future
+// needs the accept time, so the record rules check that (applyRecord).
+func validatePumpTimes(start string, end *string) error {
+	startNormalized, err := protocol.NormalizeTimestamp(start)
+	if err != nil {
+		return protocol.ErrInvalidTimestamp
+	}
+	if end == nil {
+		return nil
+	}
+	endNormalized, err := protocol.NormalizeTimestamp(*end)
+	if err != nil {
+		return protocol.ErrInvalidTimestamp
+	}
+	startTime, _ := time.Parse("2006-01-02T15:04:05.000000Z", startNormalized)
+	endTime, _ := time.Parse("2006-01-02T15:04:05.000000Z", endNormalized)
+	if endTime.Before(startTime) || endTime.Sub(startTime) > 6*time.Hour {
 		return protocol.ErrInvalidTimestamp
 	}
 	return nil

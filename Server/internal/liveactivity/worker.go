@@ -167,7 +167,8 @@ type Worker struct {
 	Now                func() time.Time
 	Jitter             func(time.Duration) time.Duration
 	// Logger receives bounded, token-free lines: one per send APNs did not
-	// accept and one per parked job. Nil logs to slog.Default().
+	// accept, one per parked job and one per minute's sweep. Nil logs to
+	// slog.Default().
 	Logger      *slog.Logger
 	maintenance sync.Mutex
 	nextSweep   time.Time
@@ -181,6 +182,40 @@ type Worker struct {
 	running, passed atomic.Bool
 	// retryWait is Run's wait before it resumes; nil waits on a timer.
 	retryWait func(context.Context, time.Duration) error
+	// claims times the claim calls between two sweeps, for the sweep's log
+	// line.
+	claims claimTimes
+}
+
+// claimTimes are the claim calls since the last sweep: how many, how many
+// claimed a job, and their latency (the worker slot wait and the
+// statement), summed and at most.
+type claimTimes struct {
+	mu             sync.Mutex
+	calls, claimed int
+	total, longest time.Duration
+}
+
+func (c *claimTimes) observe(took time.Duration, claimed int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.calls++
+	c.claimed += claimed
+	c.total += took
+	c.longest = max(c.longest, took)
+}
+
+// take returns the log attributes of the calls so far and starts again.
+func (c *claimTimes) take() []any {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	mean := time.Duration(0)
+	if c.calls > 0 {
+		mean = c.total / time.Duration(c.calls)
+	}
+	attrs := []any{"claim_calls", c.calls, "claimed", c.claimed, "claim_mean_us", mean.Microseconds(), "claim_max_us", c.longest.Microseconds()}
+	c.calls, c.claimed, c.total, c.longest = 0, 0, 0, 0
+	return attrs
 }
 
 func NewWorker(q *Queue, g SnapshotGuard, t Transport, d *Dirty, slots *database.WorkerSlots) *Worker {
@@ -337,11 +372,17 @@ func (w *Worker) run(ctx context.Context, ready func(context.Context) error) err
 }
 
 // maintain, once a minute: the registration sweep (repeated while a page
-// comes back full), the work sweep (main's claim ran it), then retention.
+// comes back full), the work sweep (main's claim ran it; page after page
+// until one comes back short), then retention. A completed sweep logs one
+// line at Info, numbers only: its duration, the registration pages and
+// revocations, the work-sweep pages, the rows retention removed, and the
+// claim calls since the last sweep with their mean and longest latency.
 func (w *Worker) maintain(ctx context.Context) error {
 	w.maintenance.Lock()
 	defer w.maintenance.Unlock()
 	if !w.Now().Before(w.nextSweep) {
+		started := time.Now()
+		pages, revokedTotal := 0, 0
 		for page := 0; page < maximumSweepPages; page++ {
 			var revoked int
 			if err := w.inSlot(ctx, func(ctx context.Context) (err error) {
@@ -350,17 +391,34 @@ func (w *Worker) maintain(ctx context.Context) error {
 			}); err != nil {
 				return err
 			}
+			pages, revokedTotal = pages+1, revokedTotal+revoked
 			if revoked < SweepRegistrationsLimit {
 				break
 			}
 		}
-		if err := w.inSlot(ctx, w.Queue.SweepWork); err != nil {
-			return err
+		// The work sweep commits page by page, each in its own slot, so no
+		// family's dirty row stays locked for the whole pass.
+		workPages := 0
+		for after := ""; ; {
+			if err := w.inSlot(ctx, func(ctx context.Context) (err error) {
+				after, err = w.Queue.SweepWorkPage(ctx, after)
+				return err
+			}); err != nil {
+				return err
+			}
+			workPages++
+			if after == "" {
+				break
+			}
 		}
-		if err := w.inSlot(ctx, func(ctx context.Context) error { _, err := w.Queue.Retain(ctx); return err }); err != nil {
+		var retained int64
+		if err := w.inSlot(ctx, func(ctx context.Context) (err error) { retained, err = w.Queue.Retain(ctx); return err }); err != nil {
 			return err
 		}
 		w.nextSweep = w.Now().Add(time.Minute)
+		attrs := append([]any{"duration_ms", time.Since(started).Milliseconds(), "pages", pages, "revoked", revokedTotal, "work_pages", workPages, "retained", retained},
+			w.claims.take()...)
+		w.logger().Info("live activity sweep", attrs...)
 	}
 	return nil
 }
@@ -402,10 +460,14 @@ func (w *Worker) RunOnce(ctx context.Context, limit int) error {
 			return ctx.Err()
 		}
 		var claims []Claim
+		claimStarted := time.Now()
 		err := w.inSlot(ctx, func(ctx context.Context) (err error) {
 			claims, err = w.Queue.Claim(ctx, w.Now(), 1)
 			return err
 		})
+		if err == nil {
+			w.claims.observe(time.Since(claimStarted), len(claims))
+		}
 		if err != nil {
 			<-processSends
 			return err
@@ -614,6 +676,7 @@ func (w *Worker) snapshot(ctx context.Context, c Claim, state TargetState) (disp
 		// the swiped break card still naming a session resumed later — and must
 		// not relabel itself through the shared session and dismiss the new one.
 		referencesDesired := out.desired != nil && basis.Status != "terminal" && (basis.GenerationID == "" || sameLifecycle(out.state, out.desired))
+		receiverEnded := false
 		for _, r := range tokens {
 			matches := r.claims(basis.GenerationID)
 			if !matches && referencesDesired && (r.status == "active" || basis.GenerationID == "") {
@@ -638,7 +701,7 @@ func (w *Worker) snapshot(ctx context.Context, c Claim, state TargetState) (disp
 			// itself retired (a duplicate end, an accepted end, a dead token)
 			// stays retired whatever the phone later reports about it.
 			if (r.status == "dismissed" || r.status == "ended") && !r.serverRetired {
-				out.state.DismissedGeneration = out.state.GenerationID
+				receiverEnded = true
 			}
 			if r.status != "active" || r.token == nil {
 				continue
@@ -652,6 +715,20 @@ func (w *Worker) snapshot(ctx context.Context, c Claim, state TargetState) (disp
 			} else if r.claims(out.state.GenerationID) {
 				out.duplicate = &duplicateToken{ID: r.id, Token: *r.token, Version: r.version, GenerationID: out.state.GenerationID, TimerID: r.timer, SessionID: r.session}
 			}
+		}
+		// The receiver dismissed the lifecycle only when none of its cards is
+		// left. A phone that ends one of two cards itself (its provisional card
+		// giving way to the pushed one, a card replaced after a relaunch) still
+		// shows the other: that card keeps its updates and gets the end. Read as
+		// a dismissal, its end was decided on every pass and abandoned before
+		// the send, and no later lifecycle could start on the phone.
+		switch {
+		case out.state.ActivityID != "":
+			if out.state.DismissedGeneration == out.state.GenerationID {
+				out.state.DismissedGeneration = ""
+			}
+		case receiverEnded:
+			out.state.DismissedGeneration = out.state.GenerationID
 		}
 		return nil
 	})

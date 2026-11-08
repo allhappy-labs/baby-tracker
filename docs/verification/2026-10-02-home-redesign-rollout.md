@@ -68,7 +68,7 @@ The user approved the merge and the production deploy. Local `main` was fast-for
   - exit 0; log at `/path/to/bt-redesign-phone-build.log`;
   - `codesign --verify --deep --strict` passes;
   - app executable SHA-256 `7f1d4aa131cc71b412b36776e7415e86153f5d856575aad0506e8b12ef91b4c9`.
-- **Phone B:** a clean reinstall, as the user approved. `devicectl device uninstall app com.olhapi.babytracker` and then `install app` both exited 0. The old local history was discarded on purpose; the app rejoins and pulls shared data from the server.
+- **Phone B:** a clean reinstall, as the user approved. `devicectl device uninstall app com.example.babytracker` and then `install app` both exited 0. The old local history was discarded on purpose; the app rejoins and pulls shared data from the server.
 - **Phone A:** `unavailable` to `devicectl` during the rollout, as it was not accessible for immediate update. This phone still runs the pre-redesign build against the new server. Plain logging works, as its post-deploy sync shows. Switch, Pause and bottle-inside-a-timer commands from the old build are refused, so the user was told to avoid them until the update.
 
 ## Still open

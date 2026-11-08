@@ -25,9 +25,11 @@ enum WidgetStore {
     }
 
     /// A configured widget never falls through to the app's selected baby.
+    /// A deleted baby's row stays in the store, tombstoned, so this asks who
+    /// is still here: the widget then says the baby is unavailable.
     static func baby(_ id: String, in store: BabyStore) throws -> Baby? {
         guard let uuid = UUID(uuidString: id) else { return nil }
-        return try store.baby(uuid)
+        return try store.babies().first { $0.id == uuid }
     }
 
     /// The baby an intent should act on: the one its Live Activity named, or

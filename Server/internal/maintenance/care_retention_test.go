@@ -487,6 +487,136 @@ func TestReceiptSweepQuarantinesAFailingFamily(t *testing.T) {
 	}
 }
 
+// A batch steps past at most 16 failing families, so n failing families
+// (their release would go below zero) converge in ceil(n/16) passes: each
+// of the first ceil(n/16)-1 passes quarantines 16 and gives up (an error,
+// the batch rolled back, the good families' receipts kept); the last
+// quarantines the rest and deletes every good family's receipts in the same
+// batch. It never loops: a pass beyond that finds nothing due (the failing
+// families are quarantined, their receipts and charge kept) and logs
+// nothing; each failing family is logged once.
+func TestReceiptSweepConvergesPastSixteenBadFamilies(t *testing.T) {
+	const good = 5
+	for _, bad := range []int{16, 17, 32, 33} {
+		t.Run(fmt.Sprintf("%d bad families", bad), func(t *testing.T) {
+			h := testkit.New(t)
+			accepted := h.Now
+			caretest.Seed(t, h, caretest.Baby(caretest.BabyA), caretest.Feed(caretest.BabyA, 1), caretest.Feed(caretest.BabyA, 2))
+			// The harness family's own receipts are the template and stay
+			// younger than the sweep's cutoff (two hours before accepted); the
+			// copies are older.
+			template := familyReceipts(t, h, h.FamilyID)
+			if len(template) == 0 {
+				t.Fatal("no receipts to copy")
+			}
+			// Bare families (the sweep selects by receipt, not by status): the
+			// first `bad` carry no charge, so releasing any receipt would take
+			// them below zero; the rest carry plenty.
+			h.AuthorityExec(t, `INSERT INTO families(id, display_name, status, care_charged_bytes)
+				SELECT ('c0000000-0000-4000-8000-' || lpad(i::text, 12, '0'))::uuid, 'sweep ' || i, 'purge_completed', CASE WHEN i <= $1 THEN 0 ELSE 1 << 20 END
+				FROM generate_series(1, $2) AS i`, bad, bad+good)
+			var devices, accounts, outcomes []string
+			var hashes [][]byte
+			templateRows, err := h.Maintenance.Query(t.Context(), `SELECT device_id::text, account_id::text, semantic_hash, outcome::text FROM care_receipts WHERE family_id = $1`, h.FamilyID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for templateRows.Next() {
+				var device, account, outcome string
+				var hash []byte
+				if err := templateRows.Scan(&device, &account, &hash, &outcome); err != nil {
+					t.Fatal(err)
+				}
+				devices, accounts, hashes, outcomes = append(devices, device), append(accounts, account), append(hashes, hash), append(outcomes, outcome)
+			}
+			templateRows.Close()
+			if err := templateRows.Err(); err != nil {
+				t.Fatal(err)
+			}
+			families := func(from, to int) []string {
+				ids := make([]string, 0, to-from+1)
+				for i := from; i <= to; i++ {
+					ids = append(ids, fmt.Sprintf("c0000000-0000-4000-8000-%012d", i))
+				}
+				return ids
+			}
+			badFamilies, goodFamilies := families(1, bad), families(bad+1, bad+good)
+			// A receipt is written within its family's tenant context.
+			for _, id := range append(slices.Clone(badFamilies), goodFamilies...) {
+				tx := caretest.TenantTx(t, h.Runtime, h.Owner.AccountID, id)
+				if _, err := tx.Exec(t.Context(), `INSERT INTO care_receipts(device_id, mutation_id, family_id, account_id, semantic_hash, outcome, accepted_at)
+					SELECT r.device::uuid, gen_random_uuid(), $5::uuid, r.account::uuid, r.hash, r.outcome::jsonb, $6
+					FROM unnest($1::text[], $2::text[], $3::bytea[], $4::text[]) AS r(device, account, hash, outcome)`,
+					devices, accounts, hashes, outcomes, id, accepted.Add(-3*time.Hour)); err != nil {
+					t.Fatal(err)
+				}
+				if err := tx.Commit(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			count := func(ids []string) (receipts int) {
+				for _, id := range ids {
+					receipts += len(familyReceipts(t, h, id))
+				}
+				return receipts
+			}
+			if count(badFamilies) != bad*len(template) || count(goodFamilies) != good*len(template) {
+				t.Fatalf("fixture: %d bad receipts, %d good", count(badFamilies), count(goodFamilies))
+			}
+
+			var logs bytes.Buffer
+			sweep := &maintenance.ReceiptSweep{Pool: h.Maintenance, Logger: slog.New(slog.NewJSONHandler(&logs, nil))}
+			now := accepted.Add(maintenance.ReceiptRetention - 2*time.Hour)
+			want := (bad + 15) / 16 // ceil(bad/16)
+			passes, removed := 0, 0
+			for {
+				passes++
+				if passes > want+2 {
+					t.Fatalf("the sweep has not converged after %d passes, want %d", passes-1, want)
+				}
+				n, err := sweep.Run(t.Context(), now)
+				if err == nil {
+					removed = n
+					break
+				}
+				if n != 0 || count(goodFamilies) != good*len(template) {
+					t.Fatalf("pass %d failed (%v) yet removed %d (good families hold %d receipts)", passes, err, n, count(goodFamilies))
+				}
+			}
+			if passes != want || removed != good*len(template) {
+				t.Fatalf("converged in %d passes removing %d, want %d passes removing %d", passes, removed, want, good*len(template))
+			}
+			if left := count(goodFamilies); left != 0 {
+				t.Fatalf("%d of the good families' receipts left", left)
+			}
+			if left := count(badFamilies); left != bad*len(template) {
+				t.Fatalf("the failing families hold %d receipts, want all %d kept", left, bad*len(template))
+			}
+			for _, id := range badFamilies {
+				if familyCharged(t, h, id) != 0 {
+					t.Fatalf("family %s charge changed", id)
+				}
+			}
+			// One more pass: nothing due, no error, no further log.
+			if n, err := sweep.Run(t.Context(), now); err != nil || n != 0 {
+				t.Fatalf("the pass after convergence: removed %d (%v)", n, err)
+			}
+			logged := map[string]int{}
+			for _, record := range errorLogs(t, &logs) {
+				logged[fmt.Sprint(record["family_id"])]++
+			}
+			if len(logged) != bad {
+				t.Fatalf("%d families logged, want %d", len(logged), bad)
+			}
+			for _, id := range badFamilies {
+				if logged[id] != 1 {
+					t.Fatalf("family %s logged %d times", id, logged[id])
+				}
+			}
+		})
+	}
+}
+
 // The receipt quarantine expires and is capped like the purge's (final
 // review R2-M4): a quarantined family is skipped for an hour, then tried
 // (and, failing again, quarantined and logged) again; and the quarantine

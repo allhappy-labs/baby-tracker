@@ -12,6 +12,7 @@ func Statements() map[string]string {
 		"fetch_live_timers":     sqlFetchLiveTimers,
 		"fetch_cascade_targets": sqlFetchCascadeTargets,
 		"fetch_live_babies":     sqlFetchLiveBabies,
+		"fetch_open_pump":       sqlFetchOpenPump,
 		"read_pull":             sqlReadPull,
 		"changes":               sqlChanges,
 		"snapshot_page":         sqlSnapshotPage,

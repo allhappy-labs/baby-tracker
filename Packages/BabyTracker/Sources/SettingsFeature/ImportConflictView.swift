@@ -30,16 +30,16 @@ public struct ImportConflictView: View {
     }
 
     public var body: some View {
-        Form {
+        SettingsPage {
             if conflicts.isEmpty {
-                Section {
+                CardSection {
                     Text(ImportConflictCopy.none)
                         .accessibilityIdentifier("conflict.none")
                 }
             }
 
             ForEach(conflicts, id: \.conflictID) { conflict in
-                Section {
+                CardSection(babyName(conflict.localBabyID)) {
                     ForEach(conflict.candidateBabyIDs, id: \.self) { candidate in
                         Button {
                             onResolve(
@@ -49,26 +49,23 @@ public struct ImportConflictView: View {
                         } label: {
                             VStack(alignment: .leading, spacing: 2) {
                                 Text(ImportConflictCopy.useExisting)
+                                    .fixedSize(horizontal: false, vertical: true)
                                 Text(babyName(candidate))
                                     .font(.footnote)
                                     .foregroundStyle(Palette.secondaryText)
                             }
-                            .frame(minHeight: 44)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
                         }
                         .accessibilityIdentifier("conflict.useExisting.\(candidate.uuidString)")
                     }
 
-                    Button {
+                    ActionRow(ImportConflictCopy.keepLocal, identifier: "conflict.keepLocal.\(conflict.conflictID.uuidString)") {
                         onResolve(
                             conflict.conflictID,
                             ImportConflictResolution(choice: .keepLocal, canonicalBabyID: nil)
                         )
-                    } label: {
-                        Text(ImportConflictCopy.keepLocal).frame(minHeight: 44)
                     }
-                    .accessibilityIdentifier("conflict.keepLocal.\(conflict.conflictID.uuidString)")
-                } header: {
-                    Text(babyName(conflict.localBabyID))
                 } footer: {
                     Text(ImportConflictCopy.explanation)
                 }

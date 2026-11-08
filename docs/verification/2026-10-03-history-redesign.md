@@ -2,7 +2,7 @@
 
 Branch `feat/history-redesign` (worktree `.worktrees/history-redesign`). Spec: `docs/superpowers/specs/2026-10-03-history-redesign-design.md` (with its Amendments). Plan and rulings H-R1 to H-R26: `docs/superpowers/plans/2026-10-03-history-redesign.md` and the SDD ledger. Approved mockups: `mockups/2026-10-03-history-redesign/`.
 
-All simulator work ran on the one shared device, `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853` (iPhone 17 Pro). Nothing was pushed, deployed or installed on a phone, and production was not touched.
+All simulator work ran on the one shared device, `platform=iOS Simulator,id=<simulator-udid>` (iPhone 17 Pro). Nothing was pushed, deployed or installed on a phone, and production was not touched.
 
 ## Gates
 
@@ -11,8 +11,8 @@ Every gate ran through `rtk proxy` with its output in a log file under `work/t7/
 | Command | Result |
 | --- | --- |
 | `make test` | exit 0 — `OK: 1376 tests` (`EXPECTED_TESTS` unchanged: Task 7 adds UI tests only) |
-| `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'` | exit 0 — `** BUILD SUCCEEDED **` |
-| `make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'` | exit 0 — `Executed 165 tests, with 0 failures (0 unexpected)`, `** TEST SUCCEEDED **` (18:56–20:04; no other `xcodebuild` on the device before it started). No flake, no re-run. |
+| `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0 — `** BUILD SUCCEEDED **` |
+| `make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0 — `Executed 165 tests, with 0 failures (0 unexpected)`, `** TEST SUCCEEDED **` (18:56–20:04; no other `xcodebuild` on the device before it started). No flake, no re-run. |
 | `make server-protocol-e2e` | exit 0 — `✔ Test run with 14 tests in 7 suites passed`; the container and volume lists were identical before and after |
 | `comm -13 <(sort work/loc-baseline.txt) <(python3 scripts/verify-localizations.py 2>&1 \| sort)` | printed nothing (Task 7 adds no strings) |
 

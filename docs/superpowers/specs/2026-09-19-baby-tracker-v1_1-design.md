@@ -80,7 +80,7 @@ scope here, but the failure screen must not offer any action that deletes the st
 
 ## 1.4 Logging
 
-`OSLog`, subsystem `com.olhapi.babytracker`, one category per module: `store`, `timers`,
+`OSLog`, subsystem `com.example.babytracker`, one category per module: `store`, `timers`,
 `sync`, `widgets`, `ui`.
 
 What to log: every mutation (kind and id), every rollback, every caught error with its

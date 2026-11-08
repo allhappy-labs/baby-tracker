@@ -25,144 +25,174 @@ public enum EditChromeCopy {
     public static let expanded = LoggingL10n.text("Expanded")
     public static let collapsed = LoggingL10n.text("Collapsed")
     public static let cancel = LoggingL10n.text("Cancel")
+    /// A panel picked from Past entry's list goes back to it.
+    public static let back = LoggingL10n.text("Back")
     public static let details = LoggingL10n.text("Details")
 }
 
 /// An edited entry's time, with its date: an entry is often corrected the day
 /// after, and a feed that started before midnight belongs to the day before
 /// (ruling H-R7). Never later than `latest`, which callers set to now.
-public struct EditTimeRow: View {
+///
+/// Two pills, "Today" and "23:15", each opening its wheel under the row. Not
+/// the system's compact picker: inserted into a fitted sheet already on
+/// screen — Past entry's form, a bottle's End — it kept a stale layout, its
+/// date and time drawn over each other.
+///
+/// `accessory` sits after the pills, on their line — a bottle End's ✕. Beside
+/// the whole row it squeezed the wheel, which then pushed the panel wider than
+/// the screen.
+public struct EditTimeRow<Accessory: View>: View {
     private let label: String
+    private let accessory: Accessory
     @Binding private var date: Date
     private let latest: Date
     private let identifier: String
-    private let stacksAtAccessibilitySizes: Bool
+    /// The pill whose wheel is open, if either, when no panel shares one.
+    @State private var ownOpen: Part?
+    /// The panel's one open wheel: opening this row's closes any other.
+    @Environment(\.openTimeWheel) private var sharedOpen
 
-    /// `stacksAtAccessibilitySizes` puts the label over the date and time
-    /// at the accessibility sizes, for a sheet that lays the row out itself
-    /// (the Diaper sheet's VStack) rather than in a Form row.
+    private enum Part: String { case date, time }
+
+    private var open: Part? {
+        guard let sharedOpen else { return ownOpen }
+        guard let key = sharedOpen.wrappedValue, key.hasPrefix(identifier + ".") else { return nil }
+        return Part(rawValue: String(key.dropFirst(identifier.count + 1)))
+    }
+
+    private func setOpen(_ part: Part?) {
+        if let sharedOpen {
+            sharedOpen.wrappedValue = part.map { identifier + "." + $0.rawValue }
+        } else {
+            ownOpen = part
+        }
+    }
+
     public init(_ label: String = EditChromeCopy.timeLabel, date: Binding<Date>, latest: Date, identifier: String,
-                stacksAtAccessibilitySizes: Bool = false) {
+                @ViewBuilder accessory: () -> Accessory) {
         self.label = label
+        self.accessory = accessory()
         _date = date
         self.latest = latest
         self.identifier = identifier
-        self.stacksAtAccessibilitySizes = stacksAtAccessibilitySizes
     }
 
     @Environment(\.dynamicTypeSize) private var typeSize
 
     public var body: some View {
-        if stacksAtAccessibilitySizes, typeSize.isAccessibilitySize {
-            // The label over the date and the time: beside them, at these
-            // sizes, it was squeezed to "D…".
-            VStack(alignment: .leading, spacing: 6) {
-                Text(label)
-                    .accessibilityHidden(true)
-                picker.labelsHidden()
-            }
-        } else {
-            picker
-        }
-    }
-
-    private var picker: some View {
-        DatePicker(label, selection: $date, in: ...latest, displayedComponents: [.date, .hourAndMinute])
-            .frame(minHeight: 44)
-            .accessibilityIdentifier(identifier)
-    }
-}
-
-/// Save and Delete on one row, pinned under an edit mode's content. Save is
-/// the sheet's one primary action; Delete sits beside it in the destructive
-/// colour and only asks for the confirmation — `deleteConfirmation` does the
-/// asking. With no `onDelete` (new mode) there is Save only. No bar behind
-/// them: the sheet's own surface is the background.
-public struct EditFooter: View {
-    private let canSave: Bool
-    private let identifierPrefix: String
-    private let onSave: () -> Void
-    private let onDelete: (() -> Void)?
-
-    public init(canSave: Bool, identifierPrefix: String, onSave: @escaping () -> Void, onDelete: (() -> Void)?) {
-        self.canSave = canSave
-        self.identifierPrefix = identifierPrefix
-        self.onSave = onSave
-        self.onDelete = onDelete
-    }
-
-    public var body: some View {
-        HStack(spacing: 12) {
-            if let onDelete {
-                Button(role: .destructive, action: onDelete) {
-                    Text(EditChromeCopy.delete)
-                        .fixedSize(horizontal: false, vertical: true)
-                        // The style's 12 pt padding either side: Save's 56.
-                        .frame(minHeight: 32)
+        VStack(spacing: 0) {
+            if typeSize.isAccessibilitySize {
+                // The label over the date and the time: beside them, at these
+                // sizes, it was squeezed to "D…".
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(label)
+                        .accessibilityHidden(true)
+                    pills
                 }
-                .buttonStyle(.tracker(Palette.destructive, cornerRadius: 20))
-                .accessibilityIdentifier(identifierPrefix + ".delete")
+                .frame(maxWidth: .infinity, alignment: .leading)
+            } else {
+                HStack(spacing: 8) {
+                    Text(label)
+                        .foregroundStyle(Palette.primaryText)
+                        .accessibilityHidden(true)
+                    Spacer(minLength: 0)
+                    pills
+                }
             }
-
-            Button(action: onSave) {
-                Text(EditChromeCopy.save)
-                    .font(.headline)
-                    .fixedSize(horizontal: false, vertical: true)
+            if let open {
+                DatePicker(label, selection: $date, in: ...latest,
+                           displayedComponents: open == .date ? .date : .hourAndMinute)
+                    #if os(iOS)
+                    .datePickerStyle(.wheel)
+                    #endif
+                    .labelsHidden()
+                    .frame(maxWidth: .infinity)
+                    .accessibilityIdentifier(identifier + (open == .date ? ".dateWheel" : ".timeWheel"))
             }
-            .buttonStyle(.primaryFill(minHeight: 56))
-            .disabled(!canSave)
-            .opacity(canSave ? 1 : 0.5)
-            .accessibilityIdentifier(identifierPrefix + ".save")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
+        .frame(minHeight: 44)
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier(identifier)
+    }
+
+    /// Side by side while both fit at their natural width; otherwise stacked.
+    /// A pill never truncates.
+    private var pills: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(spacing: 6) { pillViews }
+            VStack(alignment: .leading, spacing: 6) { pillViews }
+        }
+    }
+
+    @ViewBuilder private var pillViews: some View {
+        pill(.date, text: EditTimeText.dayText(date))
+        pill(.time, text: date.formatted(date: .omitted, time: .shortened))
+        accessory
+    }
+
+    private func pill(_ part: Part, text: String) -> some View {
+        let isOpen = open == part
+        return Button {
+            withAnimation(.snappy) { setOpen(isOpen ? nil : part) }
+        } label: {
+            Text(text)
+                .monospacedDigit()
+                .foregroundStyle(isOpen ? AnyShapeStyle(.tint) : AnyShapeStyle(Palette.primaryText))
+                .fixedSize(horizontal: true, vertical: false)
+                .padding(.horizontal, 10)
+                .padding(.vertical, 6)
+                .background(Surface.raised, in: .rect(cornerRadius: Radius.control, style: .continuous))
+                .frame(minHeight: 44)
+                .contentShape(.rect)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(label)
+        .accessibilityValue(text)
+        .accessibilityAddTraits(isOpen ? .isSelected : [])
+        .accessibilityIdentifier(identifier + (part == .date ? ".date" : ".time"))
     }
 }
 
-private struct DeleteConfirmation: ViewModifier {
-    @Binding var isPresented: Bool
-    let title: String
-    let identifierPrefix: String
-    let onDelete: () -> Void
-
-    func body(content: Content) -> some View {
-        content.confirmationDialog(title, isPresented: $isPresented, titleVisibility: .visible) {
-            // Its own identifier: while the dialog is up, the footer's Delete
-            // carries the same label, and a query by label finds both.
-            Button(EditChromeCopy.delete, role: .destructive, action: onDelete)
-                .accessibilityIdentifier(identifierPrefix + ".confirmDelete")
-            Button(EditChromeCopy.keep, role: .cancel) {}
-                .accessibilityIdentifier(identifierPrefix + ".keep")
-        }
+/// The date pill's text. Not on `EditTimeRow`: a generic type's static needs
+/// its accessory named to be called.
+enum EditTimeText {
+    /// "Today", "Yesterday", then the date, in the phone's language.
+    static func dayText(_ date: Date) -> String {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .none
+        formatter.doesRelativeDateFormatting = true
+        return formatter.string(from: date)
     }
 }
 
-/// The footer and the confirmation behind its Delete, applied only in edit
-/// mode so a create sheet's layout is untouched.
-private struct EditFooterModifier: ViewModifier {
-    let isPresented: Bool
-    let canSave: Bool
-    let identifierPrefix: String
-    let onSave: () -> Void
-    /// Nil in new mode: no Delete, and so no confirmation behind it.
-    let onDelete: (() -> Void)?
-    @State private var isConfirmingDelete = false
+extension EditTimeRow where Accessory == EmptyView {
+    public init(_ label: String = EditChromeCopy.timeLabel, date: Binding<Date>, latest: Date, identifier: String) {
+        self.init(label, date: date, latest: latest, identifier: identifier) { EmptyView() }
+    }
+}
 
-    func body(content: Content) -> some View {
-        if isPresented {
-            // Under the content, not over it as a safe-area inset: an inset
-            // reached a freshly shown panel late, so Save and Delete popped in.
-            VStack(spacing: 0) {
-                content
-                EditFooter(canSave: canSave, identifierPrefix: identifierPrefix, onSave: onSave,
-                           onDelete: onDelete.map { _ in { isConfirmingDelete = true } })
-            }
-                // The dialog is never shown without the button that asks for it.
-                .deleteConfirmation(isPresented: $isConfirmingDelete, identifierPrefix: identifierPrefix,
-                                    onDelete: onDelete ?? {})
-        } else {
-            content
+extension EnvironmentValues {
+    /// Which time row's wheel is open in a panel — its identifier and the
+    /// pill — so only one is open at a time. Nil outside a panel.
+    @Entry var openTimeWheel: Binding<String?>?
+}
+
+/// The Save and Delete footer actions every edit and log sheet shares, so no
+/// sheet builds them by hand: `<prefix>.save` (disabled unless `canSave`) and
+/// `<prefix>.delete`. Delete only exists next to Save: no Save, no footer, so
+/// no Delete either. Nothing here deletes; `onDelete` is whatever asks.
+public struct EditActions {
+    public let primary: SheetAction?
+    public let destructive: SheetAction?
+
+    public init(identifierPrefix: String, canSave: Bool, onSave: (() -> Void)?, onDelete: (() -> Void)?) {
+        primary = onSave.map {
+            SheetAction(EditChromeCopy.save, identifier: identifierPrefix + ".save", isEnabled: canSave, action: $0)
+        }
+        destructive = onSave == nil ? nil : onDelete.map {
+            SheetAction(EditChromeCopy.delete, identifier: identifierPrefix + ".delete", action: $0)
         }
     }
 }
@@ -212,43 +242,7 @@ func performEdit(_ write: () throws -> Void, failure: String?, reporter: ErrorRe
     }
 }
 
-/// Edit mode's title: the tracker's icon instead of a word that repeats it.
-/// The entry's time, the row that identifies it, is the first row below.
-private struct EditTitleModifier: ViewModifier {
-    let isPresented: Bool
-    let icon: BabyIcon
-    let tint: Color
-    let label: String
-
-    func body(content: Content) -> some View {
-        if isPresented {
-            content.toolbar {
-                ToolbarItem(placement: .principal) {
-                    ZStack { BabyIconView(icon, size: 24).foregroundStyle(tint) }
-                        // The icon itself is hidden from VoiceOver; the sheet
-                        // still needs a name, and a heading to start from.
-                        .accessibilityElement(children: .ignore)
-                        .accessibilityLabel(label)
-                        .accessibilityAddTraits(.isHeader)
-                }
-            }
-        } else {
-            content
-        }
-    }
-}
-
 public extension View {
-    /// Asks before an edit mode deletes its entry. A deleted entry is a
-    /// tombstone that syncs to the other phone, and there is no undo.
-    /// Its buttons are `<identifierPrefix>.confirmDelete` and `.keep`.
-    /// `title` names what goes: "Delete this entry?" unless told otherwise.
-    func deleteConfirmation(isPresented: Binding<Bool>, title: String = EditChromeCopy.deleteConfirmTitle,
-                            identifierPrefix: String, onDelete: @escaping () -> Void) -> some View {
-        modifier(DeleteConfirmation(isPresented: isPresented, title: title, identifierPrefix: identifierPrefix,
-                                    onDelete: onDelete))
-    }
-
     /// Reloads on every `revision` and calls `onGone` once the entry is gone.
     /// Does nothing when `isPresented` is false, so create mode is untouched.
     func editLifecycle(
@@ -261,26 +255,6 @@ public extension View {
         modifier(EditLifecycle(isPresented: isPresented, revision: revision, isGone: isGone, reload: reload, onGone: onGone))
     }
 
-    /// The edit-mode footer, pinned under the content so a Form scrolls
-    /// behind it rather than pushing it off the sheet, with Delete's
-    /// confirmation. Does nothing when `isPresented` is false. A nil
-    /// `onDelete` (new mode) hides Delete.
-    func editFooter(
-        isPresented: Bool = true,
-        canSave: Bool,
-        identifierPrefix: String,
-        onSave: @escaping () -> Void,
-        onDelete: (() -> Void)?
-    ) -> some View {
-        modifier(EditFooterModifier(isPresented: isPresented, canSave: canSave, identifierPrefix: identifierPrefix,
-                                    onSave: onSave, onDelete: onDelete))
-    }
-
-    /// Puts the tracker icon in the navigation bar in edit mode. `label` is
-    /// what VoiceOver reads for it: the sheet's own title.
-    func editTitle(isPresented: Bool = true, icon: BabyIcon, tint: Color, label: String) -> some View {
-        modifier(EditTitleModifier(isPresented: isPresented, icon: icon, tint: tint, label: label))
-    }
 }
 
 extension EditModel {

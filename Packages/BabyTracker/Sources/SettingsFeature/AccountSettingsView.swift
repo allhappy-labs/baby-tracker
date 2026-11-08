@@ -24,40 +24,38 @@ public struct AccountSettingsView<Model: FamilySyncSettingsModel>: View {
     }
 
     public var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            CardSection(AccountCopy.profileHeader) {
                 TextField(AccountCopy.nameField, text: $editedName)
                     .textContentType(.name)
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("account.nameField")
 
-                Button(AccountCopy.save) {
+                ActionRow(AccountCopy.save, identifier: "account.saveName") {
                     perform { try await model.updateDisplayName(editedName) }
                 }
-                .frame(minHeight: 44)
                 .disabled(editedName.trimmingCharacters(in: .whitespaces).isEmpty || isWorking)
-                .accessibilityIdentifier("account.saveName")
-            } header: {
-                Text(AccountCopy.profileHeader)
             } footer: {
                 Text(AccountCopy.profileFooter)
             }
 
-            Section {
-                LabeledContent(AccountCopy.roleLabel, value: model.isOwner ? AccountCopy.owner : AccountCopy.caregiver)
+            CardSection {
+                ListRow(AccountCopy.roleLabel, value: model.isOwner ? AccountCopy.owner : AccountCopy.caregiver)
                     .accessibilityIdentifier("account.role")
             }
 
             if model.isOwner && model.hasFamily {
-                Section {
+                CardSection {
                     if let client = model.makeExportClient() {
-                        NavigationLink(AccountCopy.exportFamilyData) {
+                        NavigationLink {
                             FamilyExportView(client: client, persistenceKey: exportPersistenceKey)
+                        } label: {
+                            ListRow(AccountCopy.exportFamilyData, accessory: .disclosure)
                         }
-                            .frame(minHeight: 44)
-                            .accessibilityIdentifier("account.export")
+                        .buttonStyle(.plain)
+                        .accessibilityIdentifier("account.export")
                     } else {
-                        LabeledContent(AccountCopy.exportFamilyData, value: model.exportAvailable == nil ? AccountCopy.checking : AccountCopy.unavailable)
+                        ListRow(AccountCopy.exportFamilyData, value: model.exportAvailable == nil ? AccountCopy.checking : AccountCopy.unavailable)
                             .accessibilityIdentifier("account.exportUnavailable")
                     }
                 } footer: {
@@ -67,10 +65,8 @@ public struct AccountSettingsView<Model: FamilySyncSettingsModel>: View {
                 }
             }
 
-            Section {
-                Button(AccountCopy.deleteAccount, role: .destructive) { showingDeletion = true }
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("account.delete")
+            CardSection {
+                DestructiveButton(AccountCopy.deleteAccount, identifier: "account.delete") { showingDeletion = true }
             } footer: {
                 Text(model.isOwner && model.hasFamily ? AccountCopy.ownerBlockedFooter : AccountCopy.deleteFooter)
             }

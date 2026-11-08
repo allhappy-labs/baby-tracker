@@ -20,6 +20,8 @@ public struct HomeScreen: Equatable, Sendable {
     /// When a running sleep's clock counts from, shown while the feed is the
     /// hero (`sleepClock(_:session:)`).
     public var sleepChip: Date?
+    /// The family's running pump, if any: the strip above the dock.
+    public var pump: RunningPump? = nil
 }
 
 /// The one large number, in priority order: a running feed, a running sleep,
@@ -39,6 +41,14 @@ public enum Hero: Equatable, Sendable {
 public struct StatusItem: Equatable, Sendable {
     public let tracker: Tracker
     public let since: Date
+}
+
+/// The family's running pump, on every baby's Home. Drawn by its own strip,
+/// so a running feed or sleep keeps every control it had.
+public struct RunningPump: Equatable, Sendable {
+    public let id: UUID
+    public let side: PumpSide
+    public let startedAt: Date
 }
 
 /// One finished part of a session: its icon and how long it ran.
@@ -69,6 +79,13 @@ public struct TodayStrip: Equatable, Sendable {
     /// grow without Home reloading.
     public let runningSleepSince: Date?
     public let runningFeedSince: Date?
+    /// Millilitres pumped in today's finished sessions.
+    public var pumpML: Double = 0
+
+    /// The pump line is today's amount, so it shows only once there is one:
+    /// a family that no longer pumps, or a session saved without an amount,
+    /// leaves no "0 ml" on Home.
+    public var showsPump: Bool { pumpML > 0 }
 
     /// The six-hourly marks strictly between midnight and `now`, by the
     /// clock: on a daylight-saving day "06" is still six o'clock, not six
@@ -80,10 +97,13 @@ public struct TodayStrip: Equatable, Sendable {
 }
 
 public enum Dock: Equatable, Sendable {
-    /// Idle or in a break: Left and Right, then Bottle, Sleep, Diaper, More.
-    case start(suggested: BreastSide)
-    case feedRunning(timerID: UUID, isBottle: Bool)
-    case sleepRunning(timerID: UUID)
+    /// Idle or in a break: the order's first action as the big button — Left
+    /// and Right when that is Breast — then its three tiles, then More.
+    case start(suggested: BreastSide, big: HomeActionKind, tiles: [HomeActionKind])
+    /// Stop, then the tiles that do not conflict with a running feed.
+    case feedRunning(timerID: UUID, isBottle: Bool, tiles: [HomeActionKind])
+    /// Wake up, then the Feed chooser and the tiles that do not conflict.
+    case sleepRunning(timerID: UUID, tiles: [HomeLayout.RunningTile])
     case readOnly
 }
 
@@ -91,7 +111,8 @@ public extension HomeScreen {
     /// `now` decides only which day the strip covers. Everything that ticks
     /// is a `Date` the views count from.
     @MainActor
-    static func make(snapshot s: HomeSnapshot, suggested: BreastSide, canLog: Bool, now: Date) -> HomeScreen {
+    static func make(snapshot s: HomeSnapshot, suggested: BreastSide, canLog: Bool,
+                     layout: HomeLayout = HomeLayout(), now: Date) -> HomeScreen {
         let feedTimer = s.feedTimer
         let sleepTimer = s.sleepTimer
 
@@ -136,19 +157,24 @@ public extension HomeScreen {
             nil
         }
 
-        let strip = TodayStrip(dayStart: Calendar.current.startOfDay(for: now), sleeps: s.todaySleepSpans,
+        var strip = TodayStrip(dayStart: Calendar.current.startOfDay(for: now), sleeps: s.todaySleepSpans,
                                feeds: s.todayFeedTimes, feedCount: s.todayFeedCount,
                                sleepSeconds: s.todaySleepSeconds, diaperCount: s.todayDiaperCount,
                                volumeML: s.todayVolumeML, runningSleepSince: sleepTimer?.startedAt,
                                runningFeedSince: feedPartStart)
+        strip.pumpML = s.todayPumpML
 
         let dock: Dock = !canLog ? .readOnly
-            : feedTimer.map { .feedRunning(timerID: $0.id, isBottle: $0.currentBottleStartedAt != nil) }
-            ?? sleepTimer.map { .sleepRunning(timerID: $0.id) }
-            ?? .start(suggested: suggested)
+            : feedTimer.map {
+                .feedRunning(timerID: $0.id, isBottle: $0.currentBottleStartedAt != nil, tiles: layout.tilesWhileFeedRuns)
+            }
+            ?? sleepTimer.map { .sleepRunning(timerID: $0.id, tiles: layout.tilesWhileSleepRuns) }
+            ?? .start(suggested: suggested, big: layout.big, tiles: layout.tiles)
 
-        return HomeScreen(hero: hero, status: status, strip: strip, dock: dock, joinChip: joinChip,
-                          sleepChip: feedTimer != nil ? sleepTimer.map { sleepClock($0, session: s.runningSleepSession) } : nil)
+        var screen = HomeScreen(hero: hero, status: status, strip: strip, dock: dock, joinChip: joinChip,
+                                sleepChip: feedTimer != nil ? sleepTimer.map { sleepClock($0, session: s.runningSleepSession) } : nil)
+        screen.pump = s.runningPump.map { RunningPump(id: $0.id, side: $0.side, startedAt: $0.startedAt) }
+        return screen
     }
 
     /// When a running sleep's clock counts from: its own start, moved back by
@@ -159,8 +185,8 @@ public extension HomeScreen {
         timer.startedAt.addingTimeInterval(-TimeInterval(session?.asleepSeconds ?? 0))
     }
 
-    /// One summary per milk part, in session order. Solids never join a milk
-    /// session, so they have no part here.
+    /// One summary per milk part, in session order. Solids added to a feed
+    /// have no part here: the row reads its milk.
     @MainActor
     private static func parts(of session: FeedingSession, in s: HomeSnapshot) -> [PartSummary] {
         s.sessionMembers(session).flatMap { feed -> [PartSummary] in

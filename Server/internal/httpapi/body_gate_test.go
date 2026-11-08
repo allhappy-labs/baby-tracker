@@ -293,7 +293,17 @@ func TestStalledBodiesSpendTheFailedBearerBudget(t *testing.T) {
 	options := stubSyncOptions(t, func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
 		return protocol.SyncResponse{}, nil
 	})
-	limiter, err := limits.New(limits.Options{Pepper: [32]byte{17}, Now: time.Now})
+	// The limiter's clock is pinned mid-window. Root cause of the
+	// intermittent "the stalled body past the budget: 503
+	// service_unavailable": the budget is a fixed window aligned to the
+	// clock (now truncated to 10 minutes), and on the wall clock a run that
+	// crossed a boundary between its first charge and its fourth request
+	// split the charges over two windows, so the fourth found the budget
+	// unspent; load stretches the run and the odds. The product orders the
+	// charge before the 503 (admitAfterBody charges as soon as the read is
+	// cut short), so the client never outruns it.
+	limiterNow := time.Date(2026, 9, 9, 12, 5, 0, 0, time.UTC)
+	limiter, err := limits.New(limits.Options{Pepper: [32]byte{17}, Now: func() time.Time { return limiterNow }})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -366,5 +376,45 @@ func TestOversizedBodiesDoNotSpendTheFailedBearerBudget(t *testing.T) {
 				t.Fatalf("%s oversized body %d: %d %s", route.target, i, rec.Code, rec.Body.String())
 			}
 		}
+	}
+}
+
+// bearerFunc is a BearerAuthenticator over a function.
+type bearerFunc func(context.Context, []authority.KeyedDigest) (access.Principal, error)
+
+func (f bearerFunc) Authenticate(ctx context.Context, digests []authority.KeyedDigest) (access.Principal, error) {
+	return f(ctx, digests)
+}
+
+// A credential check that panics (the middleware answers 500) still gives
+// back its admission slot: on a node of one slot, the next request is
+// served.
+func TestAPanickingBearerCheckReleasesItsAdmissionSlot(t *testing.T) {
+	options := stubSyncOptions(t, func(context.Context, access.Principal, protocol.SyncRequest) (protocol.SyncResponse, error) {
+		return protocol.SyncResponse{}, nil
+	})
+	options.Admission, _ = admission.New(1, 0)
+	var calls atomic.Int32
+	options.BearerAuthenticator = bearerFunc(func(context.Context, []authority.KeyedDigest) (access.Principal, error) {
+		if calls.Add(1) == 1 {
+			panic("authenticate")
+		}
+		return access.Principal{}, nil
+	})
+	handler := New(options)
+	send := func() *httptest.ResponseRecorder {
+		r := httptest.NewRequest(http.MethodPost, "/v1/sync", strings.NewReader(stubSyncBody))
+		r.Header.Set("Authorization", "Bearer access")
+		r.Header.Set("X-Baby-Tracker-Protocol", "v1")
+		r.Header.Set("X-Baby-Tracker-Capabilities", "records-v1")
+		rec := httptest.NewRecorder()
+		handler.ServeHTTP(rec, r)
+		return rec
+	}
+	if rec := send(); rec.Code != http.StatusInternalServerError {
+		t.Fatalf("the panicking check: %d %s", rec.Code, rec.Body.String())
+	}
+	if rec := send(); rec.Code != http.StatusOK {
+		t.Fatalf("the next request on a one-slot node: %d %s", rec.Code, rec.Body.String())
 	}
 }

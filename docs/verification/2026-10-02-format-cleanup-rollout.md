@@ -314,7 +314,7 @@ echo 'ROLLBACK: OK (2961ca1, schema 26)'
 
 ```sh
 xcrun devicectl device copy from --device <device-id> \
-  --domain-type appGroupDataContainer --domain-identifier group.com.olhapi.babytracker \
+  --domain-type appGroupDataContainer --domain-identifier group.com.example.babytracker \
   --source / --destination ~/BabyTrackerArchive/<phone>-<yyyymmdd>/
 ```
 
@@ -336,7 +336,7 @@ xcrun devicectl device copy from --device <device-id> \
 4. [ ] **Relaunch check (B-R14 on a real device).**
    - Force-quit the app and relaunch it.
    - The data is still there and there is no sign-in prompt.
-   - `xcrun devicectl device info files --device <id> --domain-type appGroupDataContainer --domain-identifier group.com.olhapi.babytracker` shows only `default.store`, `default.store-wal` and `default.store-shm` under `Library/Application Support`, with **no `default.store.incompatible-*`**: `<…>`.
+   - `xcrun devicectl device info files --device <id> --domain-type appGroupDataContainer --domain-identifier group.com.example.babytracker` shows only `default.store`, `default.store-wal` and `default.store-shm` under `Library/Application Support`, with **no `default.store.incompatible-*`**: `<…>`.
 5. [ ] **Phone B: uninstall, install, sign in.** Only after steps 1–4 pass. She joins and takes a snapshot. Repeat steps 2 and 4 for her phone: `<…>`.
 
 **If sign-in or the first sync fails:**

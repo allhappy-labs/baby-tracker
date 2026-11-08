@@ -69,7 +69,7 @@ extension BabyStore {
         return Array(try context.fetch(descriptor).reversed())
     }
 
-    static func supplementNameKey(_ name: String) -> String {
+    nonisolated static func supplementNameKey(_ name: String) -> String {
         name.folding(options: [.caseInsensitive], locale: Locale(identifier: "en_US_POSIX"))
     }
 

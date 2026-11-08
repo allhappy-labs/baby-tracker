@@ -7,7 +7,7 @@ import SwiftUI
 /// invitations still open, and every way out.
 ///
 /// Sections only. The sheets they open are presented by `FamilySettingsView`
-/// on its Form — a sheet attached to a lazily built Form row can fail to come
+/// on its List — a sheet attached to a lazily built List row can fail to come
 /// up at all — so each tap here is handed back as a closure.
 struct FamilySharedSections<Model: FamilySyncSettingsModel>: View {
     let model: Model
@@ -28,54 +28,44 @@ struct FamilySharedSections<Model: FamilySyncSettingsModel>: View {
     // MARK: Members
 
     private var membersSection: some View {
-        Section {
+        CardListSection(FamilyCopy.membersHeader) {
             ForEach(model.sortedMembers) { member in
                 if model.isOwner, !model.isMe(member) {
                     NavigationLink {
                         MemberDetailView(model: model, member: member)
                     } label: {
+                        // The List draws a link's chevron.
                         memberRow(member)
                     }
                     .accessibilityIdentifier("family.member.\(member.id.uuidString)")
                 } else {
                     memberRow(member)
+                        // One element, so VoiceOver reads "Marta, Caregiver"
+                        // rather than stopping on two separate static texts.
+                        .accessibilityElement(children: .combine)
                         .accessibilityIdentifier("family.member.\(member.id.uuidString)")
                 }
             }
-        } header: {
-            Text(FamilyCopy.membersHeader)
         } footer: {
             Text(model.isOwner ? FamilyCopy.ownerFooter : FamilyCopy.caregiverFooter)
         }
     }
 
+    /// Name and role side by side at ordinary sizes, the role under the
+    /// name at the accessibility sizes.
     private func memberRow(_ member: FamilyMember) -> some View {
-        HStack(spacing: 12) {
+        ListRow(member.displayName) {
             MemberAvatar(member: member)
-            // Name and role side by side at ordinary sizes, stacked when the
-            // text is too large for both to fit on one line.
-            ViewThatFits(in: .horizontal) {
-                HStack {
-                    Text(member.displayName)
-                    Spacer(minLength: 8)
-                    roleText(member)
-                }
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(member.displayName)
-                    roleText(member)
-                }
-            }
+        } trailing: {
+            roleText(member)
         }
-        .frame(minHeight: 44)
-        // One element, so VoiceOver reads "Marta, Caregiver" rather than
-        // stopping on two separate static texts.
-        .accessibilityElement(children: .combine)
     }
 
     private func roleText(_ member: FamilyMember) -> some View {
         Text(FamilyCopy.roleLabel(member.familyRole, isMe: model.isMe(member)))
             .font(.subheadline)
             .foregroundStyle(Palette.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
     }
 
     // MARK: Invitations
@@ -83,7 +73,7 @@ struct FamilySharedSections<Model: FamilySyncSettingsModel>: View {
     @ViewBuilder
     private var invitationsSection: some View {
         if !model.pendingInvitations.isEmpty || model.invitationsRefreshFailed {
-            Section {
+            CardListSection(PendingInvitationCopy.header) {
                 ForEach(model.pendingInvitations) { invitation in
                     PendingInvitationRow(
                         invitation: invitation,
@@ -94,61 +84,59 @@ struct FamilySharedSections<Model: FamilySyncSettingsModel>: View {
                 if model.invitationsRefreshFailed {
                     // The last-known list stays above; this only says it may
                     // be out of date, and offers the one thing to do about it.
-                    HStack {
-                        Text(PendingInvitationCopy.refreshFailed)
-                            .foregroundStyle(Palette.secondaryText)
-                        Spacer(minLength: 8)
-                        Button(PendingInvitationCopy.retry, action: onRetryInvitations)
-                            .accessibilityIdentifier("family.pending.retry")
+                    // Side by side while both fit; the button under the
+                    // message once the text is too large for that.
+                    ViewThatFits(in: .horizontal) {
+                        HStack(spacing: Spacing.s) {
+                            refreshFailedText
+                            Spacer(minLength: Spacing.s)
+                            retryButton
+                        }
+                        VStack(alignment: .leading, spacing: Spacing.xs) {
+                            refreshFailedText
+                            retryButton
+                        }
                     }
-                    .frame(minHeight: 44)
                 }
-            } header: {
-                Text(PendingInvitationCopy.header)
             }
         }
 
-        Section {
-            Button(action: onInvite) {
-                HStack(spacing: 12) {
-                    Image(systemName: "plus")
-                        .accessibilityHidden(true)
-                    Text(FamilyCopy.inviteSomeone)
-                        .fixedSize(horizontal: false, vertical: true)
-                }
-            }
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("family.inviteSomeone")
+        CardListSection {
+            ActionRow(FamilyCopy.inviteSomeone, identifier: "family.inviteSomeone", systemImage: "plus", action: onInvite)
         } footer: {
             Text(FamilyCopy.inviteFooter)
         }
     }
 
+    private var refreshFailedText: some View {
+        Text(PendingInvitationCopy.refreshFailed)
+            .foregroundStyle(Palette.secondaryText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private var retryButton: some View {
+        Button(PendingInvitationCopy.retry, action: onRetryInvitations)
+            .frame(minHeight: 44)
+            .accessibilityIdentifier("family.pending.retry")
+    }
+
     // MARK: Leaving
 
     private var leavingSection: some View {
-        Section {
-            Button(FamilyCopy.disconnect, role: .destructive) {
+        CardListSection(FamilyCopy.leavingHeader) {
+            DestructiveButton(FamilyCopy.disconnect, identifier: "family.disconnect") {
                 onConfirm(.disconnect { try await model.disconnectCurrentFamily() })
             }
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("family.disconnect")
 
-            Button(FamilyCopy.leaveFamily, role: .destructive) {
+            DestructiveButton(FamilyCopy.leaveFamily, identifier: "family.leave") {
                 onConfirm(.leave { try await model.leaveFamily() })
             }
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("family.leave")
 
             if model.isOwner {
-                Button(FamilyCopy.scheduleDeletion, role: .destructive) {
+                DestructiveButton(FamilyCopy.scheduleDeletion, identifier: "family.scheduleDeletion") {
                     onConfirm(.scheduleDeletion { try await model.scheduleFamilyDeletion() })
                 }
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("family.scheduleDeletion")
             }
-        } header: {
-            Text(FamilyCopy.leavingHeader)
         }
     }
 }

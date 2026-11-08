@@ -267,6 +267,9 @@ public final class BabyStore {
             if let supplement = entity as? SupplementEntry, operation != .delete {
                 supplement.name = try savedSupplementName(supplement.name, for: supplement.babyID, excluding: supplement.id)
             }
+            if let shot = entity as? ImmunizationEntry, operation != .delete {
+                shot.vaccine = try savedVaccineName(shot.vaccine, excluding: shot.id)
+            }
             let entry = ChangeLogEntry(
                 entityID: entity.entityID,
                 entityType: entity.entityTypeName,

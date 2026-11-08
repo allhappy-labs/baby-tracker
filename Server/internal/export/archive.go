@@ -51,6 +51,8 @@ type ArchiveV1 struct {
 	Supplements      []protocol.CanonicalEntity `json:"supplements"`
 	GrowthProfiles   []protocol.CanonicalEntity `json:"growth_profiles"`
 	Measurements     []protocol.CanonicalEntity `json:"measurements"`
+	Immunizations    []protocol.CanonicalEntity `json:"immunizations"`
+	Pumps            []protocol.CanonicalEntity `json:"pumps"`
 	ActiveTimers     []protocol.CanonicalEntity `json:"active_timers"`
 	Journal          []protocol.JournalChange   `json:"journal"`
 	Audit            []ArchiveAudit             `json:"audit"`
@@ -130,7 +132,8 @@ func EncodeArchive(ctx context.Context, out io.Writer, a ArchiveV1) (uint64, err
 		entities []protocol.CanonicalEntity
 	}{
 		{"babies", a.Babies}, {"feeds", a.Feeds}, {"sleeps", a.Sleeps}, {"diapers", a.Diapers},
-		{"supplements", a.Supplements}, {"growth_profiles", a.GrowthProfiles}, {"measurements", a.Measurements}, {"active_timers", a.ActiveTimers},
+		{"supplements", a.Supplements}, {"growth_profiles", a.GrowthProfiles}, {"measurements", a.Measurements},
+		{"immunizations", a.Immunizations}, {"pumps", a.Pumps}, {"active_timers", a.ActiveTimers},
 	} {
 		entities := append([]protocol.CanonicalEntity{}, group.entities...)
 		sort.Slice(entities, func(i, j int) bool { return entities[i].Meta.ID < entities[j].Meta.ID })

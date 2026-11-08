@@ -35,7 +35,7 @@
     "unfinished_import_family_limit": 4,
     "socket_device_limit": 1,
     "socket_account_limit": 3,
-    "socket_process_limit": 1000,
+    "socket_process_limit": 1700,
     "socket_attempt_ip_per_minute": 60,
     "socket_attempt_device_per_minute": 12,
     "socket_attempt_account_per_minute": 36,

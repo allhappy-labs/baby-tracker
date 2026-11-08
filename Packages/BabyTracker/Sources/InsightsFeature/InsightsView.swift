@@ -19,6 +19,7 @@ public struct InsightsView: View {
     private let babyAvatar: BabyAvatar
     private let onSwitchBaby: (() -> Void)?
     private let onOpenAllCheckIns: () -> Void
+    private let onEditEntry: (EntryRef) -> Void
     @State private var model: InsightsViewModel
     @State private var range: InsightRange = .week
     @Environment(\.errorReporter) private var errorReporter
@@ -31,7 +32,8 @@ public struct InsightsView: View {
         babyAvatar: BabyAvatar = .neutral,
         volumeUnit: VolumeUnit = .millilitres,
         onSwitchBaby: (() -> Void)? = nil,
-        onOpenAllCheckIns: @escaping () -> Void = {}
+        onOpenAllCheckIns: @escaping () -> Void = {},
+        onEditEntry: @escaping (EntryRef) -> Void = { _ in }
     ) {
         self.babyID = babyID
         self.store = store
@@ -40,6 +42,7 @@ public struct InsightsView: View {
         self.babyAvatar = babyAvatar
         self.onSwitchBaby = onSwitchBaby
         self.onOpenAllCheckIns = onOpenAllCheckIns
+        self.onEditEntry = onEditEntry
         _model = State(wrappedValue: InsightsViewModel(
             store: store, babyID: babyID, volumeUnit: volumeUnit
         ))
@@ -47,26 +50,31 @@ public struct InsightsView: View {
 
     public var body: some View {
         NavigationStack {
-            ScrollView {
-                VStack(spacing: 10) {
-                    ForEach(model.sections) { section in
-                        InsightSectionCard(section: section)
+            ScreenScaffold(
+                header: .baby(name: babyName, avatar: babyAvatar, switcherID: "insights.babySwitcher",
+                              headingID: "insights.babyName", onSwitch: onSwitchBaby),
+                scrolls: false,
+                content: {
+                    rangePicker
+                    ScrollView {
+                        VStack(spacing: Spacing.m) {
+                            ForEach(model.sections) { section in
+                                InsightSectionCard(section: section)
+                            }
+                            GrowthSectionView(model: model.growth, store: store, babyID: babyID,
+                                              onOpenAllCheckIns: onOpenAllCheckIns)
+                            ImmunizationsCard(model: model.immunizations, onEdit: onEditEntry)
+                        }
+                        .padding(.horizontal, Spacing.l)
+                        .padding(.bottom, Spacing.m)
                     }
-                    GrowthSectionView(model: model.growth, store: store, babyID: babyID,
-                                      onOpenAllCheckIns: onOpenAllCheckIns)
                 }
-                .padding(.horizontal, 12)
-                .padding(.vertical, 12)
-            }
-            .background(Palette.ground.ignoresSafeArea())
-            // The title lived in a navigation bar, which reserved a large
-            // bar's worth of empty space above it and then said "Insights" —
-            // a word the tab bar was already saying. The header below carries
-            // the baby's name instead, the one thing the bar never did.
+            )
+            // The baby's name heads the screen instead of a navigation bar
+            // saying "Insights", a word the tab bar already says.
             #if os(iOS)
             .toolbar(.hidden, for: .navigationBar)
             #endif
-            .safeAreaInset(edge: .top, spacing: 0) { header }
         }
         .task { reload() }
         // Every figure on this screen is an average over entries. A write
@@ -92,27 +100,14 @@ public struct InsightsView: View {
         }
     }
 
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            name
-            Picker(L10n.tr("Range"), selection: $range) {
-                ForEach(InsightRange.allCases) { Text($0.title).tag($0) }
-            }
-            .pickerStyle(.segmented)
-            .controlSize(.large)
-            .accessibilityIdentifier("insights.range")
+    private var rangePicker: some View {
+        Picker(L10n.tr("Range"), selection: $range) {
+            ForEach(InsightRange.allCases) { Text($0.title).tag($0) }
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
-        // Home's inset, so the switcher sits in the same place on every tab.
-        .padding(.horizontal, 20)
-        .padding(.vertical, 8)
-        .background(.bar)
-    }
-
-    private var name: some View {
-        BabySwitcherHeader(babyName: babyName, avatar: babyAvatar,
-                           switcherID: "insights.babySwitcher", headingID: "insights.babyName",
-                           onSwitchBaby: onSwitchBaby)
+        .pickerStyle(.segmented)
+        .controlSize(.large)
+        .padding(.horizontal, Spacing.l)
+        .accessibilityIdentifier("insights.range")
     }
 
     /// The one load path. A failure says so in the banner rather than leaving

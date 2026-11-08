@@ -5,7 +5,7 @@
     }
   },
   "Web": {
-    "baby-sync.example-tailnet.ts.net:443": {
+    "${TS_CERT_DOMAIN}:443": {
       "Handlers": {
         "/": {
           "Proxy": "http://baby-tracker-sync-app-1:8080"

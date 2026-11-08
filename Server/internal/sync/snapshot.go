@@ -131,11 +131,11 @@ func (s *Service) SnapshotPage(ctx context.Context, tx pgx.Tx, p access.Principa
 		int64(s.identity.RecoveryEpoch), int64(p.SecurityRevision), int64(state.Sequence), now, expires)
 	var digest [32]byte
 	if binding != nil {
-		var token string
-		token, digest, *binding, err = s.prepareToken(nil, *binding)
+		token, pending, err := s.prepareToken(nil, *binding)
 		if err != nil {
 			return protocol.SnapshotResponse{}, err
 		}
+		digest, *binding = pending.digest, pending.binding
 		queueBinding(store, digest, *binding)
 		response.NextPageToken = &token
 	}

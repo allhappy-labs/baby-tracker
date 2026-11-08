@@ -22,6 +22,7 @@ the same server against its own PostgreSQL; there is no second storage path.
 | Care-data model | Redesigned from scratch for performance; wire protocol unchanged |
 | Existing installs | Migrated in place by one import script; devices stay signed in |
 | Trust boundary | The database is trusted. Per-scope audit chains make tampering detectable; point-in-time backups are the recovery path. There is no independent file witness |
+| Audit retention (amended 2026-10-16, owner decision D1) | Routine refresh rotation writes no audit row; every other security event keeps its row for at least 13 months (see "Audit chains") |
 
 ## Why
 
@@ -93,6 +94,33 @@ the admin CLI runs a full verification on demand. A mismatch fails closed for
 that scope only (its requests return 503) and logs an alert. The table is
 partitioned by time.
 
+**Amendment, owner decision D1 (2026-10-16): audit retention.** The owner
+chose option (c) of the Phase 5 plan's decision D1, "a spec change: routine
+refresh rotation writes no audit row; reuse detection, revocation and every
+other security event keep theirs; the receipt and session rows remain the
+record", "with 13 months for the remaining events". So:
+
+- A routine refresh rotation (legacy or recoverable, and its
+  lost-acknowledgement retry) appends no audit row and does not move the
+  account's chain head; the child session is issued at the account's current
+  head. Reuse detection (`session_revoked`), revocation, sign-in, role
+  changes, removals, recovery and every other security event keep their rows.
+- Audit history is kept for at least 13 months. A maintenance sweep drops whole
+  partitions whose range ended more than 13 months ago (monthly from 2027; 2026
+  is one yearly partition, kept until about February 2028; the default
+  partition is never dropped, and its rows below an anchor are kept but no
+  longer verified) (detach, then drop,
+  under a 1 s lock timeout and the partition roll's advisory lock); it never
+  drops the current or the next partition, and the database refuses to drop
+  anything from the last 13 months by its own clock. Before it drops a
+  partition it checks that every chain in it is not failed and that its rows
+  up to the new anchor are one per seq and link (else it changes nothing and
+  raises an alert), then records, per chain, a retention anchor: the last dropped row's
+  seq and hash. The verifier walks a chain from its anchor: the first kept
+  row must carry the anchor's hash as its `prev_hash` (so a tampered kept row
+  still fails closed), and a chain whose rows all expired must end at the
+  anchor.
+
 ### Roles
 
 - Migration role: DDL only.
@@ -156,9 +184,12 @@ Each security command is one transaction:
 There is no global lock and no global sequence.
 
 - **Refresh** (every device, about every 10 minutes) locks only the parent
-  session row: consume the parent, insert the child, write the receipt and the
-  account-scope audit row. A lost-acknowledgement retry returns the committed
-  child.
+  session row: consume the parent, insert the child and write the receipt. A
+  routine rotation writes no audit row (amended by owner decision D1,
+  2026-10-16, quoted under "Audit chains"); the refresh receipt and the
+  session rows are its record. Reuse detection still appends its
+  account-scope `session_revoked` row. A lost-acknowledgement retry returns
+  the committed child.
 - **Sign-in and identity** perform Apple verification and any other network
   calls before the transaction opens.
 - **Family commands** (invitations, membership, roles, ownership, deletion

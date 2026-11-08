@@ -72,6 +72,15 @@ func main() {
 		os.Exit(1)
 	}
 	slog.SetDefault(logger)
+	// identitytest builds only: pprof on its own listener (a no-op in the
+	// release build, which links no pprof).
+	stopProfiling := startProfiling(logger)
+	defer stopProfiling()
+	// Before any pool opens: the GC steers under 85% of the container's
+	// memory unless GOMEMLIMIT is set, and under that limit collects at
+	// GOGC 400 unless GOGC is set.
+	applyGCPercent(os.Getenv, applyMemoryLimit(os.Getenv, os.ReadFile, logger), logger)
+	logRuntimeLimits(logger, os.ReadFile)
 	pool, err := openApplicationPool(context.Background(), cfg.DatabaseURL, cfg.DatabasePools.Runtime, cfg.DatabasePools.Explicit())
 	if err != nil {
 		logger.Error("open database", slog.String("error", err.Error()))
@@ -238,25 +247,23 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
-	if capacity != nil {
-		pools := poolRoles(pool, nil, exportPool, maintenancePool, mcpPool)
-		sampler := resourceSampler{collector: capacity, mcp: mcpCapacity, read: func() diagnostics.ResourceSample { return readResources(pools) }, emit: func(row diagnostics.ResourceSample) { logger.Info("capacity resource sample", slog.Any("sample", row)) }}
-		sampleContext, cancelSamples := context.WithCancel(ctx)
-		sampleDone := make(chan struct{})
-		go func() { defer close(sampleDone); sampler.RunResourceSampler(sampleContext, 5*time.Second) }()
-		defer func() { cancelSamples(); <-sampleDone }()
-	}
 	// The key inventory and the first readiness refresh (fast probe and
 	// audit) run before serving, within a bounded attempt so an unreachable
 	// database never delays liveness; until they succeed readiness refuses,
 	// the authority loop retries the inventory and the monitor re-probes
 	// every 2 seconds.
+	// Beside them, the live sessions' refresh digests warm the known refresh
+	// set (startKnownRefreshWarm), within their own bound: the listener
+	// opens once both are done, so a restart does not send every device's
+	// next refresh to the auth lane.
+	waitKnownRefreshes := startKnownRefreshWarm(ctx, authorityService, options.KnownRefreshes, knownRefreshWarmBudget, logger)
 	startupContext, cancelStartup := context.WithTimeout(ctx, keyInventoryStartupBudget)
 	if err := readiness.inventory.Refresh(startupContext); err != nil {
 		logger.Warn("credential key inventory unavailable at startup", slog.String("error", err.Error()))
 	}
 	_ = readiness.Refresh(startupContext)
 	cancelStartup()
+	waitKnownRefreshes()
 	stopAuthorityLoops := startAuthorityLoops(ctx, verifier, readiness.inventory, logger)
 	defer stopAuthorityLoops()
 	monitorContext, cancelMonitor := context.WithCancel(ctx)
@@ -275,7 +282,27 @@ func main() {
 	wakeContext, cancelWake := context.WithCancel(ctx)
 	wakeDone := make(chan struct{})
 	go func() { defer close(wakeDone); wakeWorker.Run(wakeContext, options.Readiness.Check) }()
-	defer func() { cancelWake(); <-wakeDone }()
+	// The worker stops at the signal (no new tick or push during the drain)
+	// and flushes the tracker as it stops. This deferred call runs after the
+	// HTTP drain and the hub's shutdown (runServerLifecycle has returned)
+	// and before the pools close: it flushes once more the progress the
+	// draining requests recorded after the worker's own flush (C42).
+	defer stopWakeWorker(cancelWake, wakeDone, wakeWorker)
+	// The resource sampler (BT_SYNC_DIAGNOSTICS=1) starts once the wake
+	// worker exists, whose totals it reads; it is joined before the sampled
+	// pools close.
+	if capacity != nil {
+		pools := poolRoles(pool, nil, exportPool, maintenancePool, mcpPool)
+		sources := resourceSources{Live: options.LiveHub.Stats, TrackerLen: wakeTracker.Len, TrackerDropped: wakeTracker.Dropped, Wake: wakeWorker.Totals}
+		if limiter, ok := options.Limiter.(*limits.Service); ok {
+			sources.Limiter = limiter.Stats
+		}
+		sampler := resourceSampler{collector: capacity, mcp: mcpCapacity, read: func() diagnostics.ResourceSample { return readResources(pools, sources) }, emit: func(row diagnostics.ResourceSample) { logger.Info("capacity resource sample", slog.Any("sample", row)) }}
+		sampleContext, cancelSamples := context.WithCancel(ctx)
+		sampleDone := make(chan struct{})
+		go func() { defer close(sampleDone); sampler.RunResourceSampler(sampleContext, 5*time.Second) }()
+		defer func() { cancelSamples(); <-sampleDone }()
+	}
 	// The Live Activity worker flushes the change feed, sweeps and claims on
 	// the maintenance pool inside its worker slots while the node is ready;
 	// live-activity-push-v1 is advertised once its first pass completed.
@@ -393,16 +420,37 @@ func purgeLoop(node *databaseReadiness, requestAuthority *authority.Service, mai
 		Interval: maintenance.PurgeInterval, Offset: purgeLoopOffset, Ready: node.Check, Now: time.Now, Logger: logger}
 }
 
-// startMaintenance composes the maintenance loops (maintenanceLoops and
-// purgeLoop), rolls the audit partitions before returning when the node is
-// ready (rollBeforeServing), and runs the loops until ctx ends. It returns
-// the loops it started and their stop, which cancels them and waits.
+// auditRetentionLoopOffset starts the audit retention loop well after
+// startup, clear of the pre-serving audit roll and the push-token loop.
+const auditRetentionLoopOffset = 10 * time.Minute
+
+// auditRetentionLoop composes the audit retention (owner decision D1): every
+// hour, auditRetentionLoopOffset after startup, maintenance.AuditRetentionSweep
+// drops the audit partitions older than 13 months on the maintenance pool
+// inside its worker slots, while the node's cached readiness reports ready.
+// A failed pass waits the whole interval: a drop that gave up behind a long
+// reader (55P03) queued audit inserts for up to its 1 s lock timeout, so it
+// is not retried every minute for as long as the reader runs. It has its
+// own loop, so neither its failure nor the roll's re-runs the other, and the
+// pre-serving roll never drops anything.
+func auditRetentionLoop(node *databaseReadiness, maintenancePool *pgxpool.Pool, slots *database.WorkerSlots, logger *slog.Logger) maintenance.Loop {
+	return maintenance.Loop{Name: "audit-retention",
+		Sweeps:   []maintenance.Sweep{maintenance.AuditRetentionSweep{Pool: maintenancePool, Slots: slots, Logger: logger}},
+		Interval: maintenance.AuditRetentionInterval, Offset: auditRetentionLoopOffset, FailureRetry: maintenance.AuditRetentionInterval, Timeout: maintenance.AuditRetentionSweepTimeout,
+		Ready: node.Check, Now: time.Now, Logger: logger}
+}
+
+// startMaintenance composes the maintenance loops (maintenanceLoops,
+// purgeLoop and auditRetentionLoop), rolls the audit partitions before
+// returning when the node is ready (rollBeforeServing), and runs the loops
+// until ctx ends. It returns the loops it started and their stop, which
+// cancels them and waits.
 func startMaintenance(ctx context.Context, node *databaseReadiness, requestAuthority *authority.Service, maintenancePool *pgxpool.Pool,
 	slots *database.WorkerSlots, logger *slog.Logger) ([]maintenance.Loop, func()) {
 	retention, auditPartitions, pushTokens := maintenanceLoops(node, maintenancePool, slots, logger)
 	auditPartitions = rollBeforeServing(ctx, auditPartitions)
 	purge := purgeLoop(node, requestAuthority, maintenancePool, slots, logger)
-	loops := []maintenance.Loop{retention, auditPartitions, pushTokens, purge}
+	loops := []maintenance.Loop{retention, auditPartitions, pushTokens, purge, auditRetentionLoop(node, maintenancePool, slots, logger)}
 	return loops, runLoops(ctx, loops...)
 }
 
@@ -436,11 +484,23 @@ func apnsClientFor(cfg config.Config, build func(config.APNSCredentials) (*apns.
 	}
 }
 
+// stopWakeWorker stops the wake worker at shutdown: it ends Run (cancel),
+// waits for it (Run applies its kept settles and flushes the tracker as it
+// stops), then flushes the tracker once more, for the progress requests
+// recorded after Run's own flush. main defers it so that it runs after the
+// HTTP drain and before the pools close (C42).
+func stopWakeWorker(cancel context.CancelFunc, done <-chan struct{}, worker *wake.Worker) {
+	cancel()
+	<-done
+	worker.FlushTracker(context.Background())
+}
+
 // newWakeWorker is the production wake worker: it flushes tracker (which
 // the request path records into) on the maintenance pool, inside its worker
 // slots, and wakes devices behind their family: those the live hub holds a
 // connection for through the hub, the others through push (an APNs
-// background push, only when APNs wakes are enabled).
+// background push, only when APNs wakes are enabled). An identitytest build
+// also hands it to GET /__identitytest/wake, which reports its ticks.
 func newWakeWorker(cfg config.Config, hub *realtime.Hub, pool *pgxpool.Pool, slots *database.WorkerSlots, tracker *wake.Tracker,
 	push *apns.Client, logger *slog.Logger) *wake.Worker {
 	worker := &wake.Worker{Pool: pool, Slots: slots, Tracker: tracker, Logger: logger, Now: time.Now, Connected: hub.DeviceConnected,
@@ -448,6 +508,7 @@ func newWakeWorker(cfg config.Config, hub *realtime.Hub, pool *pgxpool.Pool, slo
 	if cfg.APNSWakes.Enabled && push != nil { // never a typed-nil Pusher
 		worker.Pusher = push
 	}
+	identityTestWakeWorker(worker)
 	return worker
 }
 
@@ -468,7 +529,10 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, readiness *datab
 	if cfg.Admission == (config.AdmissionConfig{}) {
 		cfg.Admission = config.DefaultAdmission()
 	}
-	admissionController, err := admission.New(cfg.Admission.Total, cfg.Admission.MCPMax)
+	if cfg.Admission.AuthMax == 0 {
+		cfg.Admission.AuthMax = admission.DefaultAuth
+	}
+	admissionController, err := admission.NewLanes(cfg.Admission.Total, cfg.Admission.MCPMax, cfg.Admission.AuthMax, cfg.Admission.Wait)
 	if err != nil {
 		return httpapi.Options{}, err
 	}
@@ -628,6 +692,7 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, readiness *datab
 		RecoveryEpoch:          cfg.RecoveryEpoch,
 		CanonicalOrigin:        cfg.PublicOrigin.String(),
 		SyncLimits:             &cfg.Sync.Limits,
+		BodyReadTimeout:        cfg.Sync.BodyReadTimeout,
 		Gate:                   readiness,
 		ServerState:            readiness,
 		AppleAuthorizationMode: authorizationMode,
@@ -637,6 +702,8 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, readiness *datab
 		ChallengeService:       identityService,
 		SessionService:         sessions,
 		RecoveryService:        sessions,
+		// Warmed from the database before serving (startKnownRefreshWarm).
+		KnownRefreshes: httpapi.NewKnownRefreshes(logger),
 		// Refresh recovery follows the maintenance credential, which every
 		// configuration now supplies (decision D3); the authority prunes
 		// refresh receipts inside the refresh transactions. Recovery has no
@@ -652,6 +719,7 @@ func applicationOptions(cfg config.Config, logger *slog.Logger, readiness *datab
 		ImportService:                 importService,
 		PushTokens:                    pushTokens,
 		RequestAuthorizer:             authorityService,
+		BearerAuthenticator:           authorityService,
 		LiveHub:                       liveHub,
 		Limiter:                       limiter,
 		ClientIPResolver:              resolver,

@@ -15,6 +15,10 @@ struct Race {
     let clock: TestDateProvider
     private let scratch: URL
 
+    /// `beforeFamily` runs on the owner's phone after the baby exists and
+    /// before the owner signs in: what it writes is local history, which
+    /// reaches the family through the import.
+    ///
     /// `beforeJoin` runs on the owner's phone after the family exists and
     /// before the caregiver joins, so what it writes reaches the caregiver
     /// through the join snapshot.
@@ -25,7 +29,8 @@ struct Race {
     init(
         environment: E2EEnvironment,
         caregiverLiveHints: Bool = true,
-        beforeJoin: (_ owner: Phone, _ baby: UUID, _ clock: TestDateProvider) async throws -> Void = { _, _, _ in }
+        beforeJoin: (_ owner: Phone, _ baby: UUID, _ clock: TestDateProvider) async throws -> Void = { _, _, _ in },
+        beforeFamily: (_ owner: Phone, _ baby: UUID, _ clock: TestDateProvider) throws -> Void = { _, _, _ in }
     ) async throws {
         let live = try LiveServer(environment)
         // One clock for both phones, in the past so the server has seen every
@@ -43,6 +48,7 @@ struct Race {
 
         babyID = try owner.store.addBaby(name: "Race", birthDate: clock.now.addingTimeInterval(-20 * 86_400),
                                          referenceSex: .boys, expectedDueDate: nil).id
+        try beforeFamily(owner, babyID, clock)
         _ = try await owner.signIn(displayName: "Race Owner", live: live)
         try await owner.model.createFamily(name: "E2E one-part timers")
         try owner.expectUpToDate("after creating the family")

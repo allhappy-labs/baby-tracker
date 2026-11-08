@@ -73,6 +73,13 @@ struct HistoryDayBuilder {
             case .supplement(let med):
                 guard filter.contains(.supplement), let key = day(of: med.startedAt) else { continue }
                 dated[key, default: []].append(BuiltEntry(at: med.startedAt, row: medRow(med), note: Self.note([med.note])))
+            case .immunization(let shot):
+                guard filter.contains(.vaccine), let key = day(of: shot.givenAt) else { continue }
+                dated[key, default: []].append(BuiltEntry(at: shot.givenAt, row: immunizationRow(shot), note: Self.note([shot.note])))
+            case .pump(let pump):
+                // A session still running is not a day's entry yet.
+                guard filter.contains(.pump), let end = pump.endedAt, let key = day(of: pump.startedAt) else { continue }
+                dated[key, default: []].append(BuiltEntry(at: pump.startedAt, row: pumpRow(pump, end: end), note: Self.note([pump.note])))
             }
         }
 
@@ -145,8 +152,8 @@ struct HistoryDayBuilder {
         let first = members[0]
         let components = members.flatMap(\.components)
         let chips = components.enumerated().map { chip($0.offset, $0.element) }
-        // A single part opens its own editor. Solids are always a single
-        // entry: the session sheet has nothing to show for them.
+        // A single part opens its own editor, as solids on their own do;
+        // solids added to a feed open with it, in the session sheet.
         let isSinglePart = members.count == 1 && (first.kind == .solids || first.components.count <= 1)
         return HistoryListRow(
             id: session.id,
@@ -216,6 +223,25 @@ struct HistoryDayBuilder {
         ].compactMap { $0 }
         return singleRow(id: check.id, tracker: .growth, at: check.measuredAt, zone: check.timeZoneID,
                          text: values.joined(separator: " · "), target: .measurement(check.id))
+    }
+
+    private func immunizationRow(_ shot: ImmunizationEntry) -> HistoryListRow {
+        let text = shot.dose.map { L10n.fmt("%1$@ · dose %2$lld", shot.vaccine, $0) } ?? shot.vaccine
+        return singleRow(id: shot.id, tracker: .vaccine, at: shot.givenAt, zone: shot.timeZoneID,
+                         text: text, target: .immunization(shot.id))
+    }
+
+    /// "20m · 90 ml · Both"; "—" for a session with no amount. The same row
+    /// in every baby's History: a pump belongs to the family.
+    private func pumpRow(_ pump: PumpEntry, end: Date) -> HistoryListRow {
+        let amount = pump.volumeML.map { Volume(millilitres: $0).formatted(as: volumeUnit) } ?? HistoryCopy.noAmount
+        let text = [ElapsedFormatter.total(Int(end.timeIntervalSince(pump.startedAt))), amount, pump.side.displayName]
+            .joined(separator: " · ")
+        return HistoryListRow(id: pump.id, tracker: .pump,
+                              start: HistoryViewModel.clockTime(pump.startedAt, zone: pump.timeZoneID),
+                              end: HistoryViewModel.clockTime(end, zone: pump.timeZoneID), chips: [], text: text,
+                              isRunning: false, runningSince: nil, target: .entry(.pump(pump.id)),
+                              deleteConfirmation: false)
     }
 
     private func singleRow(id: UUID, tracker: Tracker, at date: Date, zone: String,

@@ -4,11 +4,23 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"time"
 
 	"babytracker/server/internal/protocol"
 )
 
-type SyncConfig struct{ Limits protocol.Limits }
+// DefaultBodyReadTimeout bounds one unauthenticated request-body read (the
+// sync, import and push-token routes read their body before the credential
+// check): 1 MiB in 5 s is about 1.7 Mbit/s, and a phone's bodies are a few
+// kilobytes.
+const DefaultBodyReadTimeout = 5 * time.Second
+
+type SyncConfig struct {
+	Limits protocol.Limits
+	// BodyReadTimeout is BT_BODY_READ_TIMEOUT, a Go duration from 1s through
+	// 60s (default 5s).
+	BodyReadTimeout time.Duration
+}
 
 func LoadSync(getenv func(string) string) (SyncConfig, error) {
 	if getenv == nil {
@@ -56,7 +68,7 @@ func LoadSync(getenv func(string) string) (SyncConfig, error) {
 		{"BT_IMPORT_MAX_SESSIONS_PER_ACCOUNT", &limits.ImportMaxSessionsPerAccount, 1, 1000},
 		{"BT_SOCKET_DEVICE_LIMIT", &limits.SocketDeviceLimit, 1, 5},
 		{"BT_SOCKET_ACCOUNT_LIMIT", &limits.SocketAccountLimit, 1, 10},
-		{"BT_SOCKET_PROCESS_LIMIT", &limits.SocketProcessLimit, 10, 10000},
+		{"BT_SOCKET_PROCESS_LIMIT", &limits.SocketProcessLimit, 10, protocol.MaxSocketProcessLimit},
 	}
 	for _, value := range values {
 		parsed, err := boundedInteger(getenv, value.name, *value.destination, value.minimum, value.maximum)
@@ -68,5 +80,13 @@ func LoadSync(getenv func(string) string) (SyncConfig, error) {
 	if err := limits.Validate(); err != nil {
 		return SyncConfig{}, fmt.Errorf("sync limits: %w", err)
 	}
-	return SyncConfig{Limits: limits}, nil
+	bodyReadTimeout := DefaultBodyReadTimeout
+	if raw := getenv("BT_BODY_READ_TIMEOUT"); raw != "" {
+		parsed, err := time.ParseDuration(raw)
+		if err != nil || parsed < time.Second || parsed > time.Minute {
+			return SyncConfig{}, errors.New("BT_BODY_READ_TIMEOUT must be a duration from 1s through 60s")
+		}
+		bodyReadTimeout = parsed
+	}
+	return SyncConfig{Limits: limits, BodyReadTimeout: bodyReadTimeout}, nil
 }

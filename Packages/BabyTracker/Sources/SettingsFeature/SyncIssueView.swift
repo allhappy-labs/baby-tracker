@@ -18,7 +18,7 @@ public struct SyncIssueView: View {
     }
 
     public var body: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Spacing.m) {
             Image(systemName: symbol)
                 .foregroundStyle(issue.presentation.needsAttention ? Palette.destructive : Palette.secondaryText)
                 .accessibilityHidden(true)
@@ -37,8 +37,8 @@ public struct SyncIssueView: View {
             .accessibilityLabel(SyncIssueViewCopy.dismiss)
             .accessibilityIdentifier("family-sync-issue-dismiss-\(issue.id.uuidString)")
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 8)
+        .padding(.horizontal, Spacing.l)
+        .padding(.vertical, Spacing.s)
         // One element, so VoiceOver reads the problem as a sentence rather
         // than stopping on an icon.
         .accessibilityElement(children: .combine)
@@ -76,7 +76,7 @@ public struct TimerConflictView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 16) {
+        VStack(alignment: .leading, spacing: Spacing.l) {
             Text(TimerConflictCopy.title)
                 .font(.headline)
                 .accessibilityIdentifier("timer-conflict-title")
@@ -91,7 +91,7 @@ public struct TimerConflictView: View {
                 .frame(maxWidth: .infinity, minHeight: 44)
                 .accessibilityIdentifier("timer-conflict-acknowledge")
         }
-        .padding()
+        .padding(Spacing.l)
     }
 }
 

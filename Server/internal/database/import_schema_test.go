@@ -55,7 +55,7 @@ const importCountSignature = "app.import_unfinished_session_count(uuid,timestamp
 func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 	fixture := testpg.New(t)
 	var current int64
-	if err := fixture.Owner.QueryRow(t.Context(), "SELECT current_version FROM schema_compatibility WHERE singleton").Scan(&current); err != nil || current != 32 {
+	if err := fixture.Owner.QueryRow(t.Context(), "SELECT current_version FROM schema_compatibility WHERE singleton").Scan(&current); err != nil || current != 37 {
 		t.Fatalf("schema version=%d err=%v", current, err)
 	}
 	var actualImportTables []string
@@ -131,7 +131,7 @@ func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 		"import_manifests_chunk_fk":             {"FOREIGN KEY (family_id, import_id, chunk_index)", "REFERENCES import_chunks(family_id, import_id, chunk_index)"},
 		"import_conflicts_manifest_fk":          {"FOREIGN KEY (family_id, import_id, record_id)", "REFERENCES import_record_manifests(family_id, import_id, record_id)"},
 		"import_mappings_candidate_fk":          {"FOREIGN KEY (family_id, import_id, local_baby_id)", "REFERENCES import_baby_candidates(family_id, import_id, local_baby_id)"},
-		"import_mappings_shared_baby_fk":        {"FOREIGN KEY (family_id, shared_baby_id)", "REFERENCES care_entities(family_id, id)"},
+		"import_mappings_shared_baby_fk":        {"FOREIGN KEY (family_id, shared_baby_id)", "REFERENCES care_entities(family_id, id) ON DELETE CASCADE"},
 		"import_sessions_state_shape":           {"manifest_complete", "finalized_at", "mapping_complete", "mapping_completed_at", "expired_at"},
 		"import_conflicts_decision_state_shape": {"decision_choice", "decision_canonical_baby_id", "decision_account_id", "decision_revision", "decided_at"},
 	} {
@@ -148,7 +148,7 @@ func TestMigration000012InstallsImportResolverSchema(t *testing.T) {
 		}
 	}
 
-	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 37); err != nil {
 		t.Fatalf("schema-twenty exact privilege snapshot rejected: %v", err)
 	}
 	var sessions, conflicts, immutable, denied, helper, secureHelper bool

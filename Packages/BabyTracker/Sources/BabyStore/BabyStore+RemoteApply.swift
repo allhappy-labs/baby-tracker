@@ -170,6 +170,11 @@ extension BabyStore {
             }
             return isGrowth ? EntityKey(kind: row.entityKind.rawValue, id: row.entityID) : nil
         case .superseded, .rejected:
+            if row.entityKind == .pump, row.operation == .create, outcome.code == "pump_running" {
+                row.deliveryState = .superseded
+                row.supersededCode = outcome.code
+                return try settleLosingPumpStart(row, winner: outcome.canonicalEntity)
+            }
             row.deliveryState = .superseded
             row.supersededCode = outcome.code
             try settleRefusedTimerCommand(row, outcome: outcome)
@@ -195,6 +200,17 @@ extension BabyStore {
                     try applyTombstone(entityID: row.entityID, kind: row.entityKind)
                 }
                 return EntityKey(kind: row.entityKind.rawValue, id: row.entityID)
+            }
+            if row.entityKind == .pump {
+                // A refused pump change (a late Stop of a session the other
+                // parent already finished, a time the server would not take)
+                // leaves the server's session as it was. Show that, not this
+                // phone's unaccepted version.
+                if let canonical = outcome.canonicalEntity, canonical.meta.id == row.entityID,
+                   canonical.meta.entityVersion >= (try observedVersion(of: canonical.meta.id, kind: .pump)) {
+                    try applyCanonical(canonical, entityID: canonical.meta.id, version: canonical.meta.entityVersion)
+                }
+                return EntityKey(kind: WireEntityKind.pump.rawValue, id: row.entityID)
             }
             guard row.entityKind == .timer else { return nil }
             return EntityKey(kind: WireEntityKind.timer.rawValue, id: row.entityID)
@@ -222,6 +238,25 @@ extension BabyStore {
                 throw RemoteEntityError.invalidSupplementPayload
             }
             _ = try SupplementTimestamp.parse(loggedAt)
+        }
+        // A live shot must carry what its row needs, checked before anything is written.
+        if kind == .immunization, entity.meta.tombstonedAt == nil {
+            guard case let .object(fields) = entity.payload,
+                  case let .string(givenAt) = fields["given_at"], (try? Self.wireDate(givenAt)) != nil,
+                  case let .string(vaccine) = fields["vaccine"], (try? SupplementName.normalized(vaccine)) != nil,
+                  Self.remoteDose(fields["dose"]) != .invalid else {
+                throw RemoteEntityError.invalidImmunizationPayload
+            }
+        }
+        // A live pump must carry what its row needs, checked before anything is written.
+        if kind == .pump, entity.meta.tombstonedAt == nil {
+            guard case let .object(fields) = entity.payload,
+                  case let .string(startedAt) = fields["started_at"], (try? Self.wireDate(startedAt)) != nil,
+                  case let .string(side) = fields["side"], PumpSide(rawValue: side) != nil,
+                  case .string = fields["time_zone_id"],
+                  Self.isOptionalWireDate(fields["ended_at"]), Self.isOptionalNumber(fields["volume_ml"]) else {
+                throw RemoteEntityError.invalidPumpPayload
+            }
         }
         if entity.meta.tombstonedAt == nil {
             if kind == .growthProfile {
@@ -251,7 +286,50 @@ extension BabyStore {
                 row.lastModifiedAt = try Self.wireDate(entity.meta.acceptedAt)
                 row.createdBy = entity.meta.creatorAccountID.uuidString.lowercased()
             }
+            if kind == .immunization, let row = try context.fetch(FetchDescriptor<ImmunizationEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).first {
+                row.lastModifiedAt = try Self.wireDate(entity.meta.acceptedAt)
+                row.createdBy = entity.meta.creatorAccountID.uuidString.lowercased()
+            }
+            if kind == .pump, let row = try context.fetch(FetchDescriptor<PumpEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).first {
+                row.lastModifiedAt = try Self.wireDate(entity.meta.acceptedAt)
+                row.createdBy = entity.meta.creatorAccountID.uuidString.lowercased()
+            }
         }
+    }
+
+    /// Another phone's pump was already running when this phone's start
+    /// reached the server. Whatever followed this start (a stop, an amount)
+    /// was written against a session the server never kept, so it is
+    /// withdrawn, and the running session is shown instead. A session this
+    /// phone has already stopped is still a real one, so it goes again as one
+    /// create of its finished state, which one-running-per-family lets
+    /// through. One still running gives way. Returns the winner, for the
+    /// page to rematerialize.
+    func settleLosingPumpStart(_ row: SyncOutboxEntry, winner: CanonicalEntity?) throws -> EntityKey? {
+        let entityID = row.entityID
+        let realmKey = activeRealm.encodedKey
+        for later in try liveOutboxRows() where later.entityID == entityID && later.entityKind == .pump && !later.deliveryState.isTerminal {
+            later.deliveryState = .superseded
+            later.supersededCode = "pump_running"
+        }
+        var touched: EntityKey?
+        if let winner, winner.meta.id != entityID {
+            // A later page may already hold a newer state of the winner.
+            if winner.meta.entityVersion >= (try observedVersion(of: winner.meta.id, kind: .pump)) {
+                try applyCanonical(winner, entityID: winner.meta.id, version: winner.meta.entityVersion)
+            }
+            touched = EntityKey(kind: WireEntityKind.pump.rawValue, id: winner.meta.id)
+        }
+        guard let local = try context.fetch(FetchDescriptor<PumpEntry>(predicate: #Predicate {
+            $0.id == entityID && $0.realmKey == realmKey
+        })).first, !local.isTombstoned else { return touched }
+        if local.endedAt != nil {
+            try appendEntityMutation(.create, on: local)
+        } else {
+            local.isTombstoned = true
+            local.lastModifiedAt = now
+        }
+        return touched
     }
 
     /// Creates the visible row for an entity this device has never had.
@@ -305,6 +383,21 @@ extension BabyStore {
             context.insert(MeasurementCheckIn(id: entityID, babyID: payload.babyID,
                 measuredAt: try SupplementTimestamp.parse(payload.measuredAt), timeZoneID: payload.timeZoneID,
                 loggedAt: try SupplementTimestamp.parse(payload.loggedAt), values: try payload.validatedValues(), realm: realm))
+        case .pump:
+            guard try context.fetch(FetchDescriptor<PumpEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).isEmpty else { return }
+            guard let startedAt = date("started_at"), let zone = string("time_zone_id"),
+                  let side = string("side").flatMap(PumpSide.init(rawValue:)) else {
+                throw RemoteEntityError.invalidPumpPayload
+            }
+            context.insert(PumpEntry(id: entityID, startedAt: startedAt, timeZoneID: zone, side: side, realm: realm))
+        case .immunization:
+            guard try context.fetch(FetchDescriptor<ImmunizationEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).isEmpty else { return }
+            guard let babyID = uuid("baby_id"), let givenAt = date("given_at"),
+                  let vaccine = string("vaccine"), let zone = string("time_zone_id") else {
+                throw RemoteEntityError.invalidImmunizationPayload
+            }
+            context.insert(ImmunizationEntry(id: entityID, babyID: babyID, vaccine: try SupplementName.normalized(vaccine),
+                                             dose: fields["dose"] as? Int, givenAt: givenAt, timeZoneID: zone, realm: realm))
         case .supplement:
             guard try context.fetch(FetchDescriptor<SupplementEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).isEmpty else { return }
             guard let babyID = uuid("baby_id"), let startedAt = date("started_at"),
@@ -446,6 +539,25 @@ extension BabyStore {
             if fields["head_circumference_cm"] != nil { row.headCircumferenceCM = fields["head_circumference_cm"] as? Double }
             if let value = optionalString("length_position") { row.lengthPositionRaw = value }
             if let value = fields["isTombstoned"] as? Bool { row.isTombstoned = value }
+        case .pump:
+            guard let row = try context.fetch(FetchDescriptor<PumpEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).first else { return }
+            if let value = fields["started_at"] as? String { row.startedAt = try Self.wireDate(value) }
+            if let value = try optionalDate("ended_at") { row.endedAt = value }
+            if let value = fields["time_zone_id"] as? String { row.timeZoneID = value }
+            if let value = fields["side"] as? String, let side = PumpSide(rawValue: value) { row.side = side }
+            // Present and null clears it, as a measurement's optional numbers do.
+            if fields["volume_ml"] != nil { row.volumeML = (fields["volume_ml"] as? NSNumber)?.doubleValue }
+            if let value = optionalString("note") { row.note = value }
+            if let value = fields["isTombstoned"] as? Bool { row.isTombstoned = value }
+        case .immunization:
+            guard let row = try context.fetch(FetchDescriptor<ImmunizationEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).first else { return }
+            if let vaccine = fields["vaccine"] as? String { row.vaccine = try SupplementName.normalized(vaccine) }
+            if let value = fields["given_at"] as? String { row.givenAt = try Self.wireDate(value) }
+            if let value = fields["time_zone_id"] as? String { row.timeZoneID = value }
+            // Present and null clears it, as a measurement's optional numbers do.
+            if fields["dose"] != nil { row.dose = fields["dose"] as? Int }
+            if let value = optionalString("note") { row.note = value }
+            if let value = fields["isTombstoned"] as? Bool { row.isTombstoned = value }
         case .supplement:
             guard let row = try context.fetch(FetchDescriptor<SupplementEntry>(predicate: #Predicate { $0.id == entityID && $0.realmKey == realmKey })).first else { return }
             if let name = fields["name"] as? String { row.name = try SupplementName.normalized(name) }
@@ -503,6 +615,38 @@ extension BabyStore {
             )
         case .solids:
             .solids(id: component.id, foods: component.foods!, amount: component.amount!)
+        }
+    }
+
+    enum RemoteDose: Equatable { case none, dose(Int), invalid }
+
+    /// `null` or absent is no dose; a whole number 1...10 is a dose; anything
+    /// else is malformed.
+    nonisolated static func remoteDose(_ value: JSONValue?) -> RemoteDose {
+        switch value {
+        case nil, .null?: return .none
+        case .number(let number)?:
+            let whole = NSDecimalNumber(decimal: number).intValue
+            guard Decimal(whole) == number, (1...10).contains(whole) else { return .invalid }
+            return .dose(whole)
+        default: return .invalid
+        }
+    }
+
+    /// `null` or absent, or a timestamp this phone can read.
+    nonisolated static func isOptionalWireDate(_ value: JSONValue?) -> Bool {
+        switch value {
+        case nil, .null?: true
+        case .string(let text)?: (try? wireDate(text)) != nil
+        default: false
+        }
+    }
+
+    /// `null` or absent, or a number.
+    nonisolated static func isOptionalNumber(_ value: JSONValue?) -> Bool {
+        switch value {
+        case nil, .null?, .number?: true
+        default: false
         }
     }
 
@@ -586,4 +730,6 @@ extension BabyStore: RemoteApplyStore {}
 public enum RemoteEntityError: Error, Sendable {
     case unsupportedKind(String)
     case invalidSupplementPayload
+    case invalidImmunizationPayload
+    case invalidPumpPayload
 }

@@ -4,6 +4,10 @@
 // Local.xcconfig.example). It is included last, so it overrides these.
 // Simulator builds need none of them.
 
+// The reverse-DNS prefix for every bundle ID, the App Group
+// (group.<prefix>) and the Keychain, log and task identifiers in code.
+BT_BUNDLE_ID_PREFIX = com.example.babytracker
+
 BT_DEVELOPMENT_TEAM =
 BT_CODE_SIGN_IDENTITY = Apple Development
 BT_APP_PROFILE =

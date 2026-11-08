@@ -100,7 +100,7 @@ Automated acceptance includes:
 - Lock Screen controls with stale local data, family changes, viewer access, offline catch-up failure and timed-bottle completion.
 - Fake APNs contract tests for headers, token-based authentication, payloads, response classes, retry bounds and redacted diagnostics.
 
-Run applicable Swift/server/protocol checks and inspect the whole diff before integration. Build only on the shared simulator `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`; stop if unavailable or incompatible.
+Run applicable Swift/server/protocol checks and inspect the whole diff before integration. Build only on the shared simulator `platform=iOS Simulator,id=<simulator-udid>`; stop if unavailable or incompatible.
 
 Physical acceptance uses two signed phones: foreground baseline, backgrounded receiver, locked receiver, terminated-app receiver, delayed registration/reconnect, receiver dismissal, server restart, sign-out and membership removal. Verify actual card content and controls, not just APNs success responses. Record delivery times without turning a few observations into a delivery SLA. Distinguish OS-supported termination behavior from guaranteed delivery.
 

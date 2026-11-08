@@ -2,6 +2,7 @@ package config
 
 import (
 	"testing"
+	"time"
 
 	"babytracker/server/internal/protocol"
 )
@@ -57,6 +58,20 @@ func TestRejectSyncLimitsOutsideHardRanges(t *testing.T) {
 	}
 }
 
+func TestSocketProcessLimitBounds(t *testing.T) {
+	for raw, want := range map[string]int{"": 1700, "10": 10, "10000": 10000, "10001": 10001, "65536": 65536} {
+		cfg, err := loadSyncForTest(map[string]string{"BT_SOCKET_PROCESS_LIMIT": raw})
+		if err != nil || cfg.Limits.SocketProcessLimit != want {
+			t.Fatalf("%q: %d %v, want %d", raw, cfg.Limits.SocketProcessLimit, err, want)
+		}
+	}
+	for _, bad := range []string{"9", "65537", "100000", "-1", "1e4"} {
+		if _, err := loadSyncForTest(map[string]string{"BT_SOCKET_PROCESS_LIMIT": bad}); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}
+
 func TestLoadIntegratesEffectiveSyncLimits(t *testing.T) {
 	values := validHostedEnvironment(t)
 	values["BT_SYNC_BATCH_SIZE"] = "17"
@@ -69,5 +84,36 @@ func TestLoadIntegratesEffectiveSyncLimits(t *testing.T) {
 	if cfg.Sync.Limits.SyncBatchSize != 17 || cfg.Sync.Limits.SyncBodyBytes != 1<<20 ||
 		cfg.Sync.Limits.SyncMutationDevicePerMinute != 23 || cfg.Sync.Limits.SyncPullAccountPerMinute != 19 {
 		t.Fatalf("integrated sync limits = %+v", cfg.Sync.Limits)
+	}
+}
+
+func loadSyncForTest(values map[string]string) (SyncConfig, error) {
+	return LoadSync(func(key string) string { return values[key] })
+}
+
+func TestBodyReadTimeoutIsConfigurable(t *testing.T) {
+	for raw, want := range map[string]time.Duration{"": 5 * time.Second, "12s": 12 * time.Second, "1s": time.Second, "60s": time.Minute, "1m": time.Minute} {
+		cfg, err := loadSyncForTest(map[string]string{"BT_BODY_READ_TIMEOUT": raw})
+		if err != nil || cfg.BodyReadTimeout != want {
+			t.Fatalf("%q: %v %v", raw, cfg.BodyReadTimeout, err)
+		}
+	}
+	for _, bad := range []string{"0s", "61s", "999ms", "5", "-1s", " 5s", "abc", "1m1s"} {
+		if _, err := loadSyncForTest(map[string]string{"BT_BODY_READ_TIMEOUT": bad}); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
+	}
+}
+
+func TestLoadCarriesBodyReadTimeout(t *testing.T) {
+	values := validHostedEnvironment(t)
+	values["BT_BODY_READ_TIMEOUT"] = "9s"
+	cfg, err := Load(mapGetter(values))
+	if err != nil || cfg.Sync.BodyReadTimeout != 9*time.Second {
+		t.Fatalf("%v %v", cfg.Sync.BodyReadTimeout, err)
+	}
+	delete(values, "BT_BODY_READ_TIMEOUT")
+	if cfg, err = Load(mapGetter(values)); err != nil || cfg.Sync.BodyReadTimeout != DefaultBodyReadTimeout {
+		t.Fatalf("default %v %v", cfg.Sync.BodyReadTimeout, err)
 	}
 }

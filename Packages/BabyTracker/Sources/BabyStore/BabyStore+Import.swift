@@ -87,6 +87,9 @@ public extension BabyStore {
         for supplement in try localRows(SupplementEntry.self) where !supplement.isTombstoned {
             try capture(.supplement, supplement.id, supplement.payloadFields())
         }
+        for shot in try localRows(ImmunizationEntry.self) where !shot.isTombstoned {
+            try capture(.immunization, shot.id, shot.payloadFields())
+        }
         let liveBabyIDs = Set(try babies(in: .local).map(\.id))
         for profile in try localRows(GrowthProfile.self) where !profile.isTombstoned && liveBabyIDs.contains(profile.babyID) {
             try capture(.growthProfile, profile.id, profile.payloadFields())
@@ -180,6 +183,7 @@ public extension BabyStore {
             try leaseStore.withFencedCommit(token, now: now) {
                 try self.remapBabiesAndDependents(state.completeBabyIDMap)
                 try self.enqueueImportMutations(from: manifest, realm: realm, importID: checkpointID, babyIDMap: state.completeBabyIDMap)
+                try self.enqueueLocalPumps(realm: realm)
                 try self.enqueuePostImportIntents(intents, realm: realm, babyIDMap: state.completeBabyIDMap)
                 try self.context.save()
             }
@@ -280,6 +284,9 @@ extension BabyStore {
         for row in try localRows(SupplementEntry.self) {
             if let canonical = mapping[row.babyID] { row.babyID = canonical }
         }
+        for row in try localRows(ImmunizationEntry.self) {
+            if let canonical = mapping[row.babyID] { row.babyID = canonical }
+        }
         for row in try localRows(GrowthProfile.self) {
             if let canonical = mapping[row.babyID] {
                 row.babyID = canonical
@@ -368,6 +375,18 @@ extension BabyStore {
                 observedEntityVersion: mutation.observedEntityVersion, clientMutationTime: mutation.clientMutationTime,
                 importID: mutation.importID, payload: payload)
             try appendOutboxRow(mapped, in: realm)
+        }
+    }
+
+    /// Pumps belong to the family, not a baby, so the import resolver, which
+    /// maps every record to a baby, never sees them: they are not in the
+    /// frozen manifest. Each live one, as it stands at the move, goes as a
+    /// plain create once the workspace is in the family realm.
+    func enqueueLocalPumps(realm: RealmID) throws {
+        for pump in try localRows(PumpEntry.self) where !pump.isTombstoned {
+            let mutation = try MutationFactory.mutation(entityID: pump.id, entityKind: .pump, operation: .create,
+                                                        observedEntityVersion: 0, at: now, payload: pump.payloadFields())
+            try appendOutboxRow(mutation, in: realm)
         }
     }
 

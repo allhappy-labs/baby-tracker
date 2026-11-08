@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestMatrixBoundsAndHonestFailures(t *testing.T) {
@@ -21,14 +20,6 @@ func TestMatrixBoundsAndHonestFailures(t *testing.T) {
 		if (cell.Concurrency > cell.Families) != (cell.Contention == "same_family_contention") {
 			t.Fatal("dishonest contention label")
 		}
-	}
-	start := time.Unix(100, 0)
-	budget := MatrixBudget{Started: start}
-	if !budget.CellDeadline(start.Add(1190 * time.Second)).Equal(start.Add(1200 * time.Second)) {
-		t.Fatal("global bound not respected")
-	}
-	if !budget.CellDeadline(start.Add(10 * time.Second)).Equal(start.Add(130 * time.Second)) {
-		t.Fatal("cell bound not respected")
 	}
 	report := newCellReport(cells[0])
 	report.Cell.ActualEvents = 47

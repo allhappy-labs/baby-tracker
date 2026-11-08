@@ -50,6 +50,38 @@ struct APNSRecorder: Sendable {
         try await records().filter { $0.token == token }
     }
 
+    /// The wake worker's successful ticks so far (`GET /__identitytest/wake`),
+    /// each counted when it returns. A failed tick restores its work and
+    /// sends nothing, so it is not counted.
+    func wakeTicks() async throws -> UInt64 {
+        guard let url = URL(string: base + "/__identitytest/wake") else { throw E2EFailure("bad wake URL") }
+        let (data, response) = try await session.data(from: url)
+        let status = (response as? HTTPURLResponse)?.statusCode ?? 0
+        guard status == 200 else {
+            throw E2EFailure("the wake tick route answered \(status): \(String(decoding: data.prefix(200), as: UTF8.self))")
+        }
+        struct Envelope: Decodable { let ticks: UInt64 }
+        return try JSONDecoder().decode(Envelope.self, from: data).ticks
+    }
+
+    /// Waits until the wake worker has run a whole successful tick that began
+    /// after this call: two more successful ticks returned (the first may
+    /// have begun before it). That tick scanned everything committed before
+    /// the call and sent what it found, so a push it would make has been
+    /// made. A sleep past the 2-second interval proves nothing on a loaded
+    /// machine, where the worker may not have ticked, or its tick may have
+    /// failed.
+    func waitForWholeWakeTick(timeout: Duration) async throws {
+        let before = try await wakeTicks()
+        let start = ContinuousClock.now
+        while try await wakeTicks() < before + 2 {
+            guard ContinuousClock.now - start < timeout else {
+                throw E2EFailure("the wake worker ran no whole successful tick within \(timeout) (ticks before: \(before))")
+            }
+            try await Task.sleep(for: .milliseconds(100))
+        }
+    }
+
     /// The first push to `token`, polling until it arrives or `timeout` runs out.
     func waitForPush(token: String, timeout: Duration) async throws -> APNSRecord {
         let start = ContinuousClock.now

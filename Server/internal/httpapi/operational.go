@@ -2,11 +2,16 @@ package httpapi
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 
 	"babytracker/server/internal/protocol"
 )
+
+// errInvalidRecoveryEpoch is the cause of a not_ready from a node whose
+// recovery epoch is not yet valid.
+var errInvalidRecoveryEpoch = errors.New("recovery_epoch_invalid")
 
 func healthHandler(w http.ResponseWriter, _ *http.Request) {
 	writeJSON(w, http.StatusOK, protocol.StatusResponse{Status: "ok"})
@@ -16,12 +21,27 @@ func readyHandler(readiness Readiness) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		ctx, cancel := context.WithTimeout(r.Context(), 2*time.Second)
 		defer cancel()
-		if readiness == nil || readiness.Check(ctx) != nil {
-			writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestIDFromContext(r.Context()), true)
+		var err error = errNoReadiness
+		if readiness != nil {
+			err = readiness.Check(ctx)
+		}
+		if err != nil {
+			writeNotReady(w, r, err)
 			return
 		}
 		writeJSON(w, http.StatusOK, protocol.StatusResponse{Status: "ok"})
 	}
+}
+
+// errNoReadiness is the cause of a not_ready from a node built without a
+// readiness check.
+var errNoReadiness = errors.New("readiness_unconfigured")
+
+// writeNotReady is the not_ready refusal, with its spaced fault line
+// (logRefusal) carrying cause.
+func writeNotReady(w http.ResponseWriter, r *http.Request, cause error) {
+	logRefusal(r, refusalNotReady, http.StatusServiceUnavailable, cause)
+	writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestIDFromContext(r.Context()), true)
 }
 
 func serverHandler(options Options) http.HandlerFunc {
@@ -31,12 +51,12 @@ func serverHandler(options Options) http.HandlerFunc {
 			var err error
 			instanceID, recoveryEpoch, err = options.ServerState.ServerState(request.Context())
 			if err != nil {
-				writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestIDFromContext(request.Context()), true)
+				writeNotReady(w, request, err)
 				return
 			}
 		}
 		if !protocol.ValidRecoveryEpoch(recoveryEpoch) {
-			writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestIDFromContext(request.Context()), true)
+			writeNotReady(w, request, errInvalidRecoveryEpoch)
 			return
 		}
 		// refresh-recovery-v1 is advertised from configuration alone, never

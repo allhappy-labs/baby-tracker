@@ -95,7 +95,7 @@ public enum HistoryDeleteError: Error, Equatable {
 public final class HistoryViewModel {
     /// Every tracker History lists, in filter-sheet order. Solids are
     /// filtered as feeds.
-    public static let trackers: [Tracker] = [.feed, .sleep, .diaper, .supplement, .growth]
+    public static let trackers: [Tracker] = [.feed, .sleep, .diaper, .supplement, .growth, .vaccine, .pump]
 
     private let store: BabyStore
     private let babyID: UUID
@@ -182,9 +182,11 @@ public final class HistoryViewModel {
         let built = try builder.build(from: dayKeys.last ?? today, through: today, filter: filter)
 
         let timers = try store.activeTimers(for: babyID)
+        let runningPump = filter.contains(.pump) ? try store.runningPump().map(runningPumpRow) : nil
         let running = timers
             .filter { filter.contains($0.kind == .feed ? .feed : .sleep) }
             .map { runningRow($0, builder: builder) }
+            + (runningPump.map { [$0] } ?? [])
 
         days = dayKeys.compactMap { key in
             let day = built.days[key]
@@ -223,6 +225,8 @@ public final class HistoryViewModel {
             case .sleep(let sleep): sleep.startedAt
             case .diaper(let diaper): diaper.startedAt
             case .supplement(let med): med.startedAt
+            case .immunization(let shot): shot.givenAt
+            case .pump(let pump): pump.startedAt
             }
         }
         return (beforeBirth + measurements.map(\.measuredAt) + [birthDay]).min() ?? birthDay
@@ -236,6 +240,9 @@ public final class HistoryViewModel {
             || store.lastSleep(for: babyID) != nil
             || store.lastDiaper(for: babyID) != nil
             || store.lastSupplement(for: babyID) != nil
+            || store.lastImmunization(for: babyID) != nil
+            || store.lastFinishedPump() != nil
+            || store.runningPump() != nil
     }
 
     // MARK: - Focus
@@ -249,6 +256,8 @@ public final class HistoryViewModel {
         case .sleep(let sleep)?: return .sleep(sleep.id)
         case .diaper(let diaper)?: return .diaper(diaper.id)
         case .supplement(let med)?: return .supplement(med.id)
+        case .immunization(let shot)?: return .immunization(shot.id)
+        case .pump(let pump)?: return .pump(pump.id)
         case nil:
             // Growth isn't a History entry in the store (H-R1).
             return try store.measurements(for: babyID).contains { $0.id == entryID } ? .measurement(entryID) : nil
@@ -290,6 +299,11 @@ public final class HistoryViewModel {
             case .supplement(let med)?: try store.softDelete(med)
             default: break
             }
+        case .entry(.immunization(let id)):
+            if case .immunization(let shot)? = try store.entry(id: id, for: babyID) { try store.softDelete(shot) }
+        case .entry(.pump(let id)):
+            // Gone already (deleted on the other phone): the reload drops it.
+            if let pump = try store.pump(id: id) { try store.softDelete(pump) }
         case .entry(.measurement(let id)):
             if let check = try store.measurements(for: babyID).first(where: { $0.id == id }) {
                 try store.softDelete(check)
@@ -301,6 +315,14 @@ public final class HistoryViewModel {
     }
 
     // MARK: - Rows
+
+    /// The family's running pump, on today in every baby's History, as a
+    /// running timer is. Its clock ticks in the view; it opens the pump panel.
+    private func runningPumpRow(_ pump: PumpEntry) -> HistoryListRow {
+        HistoryListRow(id: pump.id, tracker: .pump, start: Self.clockTime(pump.startedAt, zone: pump.timeZoneID),
+                       end: L10n.tr("now"), chips: [], text: HistoryCopy.pumping, isRunning: true,
+                       runningSince: pump.startedAt, target: .entry(.pump(pump.id)), deleteConfirmation: false)
+    }
 
     /// The live duration ticks in the view; the row itself only changes when
     /// the timer does.

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"slices"
 	"sync"
 	"testing"
 
@@ -128,8 +129,25 @@ func TestExportMatchesLegacyCorpus(t *testing.T) {
 		t.Fatal(err)
 	}
 	got := mustArchive(t, h, careEntities{})
-	if fmt.Sprint(recorded.SectionOrder) != fmt.Sprint(got.SectionOrder) {
-		t.Fatalf("section order: recorded %v, care %v", recorded.SectionOrder, got.SectionOrder)
+	// The recorded archive predates immunizations and pumps: they are the two
+	// sections the care archive adds, they sit after measurements in that
+	// order, and the golden scenario has neither, so both are empty.
+	added := []string{"immunizations", "pumps"}
+	var order []string
+	for _, name := range got.SectionOrder {
+		if slices.Contains(added, name) {
+			if string(got.Sections[name]) != "[]" {
+				t.Fatalf("the golden scenario has no %s: %s", name, got.Sections[name])
+			}
+			continue
+		}
+		order = append(order, name)
+	}
+	if fmt.Sprint(recorded.SectionOrder) != fmt.Sprint(order) {
+		t.Fatalf("section order: recorded %v, care %v", recorded.SectionOrder, order)
+	}
+	if i := slices.Index(got.SectionOrder, "immunizations"); i < 1 || got.SectionOrder[i-1] != "measurements" || got.SectionOrder[i+1] != "pumps" {
+		t.Fatalf("immunizations and pumps are not after measurements: %v", got.SectionOrder)
 	}
 	for _, name := range recorded.SectionOrder {
 		var want bytes.Buffer

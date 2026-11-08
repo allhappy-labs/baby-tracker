@@ -112,3 +112,78 @@ func TestAdaptiveBatchRerunsWhileFullUpToItsCap(t *testing.T) {
 		t.Fatalf("a failure on the third batch: removed %d (%v), want the first two's 2,000", removed, err)
 	}
 }
+
+// A halved batch grows back: after four full batches without a timeout the
+// size doubles, up to Start (C18).
+func TestAdaptiveBatchGrowsBackAfterSuccesses(t *testing.T) {
+	b := &maintenance.AdaptiveBatch{Start: 1000, Min: 50, PassCap: 1 << 30}
+	// statementTimedOut (batch.go) matches SQLSTATE 57014 while ctx is live.
+	pgTimeout := func() error { return &pgconn.PgError{Code: "57014"} }
+	b.Drain(t.Context(), func(ctx context.Context, limit int) (int, error) { return 0, pgTimeout() })
+	if b.Size() != 500 {
+		t.Fatalf("after a timeout %d", b.Size())
+	}
+	full := 0
+	b.Drain(t.Context(), func(ctx context.Context, limit int) (int, error) {
+		full++
+		if full > 12 {
+			return 0, nil
+		}
+		return limit, nil
+	})
+	if b.Size() != 1000 {
+		t.Fatalf("after 12 full batches the size is %d, want back at Start 1000", b.Size())
+	}
+}
+
+// A timeout resets the streak: full batches before it do not count towards
+// the next growth. Otherwise the streak carries across passes, and
+// GrowAfter overrides the default four.
+func TestAdaptiveBatchTimeoutResetsTheGrowStreak(t *testing.T) {
+	b := &maintenance.AdaptiveBatch{Start: 1000, Min: 50, PassCap: 1 << 30}
+	if _, _, err := b.Drain(t.Context(), func(context.Context, int) (int, error) { return 0, statementTimeout() }); err == nil {
+		t.Fatal("a timed-out batch reported success")
+	}
+	// fullThen runs `full` full batches, then ends the pass with `last`.
+	fullThen := func(b *maintenance.AdaptiveBatch, full int, last error) {
+		t.Helper()
+		calls := 0
+		_, _, err := b.Drain(t.Context(), func(_ context.Context, limit int) (int, error) {
+			if calls++; calls > full {
+				return 0, last
+			}
+			return limit, nil
+		})
+		if (err != nil) != (last != nil) {
+			t.Fatalf("pass after %d full batches: %v", full, err)
+		}
+	}
+	fullThen(b, 3, statementTimeout()) // three full at 500, then a timeout: 250, streak 0
+	if b.Size() != 250 {
+		t.Fatalf("after the second timeout %d, want 250", b.Size())
+	}
+	fullThen(b, 3, nil) // three full: the streak is 3, not 6
+	if b.Size() != 250 {
+		t.Fatalf("three full batches after a timeout grew the batch to %d; the timeout must reset the streak", b.Size())
+	}
+	fullThen(b, 1, nil) // the fourth, in the next pass: the streak carries across passes
+	if b.Size() != 500 {
+		t.Fatalf("the fourth full batch (across passes) left the size at %d, want 500", b.Size())
+	}
+	// GrowAfter 1 grows on every full batch; the growth stops at Start even
+	// when doubling would pass it (300 → 600 → 1,000, not 1,200).
+	quick := &maintenance.AdaptiveBatch{Start: 1000, Min: 300, PassCap: 1 << 30, GrowAfter: 1}
+	fullThen(quick, 0, statementTimeout())
+	fullThen(quick, 0, statementTimeout())
+	if quick.Size() != 300 {
+		t.Fatalf("two timeouts with Min 300 left %d", quick.Size())
+	}
+	fullThen(quick, 1, nil)
+	if quick.Size() != 600 {
+		t.Fatalf("GrowAfter 1: one full batch left the size at %d, want 600", quick.Size())
+	}
+	fullThen(quick, 3, nil)
+	if quick.Size() != 1000 {
+		t.Fatalf("growth past Start: the size is %d, want 1000", quick.Size())
+	}
+}

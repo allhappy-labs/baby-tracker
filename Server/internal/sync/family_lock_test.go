@@ -9,6 +9,7 @@ import (
 	"babytracker/server/internal/protocol"
 	"babytracker/server/internal/tenant"
 	"babytracker/server/internal/testkit"
+	"github.com/jackc/pgx/v5"
 )
 
 // The family row lock (care.LockFamily, the first statement of the batch's
@@ -52,6 +53,60 @@ func holdFamilyRowAs(t *testing.T, h *testkit.Harness, lock string) (pid uint32,
 	return tx.Conn().PgConn().PID(), release
 }
 
+// Statements that observe a wait on the held row. blockedPIDsSQL finds the
+// backends the blocker blocks; blockedQueriesSQL then reads what they run,
+// in a statement (and so a status snapshot) of its own.
+//
+// Root cause of the intermittent "first wait on the family row was [SELECT
+// count(*) FROM care_entities …]" (Phase 3 ledger C11): pg_stat_activity's
+// query column comes from a snapshot of every backend's status taken when
+// the view is first scanned, while pg_blocking_pids (and wait_event_type,
+// read from the live PGPROC) are evaluated afterwards, row by row. pgx
+// prepares a batch's new statements in a round trip of their own (a Parse
+// each, then Sync) before it executes the first, so in between the backend
+// sits idle in transaction showing the last statement parsed. A snapshot
+// taken then, with the live columns read after the backend went on to wait
+// on the fence, reported a correct fence wait with a later statement's text;
+// load widens that window. Filtering on wait_event_type in the same
+// statement narrowed it but did not close it (1 in 300 under a 4-CPU burn).
+// Now the wait is seen first, and the query is read by a later statement:
+// its snapshot is taken after the wait was seen, and while the row is held
+// a waiting backend cannot move on, so the snapshot shows the statement it
+// waits in.
+const (
+	blockedPIDsSQL    = `SELECT pid FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`
+	blockedQueriesSQL = `SELECT query FROM pg_stat_activity WHERE pid = ANY($2::int[]) AND $1::int = ANY(pg_blocking_pids(pid))`
+)
+
+// observeBlocked returns the statements the backends blocked by blocker run,
+// or none while no backend waits on it.
+func observeBlocked(ctx context.Context, t *testing.T, h *testkit.Harness, blocker uint32) []string {
+	t.Helper()
+	rows, err := h.Admin.Query(ctx, blockedPIDsSQL, int(blocker))
+	if err != nil {
+		t.Fatalf("observe blocked backends: %v", err)
+	}
+	pids, err := pgx.CollectRows(rows, pgx.RowTo[int32])
+	if err != nil {
+		t.Fatalf("observe blocked backends: %v", err)
+	}
+	if len(pids) == 0 {
+		return nil
+	}
+	rows, err = h.Admin.Query(ctx, blockedQueriesSQL, int(blocker), pids)
+	if err != nil {
+		t.Fatalf("observe blocked statements: %v", err)
+	}
+	queries, err := pgx.CollectRows(rows, pgx.RowTo[string])
+	if err != nil {
+		t.Fatalf("observe blocked statements: %v", err)
+	}
+	if len(queries) != len(pids) {
+		t.Fatalf("blocked backends %v stopped waiting while the row was held: %q", pids, queries)
+	}
+	return queries
+}
+
 // requireFirstWaitIsFamilyFence runs op, waits until it blocks on the held
 // family row, and requires the blocked statement to be the family fence.
 func requireFirstWaitIsFamilyFence(t *testing.T, h *testkit.Harness, op func() error) {
@@ -64,20 +119,7 @@ func requireFirstWaitIsFamilyFence(t *testing.T, h *testkit.Harness, op func() e
 	poll := time.NewTicker(5 * time.Millisecond)
 	defer poll.Stop()
 	for {
-		var queries []string
-		rows, err := h.Admin.Query(waitCtx, `SELECT query FROM pg_stat_activity WHERE $1::int = ANY(pg_blocking_pids(pid))`, int(blocker))
-		if err != nil {
-			t.Fatalf("observe blocked statement: %v", err)
-		}
-		for rows.Next() {
-			var query string
-			if err := rows.Scan(&query); err != nil {
-				t.Fatal(err)
-			}
-			queries = append(queries, query)
-		}
-		rows.Close()
-		if len(queries) > 0 {
+		if queries := observeBlocked(waitCtx, t, h, blocker); len(queries) > 0 {
 			if len(queries) != 1 || strings.TrimSpace(queries[0]) != familyFenceSQL {
 				t.Fatalf("first wait on the family row was %q, want the family fence", queries)
 			}

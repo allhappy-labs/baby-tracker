@@ -13,6 +13,8 @@ import BabyCore
         #expect(LogSheet.editEntry(.diaper(id)).id == "edit-diaper-\(id)")
         #expect(LogSheet.editEntry(.feed(id)).id == "edit-feed-\(id)")
         #expect(LogSheet.editEntry(.measurement(id)).id == "edit-measurement-\(id)")
+        #expect(LogSheet.immunization.id == "immunization")
+        #expect(LogSheet.editEntry(.immunization(id)).id == "edit-immunization-\(id)")
         #expect(LogSheet.session(.sleep, rootID: id).id == "session-sleep-\(id)")
         #expect(LogSheet.session(.feed, rootID: id).id == "session-feed-\(id)")
     }
@@ -27,6 +29,17 @@ import BabyCore
         #expect(EditDestination.resolve(.diaper(diaper.id), store: store, babyID: baby) == .diaper(diaper.id))
         #expect(EditDestination.resolve(.supplement(med.id), store: store, babyID: baby) == .supplement(med.id))
         #expect(EditDestination.resolve(.measurement(check.id), store: store, babyID: baby) == .measurement(check.id))
+    }
+
+    @Test func aShotResolvesToItsPanelAndAWrongKindToGone() throws {
+        let (store, baby, _) = try fixture()
+        let shot = try store.logImmunization(vaccine: "MMR", dose: 1, for: baby)
+        let med = try store.logSupplement(name: "Iron", for: baby)
+        #expect(EditDestination.resolve(.immunization(shot.id), store: store, babyID: baby) == .immunization(shot.id))
+        #expect(EditDestination.resolve(.immunization(med.id), store: store, babyID: baby) == .gone)
+        #expect(EditDestination.resolve(.supplement(shot.id), store: store, babyID: baby) == .gone)
+        try store.softDelete(shot)
+        #expect(EditDestination.resolve(.immunization(shot.id), store: store, babyID: baby) == .gone)
     }
 
     @Test func aSolidsFeedOpensTheSolidsSheetNeverTheSession() throws {
@@ -92,5 +105,20 @@ import BabyCore
 
         #expect(EditDestination.resolve(.supplement(diaper.id), store: store, babyID: baby) == .gone)
         #expect(EditDestination.resolve(.feed(diaper.id), store: store, babyID: baby) == .gone)
+    }
+
+    @Test func aPumpOpensThePumpPanelForEveryBabyAndADeletedOneIsGone() throws {
+        let (store, baby, clock) = try fixture()
+        let theo = try store.addBaby(name: "Theo", birthDate: .now, referenceSex: .boys, expectedDueDate: nil).id
+        let pump = try store.logPump(side: .both, from: clock.now.addingTimeInterval(-900), to: clock.now, volumeML: nil, note: nil)
+        #expect(LogSheet.pump.id == "pump")
+        #expect(LogSheet.pumpAmount(pumpID: pump.id).id == "pumpAmount-\(pump.id)")
+        #expect(LogSheet.editEntry(.pump(pump.id)).id == "edit-pump-\(pump.id)")
+        #expect(EditDestination.resolve(.pump(pump.id), store: store, babyID: baby) == .pump(pump.id))
+        #expect(EditDestination.resolve(.pump(pump.id), store: store, babyID: theo) == .pump(pump.id))
+        #expect(EditDestination.resolve(.sleep(pump.id), store: store, babyID: baby) == .gone)
+        #expect(!LogSheet.editEntry(.pump(pump.id)).opensSessionList(store: store, babyID: baby))
+        try store.softDelete(pump)
+        #expect(EditDestination.resolve(.pump(pump.id), store: store, babyID: baby) == .gone)
     }
 }

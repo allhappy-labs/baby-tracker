@@ -781,7 +781,7 @@ struct BackgroundSyncTests {
     /// One identifier, declared once, so it cannot drift from the Info.plist
     /// entry that permits it.
     @Test func backgroundRefreshIdentifierIsSingular() {
-        #expect(BackgroundSync.refreshTaskIdentifier == "com.olhapi.babytracker.sync.refresh")
+        #expect(BackgroundSync.refreshTaskIdentifier == "com.example.babytracker.sync.refresh")
     }
 }
 

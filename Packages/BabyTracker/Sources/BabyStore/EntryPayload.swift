@@ -133,6 +133,30 @@ extension SupplementEntry: ChangeLoggable, BabyOwnedRecord, Touchable, RealmScop
     }
 }
 
+extension ImmunizationEntry: ChangeLoggable, BabyOwnedRecord, Touchable, RealmScoped {
+    public var entityID: UUID { id }
+    public var entityTypeName: String { "ImmunizationEntry" }
+    public func payloadFields() -> [String: Any] {
+        ["baby_id": babyID.uuidString.lowercased(), "given_at": MutationFactory.wireTime(givenAt),
+         "time_zone_id": timeZoneID, "vaccine": vaccine,
+         "dose": dose as Any? ?? NSNull(), "note": note ?? NSNull()]
+    }
+}
+
+/// Not `BabyOwnedRecord`: a pump belongs to the family, so its delete payload
+/// is `{}` and no hash, import or cascade ever looks for its baby.
+extension PumpEntry: ChangeLoggable, Touchable, RealmScoped {
+    public var entityID: UUID { id }
+    public var entityTypeName: String { "PumpEntry" }
+    public func payloadFields() -> [String: Any] {
+        ["started_at": MutationFactory.wireTime(startedAt),
+         "ended_at": endedAt.map(MutationFactory.wireTime) ?? NSNull(),
+         "time_zone_id": timeZoneID, "side": sideRaw,
+         "volume_ml": volumeML as Any? ?? NSNull(),
+         "note": note ?? NSNull()]
+    }
+}
+
 
 extension GrowthProfile: ChangeLoggable, BabyOwnedRecord, Touchable, RealmScoped {
     public var entityID: UUID { id }

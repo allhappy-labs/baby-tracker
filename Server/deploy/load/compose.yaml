@@ -1,0 +1,115 @@
+# Phase 5 reference node, labelled from its host facts ("Apple M4, Docker CPU
+# caps" on the Mac; "<CPU> (<hypervisor> VM, <n> vCPU, <n> GiB), Docker CPU
+# caps" on a Linux VM): app and db each 4 CPU / 8 GiB with memory+swap equal
+# (no swap). The generator service runs outside those caps by design (owner
+# decision 2026-10-16). OrbStack's VM keeps 12 GiB (decision D2), and a 16 GiB
+# Linux VM's MemTotal is under 16 GiB too, so the two memory caps are ceilings
+# that cannot both be reached; every run reports measured peaks next to the
+# VM limit. The app and the generator run as BT_LOAD_CONTAINER_USER, which
+# load-node.sh sets: the images' 65532 on the Mac, the invoking user on Linux,
+# where the run directory's 0600/0700 files keep their real owner.
+# Used only by Server/scripts/load-node.sh:
+#   docker compose -p $BT_LOAD_PROJECT -f Server/compose.yaml -f Server/deploy/load/compose.yaml …
+services:
+  db:
+    cpus: 4
+    mem_limit: 8g
+    memswap_limit: 8g
+    shm_size: 1g
+    # pg_stat_statements.track_planning (Task 21's instrumentation) records
+    # each statement's plan time. It updates the statement's shared entry once
+    # more per planning, so a run before it and a run after it compare with
+    # that cost in mind. track_wal_io_timing (the same instrumentation) fills
+    # pg_stat_wal's wal_write_time and wal_sync_time. Both are read at db
+    # start: a stack that is already up takes them only from
+    # `load-node.sh upgrade --recreate-db`.
+    # Hosted profile, measured (Task 16 Step 3, run d1-20261024-1613): shared_buffers
+    # 5GB: care_entities pulls hit ~85% of shared buffers at 2GB (sb2: 1.23M
+    # reads, ~1.6 ms each) and still 88.5% at 3GB (w3; the rule is below 99%),
+    # and this VM keeps almost no file cache for the db (cgroup file ~0.4 GB
+    # beyond shared_buffers with 6 GB free), so shared buffers are the only
+    # cache; 5GB keeps the db near 6.2 GB of its 8 GiB cap. wal_compression=lz4 because full-page
+    # images were most of the WAL (walz: 2.51 GB vs 3.71 GB, 509k vs 695k FPI).
+    # log_autovacuum_min_duration is the run's BT_LOAD_LOG_AUTOVACUUM_MIN_DURATION
+    # (default 1s; 0 logs every autovacuum action, to line them up with a
+    # run's 503 seconds): the command line outranks ALTER SYSTEM.
+    # bgwriter_lru_maxpages=1000 and bgwriter_delay=50ms (A/B candidate, up to
+    # 20,000 buffers/s against the default 500): at 2.5x the db allocates
+    # 3.6-4.6k buffers/s and the capped bgwriter (maxwritten_clean 2,894 in
+    # 601 s) left backends evicting dirty buffers themselves, 15-49 sessions
+    # in IO/DataFileWrite for 0.5-1 s (vm-v2-analysis.md, Follow-up 2, run B).
+    command: [postgres, -c, shared_preload_libraries=pg_stat_statements, -c, pg_stat_statements.track=top, -c, pg_stat_statements.track_planning=on,
+              -c, shared_buffers=5GB, -c, effective_cache_size=6GB, -c, work_mem=16MB, -c, maintenance_work_mem=512MB,
+              -c, max_connections=200, -c, max_wal_size=8GB, -c, checkpoint_timeout=15min, -c, random_page_cost=1.1,
+              -c, effective_io_concurrency=200, -c, track_io_timing=on, -c, track_wal_io_timing=on, -c, wal_compression=lz4, -c, log_lock_waits=on, -c, deadlock_timeout=1s,
+              -c, "log_autovacuum_min_duration=${BT_LOAD_LOG_AUTOVACUUM_MIN_DURATION:-1s}", -c, log_min_duration_statement=500ms,
+              -c, bgwriter_lru_maxpages=1000, -c, bgwriter_delay=50ms]
+    ports: ["127.0.0.1:${BT_LOAD_DB_PORT:-0}:5432"]
+    networks: {default: {}, load: {ipv4_address: 172.31.250.20}}
+  app:
+    cpus: 4
+    mem_limit: 8g
+    memswap_limit: 8g
+    user: "${BT_LOAD_CONTAINER_USER:-65532:65532}"
+    ulimits: {nofile: {soft: 65536, hard: 65536}}
+    # The runner follows this log into the run directory; the rotation is
+    # raised so a measurement's log stays whole even if the follower lags (the
+    # daemon's default keeps 5 x 20 MB, minutes of a loaded app).
+    logging: {driver: json-file, options: {max-size: "256m", max-file: "16"}}
+    build: {context: ., args: {BT_BUILD_TAGS: identitytest, BT_SOURCE_SHA: "${BT_SOURCE_SHA:?}"}}
+    environment:
+      BT_MODE: hosted
+      BT_IDENTITYTEST_HOSTED_ADAPTER: "1"
+      BT_SYNC_DIAGNOSTICS: "1"
+      BT_IDENTITYTEST_PPROF_ADDRESS: ":6060"
+      BT_TRUSTED_PROXY_CIDRS: 172.31.250.100/32
+      BT_SOCKET_PROCESS_LIMIT: "${BT_LOAD_SOCKET_LIMIT:-10000}"
+      BT_DB_RUNTIME_MAX_CONNS: "${BT_LOAD_RUNTIME_CONNS:-48}"   # measured: Task 16 pool sweep (README "Hosted profile")
+      BT_DB_MAINTENANCE_MAX_CONNS: "${BT_LOAD_MAINTENANCE_CONNS:-4}"
+      BT_DB_MCP_MAX_CONNS: "2"
+      BT_DB_SERVER_MAX_CONNECTIONS: "200"
+      BT_DB_RESERVED_CONNECTIONS: "10"
+      BT_ADMISSION_TOTAL: "${BT_LOAD_ADMISSION:-96}"
+      BT_ADMISSION_MCP_MAX: "2"
+      BT_ADMISSION_WAIT: "${BT_LOAD_ADMISSION_WAIT:-250ms}"   # the code default; 0 turns the queue off for an A/B
+      BT_APNS_WAKES_ENABLED: "true"
+      BT_LIVE_ACTIVITY_PUSH_ENABLED: "true"
+      BT_IDENTITYTEST_APNS_SINK: "1"
+      BT_IDENTITYTEST_APNS_SINK_LATENCY_MS: "${BT_LOAD_APNS_LATENCY_MS:-100}"   # Task 18 adds the variable
+      BT_APNS_TEAM_ID: LOADTEAM01
+      BT_APNS_KEY_ID: LOADKEY001
+      BT_APNS_BUNDLE_ID: com.example.babytracker.load
+      BT_APNS_KEY_FILE: /run/secrets/apns_key
+      BT_MCP_ENABLED: "true"
+      BT_MCP_DATABASE_URL_FILE: /run/secrets/runtime_database_url
+      BT_MCP_CURSOR_KEY_FILE: /run/mcp/cursor_key
+      BT_EXPORT_DATABASE_URL_FILE: /run/secrets/maintenance_database_url
+      BT_EXPORT_KEYS_FILE: /run/keyrings/export-keys.json
+      BT_EXPORT_KEY_ID: export.v1
+    secrets: [apns_key]
+    ports: ["127.0.0.1:${BT_LOAD_PPROF_PORT:-0}:6060"]
+    networks: {default: {}, load: {ipv4_address: 172.31.250.10}}
+  migrate:
+    build: {context: ., args: {BT_BUILD_TAGS: identitytest, BT_SOURCE_SHA: "${BT_SOURCE_SHA:?}"}}
+  loadgen:
+    image: ${BT_LOAD_PROJECT:-bt-load}-loadgen:identitytest
+    build: {context: ., dockerfile: deploy/load/Dockerfile}
+    profiles: [tools]
+    user: "${BT_LOAD_CONTAINER_USER:-65532:65532}"
+    ulimits: {nofile: {soft: 262144, hard: 262144}}
+    # The seeder's guard reads the stack's own names (cmd/baby-tracker-load
+    # loadConfig): the same values load-node.sh gives the app.
+    environment:
+      BT_MODE: hosted
+      BT_PUBLIC_ORIGIN: ${BT_PUBLIC_ORIGIN:?}
+      BT_SERVER_INSTANCE_ID: ${BT_SERVER_INSTANCE_ID:?}
+      BT_RECOVERY_EPOCH: ${BT_RECOVERY_EPOCH:?}
+      BT_APPLE_AUDIENCE: ${BT_APPLE_AUDIENCE:?}
+      BT_APNS_BUNDLE_ID: com.example.babytracker.load
+    volumes: ["${BT_LOAD_RUN:?}:/run/load"]
+    networks: {load: {ipv4_address: 172.31.250.100}}
+networks:
+  load:
+    ipam: {config: [{subnet: 172.31.250.0/24}]}
+secrets:
+  apns_key: {file: "${BT_SECRETS_DIR:?}/apns_key.p8"}

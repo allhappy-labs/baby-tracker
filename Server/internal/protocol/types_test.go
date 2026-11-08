@@ -139,6 +139,7 @@ func TestOpenAPIAdvertisesPersistentFamilyLimitRanges(t *testing.T) {
 	for name, want := range map[string]struct{ minimum, maximum int }{
 		"max_canonical_records_per_family":     {100, 1000000},
 		"max_charged_storage_bytes_per_family": {16 << 20, 4 << 30},
+		"socket_process_limit":                 {10, protocol.MaxSocketProcessLimit},
 	} {
 		property := asMap(t, properties[name], "EffectiveSyncLimits.properties."+name)
 		if property["type"] != "integer" || property["minimum"] != want.minimum || property["maximum"] != want.maximum {

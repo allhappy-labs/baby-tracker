@@ -24,13 +24,13 @@ import (
 func TestSchemaIsVersionThirtyOne(t *testing.T) {
 	f := testpg.New(t)
 	var v int64
-	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 32 {
+	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 37 {
 		t.Fatalf("version=%d err=%v", v, err)
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 37); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.VerifyMaintenanceRole(t.Context(), f.Runtime, f.Maintenance, 32); err != nil {
+	if err := database.VerifyMaintenanceRole(t.Context(), f.Runtime, f.Maintenance, 37); err != nil {
 		t.Fatal(err)
 	}
 	var gone bool
@@ -106,21 +106,22 @@ func TestMaintenanceGrantsAreExact(t *testing.T) {
 			t.Fatalf("%s %s columns %q (%v), want %q", c.table, c.privilege, columns, err, c.want)
 		}
 	}
-	// The maintenance group executes exactly its five definers, and no other
+	// The maintenance group executes exactly its six definers (000035 added the
+	// audit retention drop), and no other
 	// principal (PUBLIC included) executes any of them.
 	maintenanceFunctions := []string{
-		"app.ensure_audit_partitions(timestamp with time zone)", "app.forget_push_token(uuid,bytea)", "app.prune_push_tokens(integer)",
+		"app.drop_expired_audit_partition(timestamp with time zone)", "app.ensure_audit_partitions(timestamp with time zone)", "app.forget_push_token(uuid,bytea)", "app.prune_push_tokens(integer)",
 		"app.purge_family_step(uuid,integer)", "app.push_targets(uuid[],uuid[])",
 	}
-	// Beside them it executes only the nine Live Activity worker definers
-	// (000032, live_activity_schema_test.go).
+	// Beside them it executes only the ten Live Activity worker definers
+	// (000032 and the work sweep's page, 000037; live_activity_schema_test.go).
 	assertExactAppExecutables(t, f, "baby_tracker_maintenance", append(append([]string(nil), maintenanceFunctions...), liveActivityWorkerFunctions...))
 	for _, signature := range maintenanceFunctions {
 		assertPublicCannotExecute(t, f, signature)
 		assertFunctionPrivilege(t, f.Runtime, signature, false)
 	}
-	// The five definers pin search_path; the partition roller also pins UTC
-	// and bounds its own lock waits.
+	// The six definers pin search_path; the partition roller and the retention
+	// drop also pin UTC and bound their own lock waits.
 	rows, err := f.Owner.Query(t.Context(), `SELECT p.oid::regprocedure::text, p.prosecdef, coalesce(array_to_string(p.proconfig, ','), '')
 		FROM pg_proc p WHERE p.oid = ANY($1::regprocedure[]) ORDER BY 1`, maintenanceFunctions)
 	if err != nil {
@@ -139,6 +140,7 @@ func TestMaintenanceGrantsAreExact(t *testing.T) {
 		t.Fatal(err)
 	}
 	want := []definer{
+		{"app.drop_expired_audit_partition(timestamp with time zone)", true, "search_path=pg_catalog,TimeZone=UTC,lock_timeout=1s"},
 		{"app.ensure_audit_partitions(timestamp with time zone)", true, "search_path=pg_catalog,TimeZone=UTC,lock_timeout=1s"},
 		{"app.forget_push_token(uuid,bytea)", true, "search_path=pg_catalog"},
 		{"app.prune_push_tokens(integer)", true, "search_path=pg_catalog"},
@@ -633,10 +635,10 @@ func TestAuditPartitionsAreMonthlyFromTwentyTwentySeven(t *testing.T) {
 		    OR c.relacl IS NOT NULL)`).Scan(&bad); err != nil || bad != 0 {
 		t.Fatalf("%d monthly partitions with a wrong range, owner, options or grant (%v)", bad, err)
 	}
-	if err := database.VerifyMaintenanceRole(t.Context(), f.Runtime, f.Maintenance, 32); err != nil {
+	if err := database.VerifyMaintenanceRole(t.Context(), f.Runtime, f.Maintenance, 37); err != nil {
 		t.Fatalf("rolled partitions broke the maintenance audit: %v", err)
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 37); err != nil {
 		t.Fatalf("rolled partitions broke the runtime audit: %v", err)
 	}
 }

@@ -34,6 +34,50 @@ cross.write_text('capacity-matrix cell: '+json.dumps(first)+'\ncapacity-matrix c
 unknown_rows=pc.aggregate(cross,root/'unidentified.json','swift_matrix',{})
 assert all(r['completion']=='global_artifact_failure' and r['durable_peer'] is None and r['successful_qps'] is None for r in unknown_rows)
 print('N1 proof: cross-cell malformed duplicate attributed correctly; unidentified input fails globally')
+# V1: a matrix whose cells measured nothing is not a passing run. Each cell is
+# judged coherent only when it measured every requested axis value with exact
+# accounting; the CLI exits non-zero unless all 27 are.
+def measured(cell,request=.01):
+ o=cell-1;families=[1,32,128][o%9//3];events=[248,512,2048][o//9]
+ return dict(cell=cell,families=families,actual_families=families,concurrency=[1,16,64][o%3],requested_events=events,actual_events=events+3,
+  completion='measurement_complete',failure_stage='measurement',failure_code='none',elapsed_seconds=60,measurement_seconds=30,
+  pairs=[dict(operation=5,durable_seconds=.1,observable_seconds=.2)],request_seconds=[request]*4,
+  attempted=dict(empty_pull=2,caught_up_read=2,save_apply=1),successful=dict(empty_pull=2,caught_up_read=2,save_apply=1),errors=0,rate_limits=0,timeouts=0)
+def matrix(rows,name):
+ log=root/(name+'.log');log.write_text(''.join('capacity-matrix cell: '+json.dumps(r)+'\n' for r in rows))
+ out=root/(name+'-cells');out.mkdir()
+ code=subprocess.run([sys.executable,pc.__file__,'aggregate',str(log),str(out/'cells.json'),'complete',str(root/'absent-build.json'),str(root/'absent-evidence.jsonl'),str(root/'absent-checkpoints')]).returncode
+ return code,json.loads((out/'cells.json').read_text()),json.loads((out/'matrix-verdict.json').read_text())
+code,cells,verdict=matrix([measured(c) for c in range(1,28)],'coherent')
+assert code==0 and verdict['coherent_cells']==27 and verdict['passed'] is True, verdict
+assert all(c['coherent'] is True and c['incoherence']==[] for c in cells)
+assert all(r['within_20_percent'] is True for r in verdict['events_axis'] if r['distribution']=='request'), verdict['events_axis']
+assert len([r for r in verdict['events_axis'] if r['distribution']=='request'])==9
+# The 2026-10-25 run: three paced setup stops and 24 sign-in 429s, nothing measured.
+paced=[dict(cell=c,families=1,actual_families=1,concurrency=[1,16,64][c-1],requested_events=248,actual_events=2*c,completion='paced_setup_budget_insufficient',failure_stage='authority_aging',failure_code='none',elapsed_seconds=.6,measurement_seconds=0,pairs=[],request_seconds=[],attempted=dict(empty_pull=0,caught_up_read=0,save_apply=0),successful=dict(empty_pull=0,caught_up_read=0,save_apply=0),errors=0,rate_limits=0,timeouts=0) for c in range(1,4)]
+refused=[]
+for c in range(4,28):
+ r=measured(c);r.update(actual_families=0,completion='setup_or_measurement_refused',failure_stage='owner_sign_in',failure_code='rate_limit',measurement_seconds=0,pairs=[],request_seconds=[],rate_limits=1,attempted=dict(empty_pull=0,caught_up_read=0,save_apply=0),successful=dict(empty_pull=0,caught_up_read=0,save_apply=0));refused.append(r)
+code,cells,verdict=matrix(paced+refused,'unmeasured')
+assert code!=0 and verdict['coherent_cells']==0 and verdict['passed'] is False, (code,verdict)
+assert all(c['coherent'] is False and c['incoherence'] for c in cells)
+assert 'not_measured' in cells[0]['incoherence'] and 'rate_limited' in cells[3]['incoherence']
+for name,mutate,reason in [
+ ('short_history',lambda r:r.update(actual_events=100),'events_below_requested'),
+ ('missing_family',lambda r:r.update(actual_families=0),'families_below_requested'),
+ ('unaccounted',lambda r:r['attempted'].update(empty_pull=3),'accounting_mismatch'),
+ ('lost_pair',lambda r:r.update(pairs=[]),'accounting_mismatch'),
+ ('refusal',lambda r:r.update(rate_limits=1),'rate_limited'),
+ ('error',lambda r:r.update(errors=1),'errors_or_timeouts'),
+]:
+ rows=[measured(c) for c in range(1,28)];mutate(rows[4])
+ code,cells,verdict=matrix(rows,'mutated-'+name)
+ assert code!=0 and verdict['coherent_cells']==26 and reason in cells[4]['incoherence'], (name,cells[4]['incoherence'])
+# Latency growth with history is reported per equal families/concurrency pair.
+rows=[measured(c,request=.05 if c>18 else .01) for c in range(1,28)]
+code,cells,verdict=matrix(rows,'growth')
+assert code==0 and not any(r['within_20_percent'] for r in verdict['events_axis'] if r['distribution']=='request')
+print('V1 proof: an unmeasured matrix fails; coherence needs full families, history and exact accounting; events-axis p95 growth is reported')
 # Exercise the runtime metric merger, including real-valued zero deltas.
 samples=root/'metric-window';samples.mkdir()
 (samples/'resource-samples.jsonl').write_text('\n'.join(json.dumps(dict(time=t,sample_finished=t+.1,resources=dict(db_connections=14,network_counter_bytes=n,filesystem_counter_bytes=n*2))) for t,n in [(10,100),(11,125)]))
@@ -100,6 +144,27 @@ row['actual_events']=0
 (root/'checkpoint-1.json').write_text(json.dumps(row))
 assert pc.aggregate(log,root/'unknown-head.json','swift_matrix',{},evidence,root)[0]['actual_events'] is None
 
+# M1: the resource sampler stops at its deadline, not after a fixed count.
+sampler_bin=root/'sampler-bin';sampler_bin.mkdir();stub=sampler_bin/'docker';stub.write_text('#!/bin/sh\nexit 1\n');stub.chmod(0o700)
+sampler_env=dict(os.environ,PATH=str(sampler_bin)+os.pathsep+os.environ['PATH'])
+past=root/'sampler-past.jsonl'
+subprocess.run([sys.executable,pc.__file__,'sample-loop','app','db',str(past),str(time.time()-1)],env=sampler_env,timeout=10,check=True)
+assert not past.exists(), 'sampler ran after its deadline'
+bounded=root/'sampler-bounded.jsonl';began=time.monotonic()
+subprocess.run([sys.executable,pc.__file__,'sample-loop','app','db',str(bounded),str(time.time()+2.5)],env=sampler_env,timeout=10,check=True)
+spent=time.monotonic()-began
+assert spent<6 and 1<=len(bounded.read_text().splitlines())<=4, ('sampler not bounded by time',spent,len(bounded.read_text().splitlines()))
+# M2: an image that was never built is not a cleanup failure.
+absent=root/'absent-image';absent.mkdir();stub=absent/'docker';stub.write_text('#!/bin/sh\ncase "$1 $2" in "image inspect") exit 1 ;; "image rm") exit 9 ;; esac\nexit 0\n');stub.chmod(0o700)
+absent_secrets=root/'baby-tracker-protocol.absent';absent_secrets.mkdir();(absent_secrets/'compose.env').write_text('')
+absent_config=root/'absent-cleanup.json';absent_config.write_text(json.dumps(dict(project='baby-tracker-protocol-absent',secrets=str(absent_secrets),override=str(absent_secrets/'override'),image='baby-tracker-protocol-absent:identitytest',source=str(root))))
+absent_out=root/'absent-out';absent_out.mkdir()
+saved_path=os.environ['PATH'];os.environ['PATH']=str(absent)+os.pathsep+saved_path
+try: assert pc.cleanup_worker(absent_config,absent_out,20)==0, 'cleanup failed on an image that was never built'
+finally: os.environ['PATH']=saved_path
+assert json.loads((absent_out/'cleanup.json').read_text())['secrets_removed'] is True and not absent_secrets.exists()
+print('M1/M2 proof: sampler bounded by its deadline; absent image skipped by cleanup')
+
 started=time.monotonic()
 try:pc.command([sys.executable,'-c','import time;time.sleep(60)'],.05)
 except pc.CommandFailure as e:assert e.code=='command_timeout'
@@ -128,7 +193,7 @@ for variant in ['missing_configuration','expired_deadline']:
     env=dict(base)
     if variant=='expired_deadline':
         cert=root/'cert'; cert.write_text('')
-        env.update(BABY_TRACKER_MATRIX_PRIVATE=str(root),BABY_TRACKER_E2E_BASE='https://localhost:9',BABY_TRACKER_E2E_INSTANCE='70000000-0000-4000-8000-000000000001',BABY_TRACKER_E2E_CERT=str(cert),BABY_TRACKER_MATRIX_DEADLINE='0')
+        env.update(BABY_TRACKER_MATRIX_PRIVATE=str(root),BABY_TRACKER_E2E_BASE='https://localhost:9',BABY_TRACKER_E2E_INSTANCE='70000000-0000-4000-8000-000000000001',BABY_TRACKER_E2E_CERT=str(cert),BABY_TRACKER_MATRIX_DEADLINE='0',BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS='0.006',BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS='0.06')
     result=subprocess.run(command,env=env,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,text=True,timeout=60)
     if variant=='missing_configuration':
         assert result.returncode!=0
@@ -145,7 +210,7 @@ fi
 # Resolve the real compose template only inside an owned synthetic project.
 # Config evaluation starts no containers and reads no user dotenv/key files.
 config_root="$root/config"
-mkdir -p "$config_root/Server" "$config_root/owned/keyrings"
+mkdir -p "$config_root/Server" "$config_root/owned/keyrings" "$config_root/owned/mcp"
 cp Server/compose.yaml "$config_root/Server/compose.yaml"
 printf 'services: {}\n' > "$config_root/owned/override.yaml"
 : > "$config_root/owned/compose.env"
@@ -172,7 +237,7 @@ for dotenv in default inherited; do
     for name in $(compgen -v BT_); do unset "$name"; done
     unset COMPOSE_ENV_FILES COMPOSE_DISABLE_ENV_FILE
     export BT_DISPOSABLE_PERFORMANCE=1
-    export BT_SECRETS_DIR="$config_root/owned" BT_KEYRING_DIR="$config_root/owned/keyrings"
+    export BT_SECRETS_DIR="$config_root/owned" BT_KEYRING_DIR="$config_root/owned/keyrings" BT_MCP_SECRETS_DIR="$config_root/owned/mcp"
     export BT_SERVER_INSTANCE_ID=70000000-0000-4000-8000-000000000001 BT_APPLE_AUDIENCE=synthetic.config.only
     [[ $dotenv != inherited ]] || export COMPOSE_ENV_FILES="$config_root/inherited.env"
     project=baby-sync-perf-config-only
@@ -256,6 +321,72 @@ for invalid in case mode scope; do
   [[ ! -e "$root/invalid-$invalid" ]] || { echo "invalid case created output" >&2; exit 1; }
 done
 echo "foreground validator proof: exact full/scoped markers; missing proof, count, ordinal, p95 and mode/case failures rejected"
+# The runner's matrix report fails a matrix that measured nothing (the
+# 2026-10-25 run reported status 0 with zero measured cells).
+unmeasured="$root/unmeasured-output"
+mkdir -p "$unmeasured/cell-evidence"
+for cell in $(seq 1 27); do
+  printf 'capacity-matrix cell: {"cell":%d,"families":%d,"concurrency":%d,"requested_events":%d,"actual_events":2,"completion":"setup_or_measurement_refused","elapsed_seconds":0.3,"measurement_seconds":0,"pairs":[],"request_seconds":[],"rate_limits":1,"errors":0,"timeouts":0}\n' \
+    "$cell" "$(( (cell - 1) % 9 / 3 == 0 ? 1 : ((cell - 1) % 9 / 3 == 1 ? 32 : 128) ))" "$(( (cell - 1) % 3 == 0 ? 1 : ((cell - 1) % 3 == 1 ? 16 : 64) ))" "$(( (cell - 1) / 9 == 0 ? 248 : ((cell - 1) / 9 == 1 ? 512 : 2048) ))"
+done > "$unmeasured/matrix.log"
+if report_matrix "$unmeasured" complete > "$root/unmeasured-report.log" 2>&1; then
+  echo "runner reported an unmeasured matrix as a success" >&2; exit 1
+fi
+jq -e '.passed == false and .coherent_cells == 0' "$unmeasured/matrix-verdict.json" >/dev/null || { echo "unmeasured matrix verdict missing" >&2; exit 1; }
+echo "matrix report proof: an unmeasured matrix fails the runner"
+# The matrix's quotas reach the disposable app's environment, and only its.
+printf '%s\n' 'services:' '  db:' '    ports: ["127.0.0.1:0:5432"]' '  app:' '    volumes:' '      - /owned/recovery_database_url:/run/secrets/recovery_database_url:ro' '    environment:' '      BT_IDENTITYTEST_HOSTED_ADAPTER: "0"' '  migrate:' '    build: {}' > "$root/matrix-override.yaml"
+apply_matrix_quotas "$root/matrix-override.yaml"
+python3 - "$root/matrix-override.yaml" "$(matrix_quota_overrides)" <<'MATRIX_QUOTAS'
+import re,sys
+# No YAML library: split the override's services by their two-space keys.
+services={};current=None
+for line in open(sys.argv[1]).read().splitlines():
+    match=re.fullmatch(r'  ([a-z]+):',line)
+    if match: current=match[1]; services[current]=[]
+    elif current: services[current].append(line)
+wanted=dict(line.split('=',1) for line in sys.argv[2].splitlines())
+app=services['app']
+assert '    environment:' in app, app
+env=dict(re.fullmatch(r'      ([A-Z_]+): "(.*)"',line).groups() for line in app[app.index('    environment:')+1:])
+assert len(wanted)>=10 and all(env.get(k)==v for k,v in wanted.items()), env
+assert env['BT_IDENTITYTEST_HOSTED_ADAPTER']=='0'
+assert not any('BT_RATE_LIMIT' in line for name in ['db','migrate'] for line in services[name])
+MATRIX_QUOTAS
+echo "matrix quota proof: the stated quotas reach the disposable app only"
+# Task 7: the runner reads the PostgreSQL authority, not the retired
+# projection head, the retired cleanup-worker marker or its retired receipts.
+# security_audit_events is listed too: with routine refresh writing no audit row
+# (decision D1c) it no longer grows per rotation, so it cannot be the head.
+retired_status=0
+retired=$(grep -n 'security_projection_head\|identitytest recovery cleanup completed\|cleanup_refresh_recovery_receipts\|security_audit_events' "$runner") || retired_status=$?
+[[ $retired_status -le 1 ]] || { echo "retired-name guard could not read $runner (grep exit $retired_status)" >&2; exit 1; }
+[[ -z $retired ]] || { echo "runner still names a retired authority object: $retired" >&2; exit 1; }
+# Both head readers (the matrix reader and the artifact) count consumed sessions.
+[[ $(grep -c "FROM sessions WHERE status = 'consumed'" "$runner") == 2 ]] || { echo "runner head is not the consumed-session count" >&2; exit 1; }
+# The matrix needs about 55 minutes for 27 cells; the other modes keep 20.
+# A relative --output stops the runner after argument validation and before
+# it creates anything, so only the budget check decides these.
+for budget in matrix_3600_accepted matrix_3601_refused matrix_59_refused socket_3600_refused foreground_3600_refused socket_1200_accepted; do
+  case $budget in
+    matrix_3600_accepted) arguments=(--mode matrix --total-seconds 3600); want=accepted ;;
+    matrix_3601_refused) arguments=(--mode matrix --total-seconds 3601); want=refused ;;
+    matrix_59_refused) arguments=(--mode matrix --total-seconds 59); want=refused ;;
+    socket_3600_refused) arguments=(--mode socket --total-seconds 3600); want=refused ;;
+    foreground_3600_refused) arguments=(--mode foreground --total-seconds 3600); want=refused ;;
+    socket_1200_accepted) arguments=(--mode socket --total-seconds 1200); want=accepted ;;
+  esac
+  if BT_SYNC_PERF_PROBE=1 bash "$runner" --output relative-budget-check "${arguments[@]}" > "$root/$budget.log" 2>&1; then
+    echo "budget case $budget got past output validation" >&2; exit 1
+  fi
+  if [[ $want == refused ]]; then
+    grep -qx 'invalid time budget' "$root/$budget.log" || { echo "budget case $budget was not refused" >&2; exit 1; }
+  else
+    ! grep -qx 'invalid time budget' "$root/$budget.log" || { echo "budget case $budget was refused" >&2; exit 1; }
+    grep -q 'fresh absolute output required' "$root/$budget.log" || { echo "budget case $budget did not reach output validation" >&2; exit 1; }
+  fi
+done
+echo "performance budget proof: matrix accepts 60-3600 s, other modes 60-1200 s; no retired authority object in the runner"
 python3 - "$runner" "$root" <<'SUPERVISOR_TEST'
 import os,pathlib,signal,subprocess,sys,time,json
 runner=str(pathlib.Path(sys.argv[1]).resolve()); root=pathlib.Path(sys.argv[2])
@@ -339,12 +470,13 @@ for fault in start_failure interrupt timeout; do
   if BT_SYNC_PERF_PROBE=1 BT_SYNC_PERF_TEST_FAULT="$fault" bash "$runner" --output "$output" --duration 30 --total-seconds 600 >"$root/$fault.log" 2>&1; then
     echo "failure injection succeeded: $fault" >&2; exit 1
   fi
+  fault_failed() { echo "fault $fault: $1 failed" >&2; cat "$output/status.json" "$output/cleanup.json" >&2 || true; exit 1; }
   case $fault in
-    interrupt) jq -e '.status == 130' "$output/status.json" >/dev/null ;;
-    timeout) jq -e '.status == 124' "$output/status.json" >/dev/null ;;
-    start_failure) jq -e '.status != 0 and .phase == "app_start"' "$output/status.json" >/dev/null ;;
+    interrupt) jq -e '.status == 130' "$output/status.json" >/dev/null || fault_failed status ;;
+    timeout) jq -e '.status == 124' "$output/status.json" >/dev/null || fault_failed status ;;
+    start_failure) jq -e '.status != 0 and .phase == "app_start"' "$output/status.json" >/dev/null || fault_failed status ;;
   esac
-  jq -e '.containers == 0 and .volumes == 0 and .secrets_removed == true' "$output/cleanup.json" >/dev/null
+  jq -e '.containers == 0 and .volumes == 0 and .secrets_removed == true' "$output/cleanup.json" >/dev/null || fault_failed cleanup
   [[ ! -s "$output/measurements.jsonl" ]] || { echo "failure emitted measurements" >&2; exit 1; }
   if rg -i 'postgres://|Bearer |identity_token|access_token|refresh_token|device_credential|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}' "$output"; then
     echo "unsafe retained artifact" >&2; exit 1

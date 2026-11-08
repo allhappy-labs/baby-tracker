@@ -27,138 +27,110 @@ struct InviteSheet<Model: FamilySyncSettingsModel>: View {
         _invitation = State(initialValue: invitation)
     }
 
+    /// Presented full height from the Caregivers screen.
     var body: some View {
-        NavigationStack {
-            Group {
-                if let invitation {
+        Group {
+            if let invitation {
+                SheetScaffold(
+                    PendingInvitationCopy.title(for: invitation.role),
+                    closeTitle: InviteSheetCopy.done,
+                    closeIdentifier: "invite.done",
+                    onClose: { dismiss() },
+                    destructive: SheetAction(InviteSheetCopy.revoke, identifier: "invite.revoke") { revoke(invitation) }
+                ) {
                     resultStep(invitation)
-                } else {
+                }
+            } else {
+                SheetScaffold(
+                    InviteSheetCopy.title,
+                    closeTitle: InviteSheetCopy.cancel,
+                    closeIdentifier: "invite.cancel",
+                    onClose: { dismiss() },
+                    primary: SheetAction(InviteSheetCopy.create, identifier: "invite.create", action: create)
+                ) {
                     roleStep
                 }
             }
-            .navigationTitle(invitation.map { PendingInvitationCopy.title(for: $0.role) } ?? InviteSheetCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                if invitation == nil {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(InviteSheetCopy.cancel) { dismiss() }
-                            .accessibilityIdentifier("invite.cancel")
-                    }
-                } else {
-                    ToolbarItem(placement: .confirmationAction) {
-                        Button(InviteSheetCopy.done) { dismiss() }
-                            .accessibilityIdentifier("invite.done")
-                    }
-                }
-            }
-            .disabled(isWorking)
         }
+        .tint(Palette.feed)
+        .disabled(isWorking)
     }
 
     // MARK: Step 1 — the role
 
-    private var roleStep: some View {
-        Form {
-            Section {
-                Picker(InviteSheetCopy.roleLabel, selection: $role) {
-                    Text(FamilyRole.caregiver.displayName).tag(FamilyRole.caregiver)
-                    Text(FamilyRole.viewer.displayName).tag(FamilyRole.viewer)
-                }
-                .pickerStyle(.segmented)
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("invite.role")
-            } header: {
-                Text(InviteSheetCopy.roleLabel)
-            } footer: {
-                RoleExplanations()
+    @ViewBuilder private var roleStep: some View {
+        CardSection(InviteSheetCopy.roleLabel) {
+            Picker(InviteSheetCopy.roleLabel, selection: $role) {
+                Text(FamilyRole.caregiver.displayName).tag(FamilyRole.caregiver)
+                Text(FamilyRole.viewer.displayName).tag(FamilyRole.viewer)
             }
+            .pickerStyle(.segmented)
+            .frame(minHeight: 44)
+            .accessibilityIdentifier("invite.role")
+        } footer: {
+            RoleExplanations()
+        }
 
-            Section {
-                Button {
-                    create()
-                } label: {
-                    Text(InviteSheetCopy.create).frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.borderedProminent)
-                .accessibilityIdentifier("invite.create")
+        Text(FamilyCopy.inviteFooter)
+            .textRole(.caption)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(.horizontal, Spacing.l)
 
-                if let problem {
-                    Text(problem)
-                        .foregroundStyle(Palette.destructive)
-                        .accessibilityIdentifier("invite.problem")
-                }
-            } footer: {
-                Text(FamilyCopy.inviteFooter)
-            }
+        if let problem {
+            InlineError(problem)
+                .accessibilityIdentifier("invite.problem")
         }
     }
 
     // MARK: Step 2 — the invitation
 
-    private func resultStep(_ invitation: FamilyInvitation) -> some View {
+    @ViewBuilder private func resultStep(_ invitation: FamilyInvitation) -> some View {
         let code = Self.code(of: invitation)
-        return ScrollView {
-            VStack(spacing: 20) {
-                if let payload = try? InvitationQRCode.payload(for: invitation) {
-                    InvitationQRImage(payload: payload)
-                }
+        if let payload = try? InvitationQRCode.payload(for: invitation) {
+            InvitationQRImage(payload: payload)
+        }
 
-                Text(InviteSheetCopy.scanHint)
-                    .font(.footnote)
-                    .foregroundStyle(Palette.secondaryText)
-                    .multilineTextAlignment(.center)
+        Text(InviteSheetCopy.scanHint)
+            .textRole(.caption)
+            .multilineTextAlignment(.center)
 
-                Text(code)
-                    .font(.body.monospaced())
-                    .multilineTextAlignment(.center)
-                    .textSelection(.enabled)
-                    .accessibilityLabel(InviteSheetCopy.codeLabel)
-                    .accessibilityValue(code)
-                    .accessibilityIdentifier("invite.code")
+        Text(code)
+            .font(.body.monospaced())
+            .foregroundStyle(Palette.primaryText)
+            .multilineTextAlignment(.center)
+            .textSelection(.enabled)
+            .accessibilityLabel(InviteSheetCopy.codeLabel)
+            .accessibilityValue(code)
+            .accessibilityIdentifier("invite.code")
 
-                VStack(spacing: 12) {
-                    Button {
-                        #if canImport(UIKit)
-                        UIPasteboard.general.string = code
-                        #endif
-                        copied = true
-                    } label: {
-                        Text(copied ? InviteSheetCopy.copied : InviteSheetCopy.copy)
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("invite.copy")
-
-                    ShareLink(item: InviteSheetCopy.shareMessage(link: invitation.shareURL, code: code)) {
-                        Label(InviteSheetCopy.share, systemImage: "square.and.arrow.up")
-                            .frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("invite.share")
-                }
-
-                Text(InviteSheetCopy.expires(invitation.expiresAt))
-                    .font(.footnote)
-                    .foregroundStyle(Palette.secondaryText)
-                    .accessibilityIdentifier("invite.expires")
-
-                if let problem {
-                    Text(problem)
-                        .foregroundStyle(Palette.destructive)
-                        .accessibilityIdentifier("invite.problem")
-                }
-
-                Button(role: .destructive) {
-                    revoke(invitation)
-                } label: {
-                    Text(InviteSheetCopy.revoke).frame(maxWidth: .infinity, minHeight: 44)
-                }
-                .buttonStyle(.bordered)
-                .accessibilityIdentifier("invite.revoke")
+        VStack(spacing: Spacing.s) {
+            Button {
+                #if canImport(UIKit)
+                UIPasteboard.general.string = code
+                #endif
+                copied = true
+            } label: {
+                Text(copied ? InviteSheetCopy.copied : InviteSheetCopy.copy)
+                    .fixedSize(horizontal: false, vertical: true)
             }
-            .padding()
+            .buttonStyle(.secondary)
+            .accessibilityIdentifier("invite.copy")
+
+            ShareLink(item: InviteSheetCopy.shareMessage(link: invitation.shareURL, code: code)) {
+                Label(InviteSheetCopy.share, systemImage: "square.and.arrow.up")
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            .buttonStyle(.primary)
+            .accessibilityIdentifier("invite.share")
+        }
+
+        Text(InviteSheetCopy.expires(invitation.expiresAt))
+            .textRole(.caption)
+            .accessibilityIdentifier("invite.expires")
+
+        if let problem {
+            InlineError(problem)
+                .accessibilityIdentifier("invite.problem")
         }
     }
 
@@ -212,14 +184,14 @@ private struct InvitationQRImage: View {
                     .resizable()
                     .interpolation(.none)
             } else {
-                Color.white
+                Palette.qrGround
             }
         }
         .aspectRatio(1, contentMode: .fit)
         // The quiet zone a camera needs, and a light ground on this app's
         // dark one.
-        .padding(14)
-        .background(Color.white, in: RoundedRectangle(cornerRadius: 16))
+        .padding(Spacing.l)
+        .background(Palette.qrGround, in: RoundedRectangle(cornerRadius: Radius.control, style: .continuous))
         .frame(maxWidth: 280)
         .accessibilityElement()
         .accessibilityLabel(InviteSheetCopy.qrLabel)
@@ -235,7 +207,7 @@ private struct InvitationQRImage: View {
 /// What each role may do, one line each, wherever a role is chosen.
 struct RoleExplanations: View {
     var body: some View {
-        VStack(alignment: .leading, spacing: 4) {
+        VStack(alignment: .leading, spacing: Spacing.xs) {
             Text(InviteSheetCopy.caregiverExplanation)
             Text(InviteSheetCopy.viewerExplanation)
         }

@@ -1,4 +1,5 @@
 import BabyStore
+import BabyCore
 import Foundation
 
 /// Bounded catch-up for the places that are not the foreground app.
@@ -11,7 +12,7 @@ import Foundation
 public final class BackgroundSync {
     /// The production background-refresh identifier. One, declared here so it
     /// cannot drift from the Info.plist entry that permits it.
-    public static let refreshTaskIdentifier = "com.olhapi.babytracker.sync.refresh"
+    public static let refreshTaskIdentifier = AppIdentity.identifier("sync.refresh")
 
     public private(set) var attempts = 0
 

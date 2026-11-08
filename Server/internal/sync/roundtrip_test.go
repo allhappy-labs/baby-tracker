@@ -18,9 +18,12 @@ var errWarmUp = errors.New("warm-up: roll back")
 
 // TestSyncRequestRoundTrips pins each request shape's round trips, the
 // guard (BEGIN and the authority read) and COMMIT included: a mutation
-// batch whose pull fits one page is 4 at any size, a pull-only page 3, a
-// first snapshot page with more 4, a continuation with more 4 and the last
-// continuation 3.
+// batch whose pull fits one page is 4 at any size and 5 when its pull has
+// more, a first snapshot page with more 4, a snapshot continuation with
+// more 4. A pull page is read with the COMMIT: 2 round trips, first page
+// or last continuation; a pull page with more stores its binding in a
+// second transaction (BEGIN with the authority read, then the binding with
+// the COMMIT): 4, replayed or not.
 func TestSyncRequestRoundTrips(t *testing.T) {
 	h := testkit.New(t)
 	pool, wire := testkit.CountedPool(t, h.Runtime)
@@ -43,9 +46,11 @@ func TestSyncRequestRoundTrips(t *testing.T) {
 		}
 		return wire.Trips()
 	}
+	// exchange runs the service's own exchange (ServeSync's: a pull goes
+	// with the COMMIT and is settled after it).
 	exchange := func(request protocol.SyncRequest, check func(familysync.Exchanged)) func(pgx.Tx, access.Grant) error {
 		return func(tx pgx.Tx, g access.Grant) error {
-			out, err := service.Exchange(t.Context(), tx, h.Owner, g, request)
+			out, err := familysync.ExchangeAtCommit(t.Context(), service, tx, h.Owner, g, request)
 			if err != nil || out.Fatal != nil {
 				return fmt.Errorf("exchange: %v %v", err, out.Fatal)
 			}
@@ -54,6 +59,22 @@ func TestSyncRequestRoundTrips(t *testing.T) {
 			}
 			return nil
 		}
+	}
+	// committed runs one request in a request transaction and settles it,
+	// counting the round trips of both. A pull's statements are sent only
+	// by a commit, so a committed request warms them (a rolled-back
+	// warm-up sends none).
+	committed := func(label string, request protocol.SyncRequest) (int, familysync.Exchanged) {
+		t.Helper()
+		var out familysync.Exchanged
+		wire.Reset()
+		if err := guard.WithFamilyTx(t.Context(), h.Owner, "read", exchange(request, func(o familysync.Exchanged) { out = o })); err != nil {
+			t.Fatalf("%s: %v", label, err)
+		}
+		if err := familysync.Settle(t.Context(), service, h.Owner, &out); err != nil {
+			t.Fatalf("%s: settle: %v", label, err)
+		}
+		return wire.Trips(), out
 	}
 	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
 	request := func(mutations []protocol.Mutation) protocol.SyncRequest {
@@ -74,8 +95,12 @@ func TestSyncRequestRoundTrips(t *testing.T) {
 			t.Fatalf("batch of %d with a one-page pull: %d round trips, want 4: %q", size, got, wire.Statements())
 		}
 	}
-	if got := measure("pull-only", exchange(h.SyncRequest(h.Cursor(0), nil), nil)); got != 3 {
-		t.Fatalf("pull-only: %d round trips, want 3: %q", got, wire.Statements())
+	// A pull: BEGIN with the authority read, then the read-only check, the
+	// pull and the COMMIT.
+	committed("warm-up pull", h.SyncRequest(h.Cursor(0), nil))
+	if got, out := committed("pull-only", h.SyncRequest(h.Cursor(0), nil)); got != 2 || len(out.Response.EncodedChanges) == 0 ||
+		out.Response.NextPageToken != nil || !endsWith(wire.Statements(), "SELECT 1 / (pg_catalog.pg_current_xact_id_if_assigned()", "WITH hw AS", "commit") {
+		t.Fatalf("pull-only: %d round trips, %d changes, want 2 ending check, pull, commit: %q", got, len(out.Response.EncodedChanges), wire.Statements())
 	}
 
 	// Pages of 2 over the family's rows.
@@ -117,26 +142,84 @@ func TestSyncRequestRoundTrips(t *testing.T) {
 		t.Fatalf("snapshot continuation with more: %d round trips, want 4: %q", got, wire.Statements())
 	}
 
-	var pull familysync.Exchanged
-	if got := measure("first pull page", exchange(h.SyncRequest(h.Cursor(0), nil), func(out familysync.Exchanged) { pull = out })); got != 4 ||
-		pull.Response.NextPageToken == nil {
-		t.Fatalf("first pull page with more: %d round trips, want 4: %q", got, wire.Statements())
+	// A pull page is read with the COMMIT and writes nothing in that
+	// transaction; a page with more stores its binding in a second one,
+	// authorized again, with that COMMIT: 4 round trips, and 2 for a page
+	// without more.
+	if _, warm := committed("warm-up first page", h.SyncRequest(h.Cursor(0), nil)); warm.Response.NextPageToken == nil {
+		t.Fatal("warm-up first page: no token")
+	} else if _, warm = committed("warm-up continuation", h.SyncRequest(nil, warm.Response.NextPageToken)); warm.Response.NextPageToken == nil {
+		t.Fatal("warm-up continuation: no token")
+	}
+	got, pull := committed("first pull page", h.SyncRequest(h.Cursor(0), nil))
+	if got != 4 || pull.Response.NextPageToken == nil || statementsWith(wire.Statements(), "BEGIN ISOLATION LEVEL") != 2 ||
+		!endsWith(wire.Statements(), "WITH hw AS", "commit", "BEGIN", "SELECT matches", "SELECT 1 / (pg_catalog.pg_current_xact_id_if_assigned()",
+			"INSERT INTO sync_page_bindings", "commit") {
+		t.Fatalf("first pull page with more: %d round trips (token %v), want 4 ending pull, commit, then the binding with a commit: %q", got,
+			pull.Response.NextPageToken, wire.Statements())
 	}
 	token := pull.Response.NextPageToken
-	for {
-		var next familysync.Exchanged
-		got := measure("pull continuation", exchange(h.SyncRequest(nil, token), func(out familysync.Exchanged) { next = out }))
+	for continued := 0; ; continued++ {
+		got, next := committed("pull continuation", h.SyncRequest(nil, token))
 		if next.Response.NextPageToken == nil {
-			if got != 3 {
-				t.Fatalf("last pull continuation: %d round trips, want 3: %q", got, wire.Statements())
+			if got != 2 || continued == 0 || statementsWith(wire.Statements(), "sync_page_bindings(") != 0 ||
+				!endsWith(wire.Statements(), "SELECT 1 / (pg_catalog.pg_current_xact_id_if_assigned()", "SELECT b.kind::text", "commit") {
+				t.Fatalf("last pull continuation (after %d with more): %d round trips, want 2 and no binding: %q", continued, got, wire.Statements())
 			}
 			break
 		}
-		if got != 4 {
-			t.Fatalf("pull continuation with more: %d round trips, want 4: %q", got, wire.Statements())
+		// The continuation's binding is read back after its INSERT, in the
+		// second commit's round trip: a replay must find the binding it
+		// stored.
+		if got != 4 || !endsWith(wire.Statements(), "INSERT INTO sync_page_bindings", "SELECT b.kind::text", "commit") {
+			t.Fatalf("pull continuation with more: %d round trips, want 4 ending binding, read-back, commit: %q", got, wire.Statements())
+		}
+		// Replayed (a lost response), it finds that binding, in the same 4.
+		got, replay := committed("replayed pull continuation", h.SyncRequest(nil, token))
+		if got != 4 || replay.Response.NextPageToken == nil || *replay.Response.NextPageToken != *next.Response.NextPageToken {
+			t.Fatalf("replayed pull continuation: %d round trips, token %v want %v: %q", got, replay.Response.NextPageToken,
+				*next.Response.NextPageToken, wire.Statements())
 		}
 		token = next.Response.NextPageToken
 	}
+
+	// A write stores its binding before the COMMIT (the commit must not
+	// precede a check that rolls the write back): a batch whose pull has
+	// more is 5 round trips.
+	baby := "10000000-0000-4000-8000-000000000990"
+	caretest.Seed(t, h, caretest.Baby(baby))
+	var write familysync.Exchanged
+	behind := h.SyncRequest(h.Cursor(0), nil)
+	behind.Mutations = caretest.MixedBatch(baby, 3)
+	got = measure("batch with more", exchange(behind, func(out familysync.Exchanged) { write = out }))
+	if got != 5 || write.Response.NextPageToken == nil || !endsWith(wire.Statements(), "INSERT INTO sync_page_bindings", "commit") {
+		t.Fatalf("batch with a pull with more: %d round trips (token %v), want 5: %q", got, write.Response.NextPageToken, wire.Statements())
+	}
+}
+
+// endsWith reports whether statements end with ones starting with prefixes,
+// in order.
+func endsWith(statements []string, prefixes ...string) bool {
+	if len(statements) < len(prefixes) {
+		return false
+	}
+	tail := statements[len(statements)-len(prefixes):]
+	for i, prefix := range prefixes {
+		if !strings.HasPrefix(strings.TrimSpace(tail[i]), prefix) {
+			return false
+		}
+	}
+	return true
+}
+
+func statementsWith(statements []string, fragment string) int {
+	n := 0
+	for _, s := range statements {
+		if strings.Contains(s, fragment) {
+			n++
+		}
+	}
+	return n
 }
 
 // TestImportTaggedMutationRoundTrips measures what import admission adds to

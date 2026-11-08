@@ -10,7 +10,13 @@ public struct TimeSpanSection<Footer: View>: View {
         case required
         /// Bottle: "Add end time" until it has one, then a ✕ to remove it.
         case optional
+        /// A session still running: Start can move, End reads "Running".
+        case running
     }
+
+    /// The date and time pills stop growing here. Past it, "12 жовт. 2026 р."
+    /// alone is wider than a phone and pushed the whole panel off the screen.
+    private static var largestPickerSize: DynamicTypeSize { .accessibility2 }
 
     @Binding private var start: Date
     @Binding private var end: Date?
@@ -30,13 +36,19 @@ public struct TimeSpanSection<Footer: View>: View {
     }
 
     public var body: some View {
-        PanelSection {
+        CardSection {
             EditTimeRow(TimeSpanCopy.start, date: $start, latest: latest, identifier: identifierPrefix + ".start")
-            endRow
-            if let length = TimeSpan(start: start, end: end).lengthText {
-                LabeledContent(TimeSpanCopy.length, value: length)
-                    .monospacedDigit()
-                    .accessibilityIdentifier(identifierPrefix + ".length")
+                .dynamicTypeSize(...Self.largestPickerSize)
+            if endStyle == .running {
+                ListRow(TimeSpanCopy.end, value: TimeSpanCopy.running)
+                    .accessibilityIdentifier(identifierPrefix + ".end")
+            } else {
+                endRow
+                if let length = TimeSpan(start: start, end: end).lengthText {
+                    ListRow(TimeSpanCopy.length, value: length)
+                        .monospacedDigit()
+                        .accessibilityIdentifier(identifierPrefix + ".length")
+                }
             }
         } footer: {
             footer
@@ -45,13 +57,12 @@ public struct TimeSpanSection<Footer: View>: View {
 
     @ViewBuilder
     private var endRow: some View {
-        if let current = end {
-            HStack(spacing: 8) {
-                EditTimeRow(TimeSpanCopy.end, date: Binding(get: { current }, set: { end = $0 }),
-                            latest: latest, identifier: identifierPrefix + ".end")
+        if let end {
+            EditTimeRow(TimeSpanCopy.end, date: Binding(get: { end }, set: { self.end = $0 }),
+                        latest: latest, identifier: identifierPrefix + ".end") {
                 if endStyle == .optional {
                     Button {
-                        end = nil
+                        self.end = nil
                     } label: {
                         Image(systemName: "xmark.circle.fill")
                             .foregroundStyle(Palette.secondaryText)
@@ -62,13 +73,14 @@ public struct TimeSpanSection<Footer: View>: View {
                     .accessibilityIdentifier(identifierPrefix + ".removeEnd")
                 }
             }
+            .dynamicTypeSize(...Self.largestPickerSize)
         } else {
-            Button(TimeSpanCopy.addEnd) {
-                // Ten minutes after the start, never past now.
-                end = min(latest, start.addingTimeInterval(600))
-            }
-            .frame(minHeight: 44)
-            .accessibilityIdentifier(identifierPrefix + ".addEnd")
+            Button(TimeSpanCopy.addEnd) { end = defaultEnd }
+                .frame(minHeight: 44)
+                .accessibilityIdentifier(identifierPrefix + ".addEnd")
         }
     }
+
+    /// Ten minutes after the start, never past now.
+    private var defaultEnd: Date { min(latest, start.addingTimeInterval(600)) }
 }

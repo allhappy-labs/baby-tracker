@@ -41,12 +41,20 @@ struct CapacityMatrixE2ETests {
     }
 
     @Test func pacedBudgetNeverClaimsCompletedHistoryOrPairs() async throws {
-        #expect(capacityPacedUpperBound(head: 7, seconds: 116) == 27)
-        #expect(capacityPacedUpperBound(head: 7, seconds: 0) == 7)
-        #expect(capacityPacedUpperBound(head: 247, seconds: 6) == 248)
+        #expect(capacityPacedUpperBound(head: 7, seconds: 116, spacing: 6) == 27)
+        #expect(capacityPacedUpperBound(head: 7, seconds: 0, spacing: 6) == 7)
+        #expect(capacityPacedUpperBound(head: 247, seconds: 6, spacing: 6) == 248)
+        // The server's configured refresh quotas set the pace, not a constant:
+        // at the matrix's 6 ms address spacing a cell can age past 2048.
+        #expect(capacityPacedUpperBound(head: 2, seconds: 100, spacing: 0.006) >= 2048)
+        let pacing = try CapacityRotationPacing(["BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS": "0.006", "BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS": "0.06"])
+        #expect(pacing.address == 0.006 && pacing.device == 0.06)
+        for missing in [[:], ["BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS": "0.006"], ["BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS": "0", "BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS": "1"], ["BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS": "nan", "BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS": "1"]] {
+            #expect(throws: CapacityProtocolFailure.self) { try CapacityRotationPacing(missing) }
+        }
         let cell = CapacityCell(ordinal: 1, events: 248, families: 1, concurrency: 1)
         cell.actualEvents = 7
-        cell.plannedEventUpperBound = capacityPacedUpperBound(head: 7, seconds: 116)
+        cell.plannedEventUpperBound = capacityPacedUpperBound(head: 7, seconds: 116, spacing: 6)
         cell.completion = "paced_setup_budget_insufficient"
         #expect(cell.actualEvents == 7 && cell.plannedEventUpperBound < cell.events)
         #expect(cell.pairs.isEmpty && cell.requestSeconds.isEmpty && cell.attempted.values.allSatisfy { $0 == 0 })
@@ -61,11 +69,28 @@ struct CapacityMatrixE2ETests {
         #expect(cell.elapsed >= 0.01 && cell.pairs.count == 1)
     }
 
+    /// A 128-family cell warmed its families one save-to-peer (~0.4 s) at a
+    /// time: 55 s, leaving 24 s of the 116 s cell for a 30 s measurement.
+    @Test func warmupOverlapsFamiliesWithinItsWidth() async throws {
+        var active = 0, peak = 0, warmed: [Int] = []
+        let began = ContinuousClock.now
+        try await capacityEachFamily(families: 16, width: 8) { family in
+            active += 1; peak = max(peak, active)
+            try await Task.sleep(for: .milliseconds(100))
+            active -= 1; warmed.append(family)
+        }
+        #expect(began.duration(to: .now) < .milliseconds(700))
+        #expect(peak == 8 && warmed.sorted() == Array(0..<16))
+        await #expect(throws: CapacityTimeout.self) {
+            try await capacityEachFamily(families: 4, width: 2) { family in if family == 2 { throw CapacityTimeout() } }
+        }
+    }
+
     @Test func capacityMatrix() async throws {
         let env = ProcessInfo.processInfo.environment
         guard env["BABY_TRACKER_CAPACITY_MATRIX"] == "1" else { return }
         print("capacity-matrix stage: configuration_started"); fflush(stdout)
-        let required = ["BABY_TRACKER_MATRIX_PRIVATE", "BABY_TRACKER_E2E_BASE", "BABY_TRACKER_E2E_INSTANCE", "BABY_TRACKER_E2E_CERT", "BABY_TRACKER_MATRIX_DEADLINE"]
+        let required = ["BABY_TRACKER_MATRIX_PRIVATE", "BABY_TRACKER_E2E_BASE", "BABY_TRACKER_E2E_INSTANCE", "BABY_TRACKER_E2E_CERT", "BABY_TRACKER_MATRIX_DEADLINE", "BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS", "BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS"]
         guard required.allSatisfy({ env[$0] != nil }) else {
             print("capacity-matrix failure: missing_configuration"); fflush(stdout)
             throw CapacityProtocolFailure()
@@ -77,6 +102,7 @@ struct CapacityMatrixE2ETests {
             outsiderAccessToken: "", outsiderRefreshToken: "",
             outsiderIdentity: SessionIdentityFields(accountID: UUID(), deviceID: UUID(), recoveryEpoch: 1), sessions: [:]))
         let globalDeadline = Date(timeIntervalSince1970: try #require(env["BABY_TRACKER_MATRIX_DEADLINE"].flatMap(Double.init)))
+        let pacing = try CapacityRotationPacing(env)
         print("capacity-matrix stage: configuration_ready"); fflush(stdout)
         var ordinal = 0
         var stoppedForInvariant = false
@@ -98,14 +124,18 @@ struct CapacityMatrixE2ETests {
                     let directory = root.appending(path: "cell-\(ordinal)")
                     try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
                     do {
-                        for family in 0..<families {
+                        // Families are independent: provisioning them one at a time took
+                        // 37-80 s of a 128-family cell (host-dependent) and once left no
+                        // 30 s measurement. Four at a time; phones keep family order.
+                        var provisioned: [Int: [Phone]] = [:]
+                        try await capacityEachFamily(families: families, width: 4) { family in
                             try capacityCheck(deadline)
                             let clock = TestDateProvider(Date().addingTimeInterval(-3600))
                             let owner = try Phone(name: "owner-\(family)", live: live, clock: clock, directory: directory,
                                 appleSubject: String(format: "82000000-0000-4000-%04d-%012d", ordinal, family * 2), pollOverride: nil, recoveryDiagnostics: { cell.recovery($0) })
                             let peer = try Phone(name: "peer-\(family)", live: live, clock: clock, directory: directory,
                                 appleSubject: String(format: "82000000-0000-4000-%04d-%012d", ordinal, family * 2 + 1), pollOverride: nil, recoveryDiagnostics: { cell.recovery($0) })
-                            phones += [owner, peer]
+                            phones += [owner, peer]; provisioned[family] = [owner, peer]
                             let domains = root.appending(path: "defaults.jsonl")
                             if !FileManager.default.fileExists(atPath: domains.path) { FileManager.default.createFile(atPath: domains.path, contents: nil, attributes: [.posixPermissions: 0o600]) }
                             let handle = try FileHandle(forWritingTo: domains); try handle.seekToEnd()
@@ -140,11 +170,12 @@ struct CapacityMatrixE2ETests {
                             try cell.stage("family_ready", family: family, state: "complete")
                             cell.actualFamilies += 1
                         }
+                        phones = try (0..<families).flatMap { try #require(provisioned[$0]) }
                         // Age by genuine credential rotations through the app renewer.
                         // Never insert SQL rows, bypass quotas, or manufacture events.
                         try cell.stage("authority_aging", family: 0)
                         cell.actualEvents = try capacityHead(env)
-                        cell.plannedEventUpperBound = capacityPacedUpperBound(head: cell.actualEvents, seconds: deadline.timeIntervalSinceNow)
+                        cell.plannedEventUpperBound = capacityPacedUpperBound(head: cell.actualEvents, seconds: deadline.timeIntervalSinceNow, spacing: pacing.address)
                         if cell.plannedEventUpperBound < events { throw CapacityPacedBudgetInsufficient() }
                         var rotation = 0
                         var lastRotation: [Int: Date] = [:]
@@ -152,7 +183,7 @@ struct CapacityMatrixE2ETests {
                         while cell.actualEvents < events {
                             try capacityCheck(deadline)
                             let phoneIndex = rotation % phones.count
-                            let earliest = max((lastRotation[phoneIndex] ?? .distantPast).addingTimeInterval(22), lastIPRotation.addingTimeInterval(6))
+                            let earliest = max((lastRotation[phoneIndex] ?? .distantPast).addingTimeInterval(pacing.device), lastIPRotation.addingTimeInterval(pacing.address))
                             guard earliest < deadline else { throw CapacityTimeout() }
                             if earliest > Date() { try await Task.sleep(for: .seconds(earliest.timeIntervalSinceNow)) }
                             try capacityCheck(deadline)
@@ -169,6 +200,7 @@ struct CapacityMatrixE2ETests {
                                 case .syncing: cell.engineFailureState = "syncing"
                                 case .upToDate: cell.engineFailureState = "up_to_date"
                                 case .offline: cell.engineFailureState = "offline"
+                                case .serverUnreachable: cell.engineFailureState = "server_unreachable"
                                 case .needsSignIn: cell.engineFailureState = "needs_sign_in"
                                 case .failed: cell.engineFailureState = "failed"
                                 case nil: cell.engineFailureState = "unavailable"
@@ -184,10 +216,14 @@ struct CapacityMatrixE2ETests {
                             try await capacityWait(deadline) { (try? phone.engine().liveState) == .connected }
                         }
                         // Care history is already seeded. Warm complete app operations.
-                        for family in 0..<families {
-                            _ = try await measureForegroundSaveToPeer(owner: phones[family * 2], peer: phones[family * 2 + 1], samples: 1)
+                        // Families are independent; warming them serially left a
+                        // 128-family cell without time to measure. The width keeps
+                        // the one harness address within its body-read share.
+                        try await capacityEachFamily(families: families, width: 8) { family in
                             try capacityCheck(deadline)
+                            _ = try await measureForegroundSaveToPeer(owner: phones[family * 2], peer: phones[family * 2 + 1], samples: 1)
                         }
+                        try capacityCheck(deadline)
                         try cell.stage("measurement", family: 0)
                         try await cell.measure(phones: phones, directory: directory, env: env, deadline: deadline)
                     } catch {
@@ -424,12 +460,42 @@ private func capacityControl(root: URL, cell: Int, starting: Bool, acknowledgeme
 }
 
 // Conservative bound for this harness's intentional aging schedule: at least
-// six seconds per IP rotation, ignoring stricter22s/device pacing and request
-// time. One successful recoverable rotation commits one session_rotated event;
+// `spacing` seconds per address rotation (the server's configured refresh
+// quota for the harness's one address, window over count), ignoring the
+// stricter per-device spacing and request time. One successful recoverable rotation commits at most one event (none
+// since owner decision D1, 2026-10-16: a routine rotation is not audited);
 // acknowledgments only update recovery receipt storage. This is a setup plan
 // bound, never a measured service-capacity or observed-quota result.
-private func capacityPacedUpperBound(head: Int, seconds: Double) -> Int {
-    head + max(0, Int(ceil(max(0, seconds) / 6)))
+private func capacityPacedUpperBound(head: Int, seconds: Double, spacing: Double) -> Int {
+    head + max(0, Int(min(1e9, ceil(max(0, seconds) / spacing))))
+}
+/// Renewal spacing the runner derives from the refresh quotas it gave the
+/// disposable server (auth-refresh-ip and auth-refresh-device, window over
+/// count), so aging never meets a refusal and never assumes another pace.
+private struct CapacityRotationPacing {
+    let address: Double, device: Double
+    init(_ env: [String: String]) throws {
+        func seconds(_ name: String) throws -> Double {
+            guard let value = env[name].flatMap(Double.init), value.isFinite, value > 0 else { throw CapacityProtocolFailure() }
+            return value
+        }
+        address = try seconds("BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS")
+        device = try seconds("BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS")
+    }
+}
+/// Runs `body` once per family in batches of `width`; a batch's first error
+/// is rethrown after the batch settles, and no later batch starts.
+@MainActor private func capacityEachFamily(families: Int, width: Int, _ body: @escaping @MainActor (Int) async throws -> Void) async throws {
+    var next = 0
+    while next < families {
+        let tasks = (next..<min(families, next + width)).map { family in Task { @MainActor in try await body(family) } }
+        var failure: (any Error)?
+        for task in tasks {
+            do { try await task.value } catch { failure = failure ?? error }
+        }
+        if let failure { throw failure }
+        next += width
+    }
 }
 private struct CapacityPacedBudgetInsufficient: Error {}
 private struct CapacityInvariant: Error {}

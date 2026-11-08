@@ -1,0 +1,62 @@
+<style>
+  .ph{background:#0D1224;border-radius:36px;padding:0;color:#F3F5FD;font-family:-apple-system,system-ui,sans-serif;min-height:600px;box-shadow:0 0 0 1px #ffffff14;position:relative;overflow:hidden}
+  .ph *{box-sizing:border-box}
+  .dim{height:90px;background:#05070f}
+  .sheet{background:#151b30;border-radius:28px 28px 0 0;padding:10px 16px 18px;min-height:510px;position:relative}
+  .grab{width:36px;height:5px;border-radius:3px;background:#ffffff30;margin:0 auto 10px}
+  .top{display:flex;align-items:center;justify-content:space-between;height:44px}
+  .ttl{font-weight:700;font-size:17px}
+  .x{width:36px;height:36px;border-radius:50%;background:#ffffff14;display:flex;align-items:center;justify-content:center;color:#9AA4C9;font-size:15px}
+  .ok{width:36px;height:36px;border-radius:50%;background:#F3F5FD;color:#0D1224;display:flex;align-items:center;justify-content:center;font-weight:800}
+  .txt{color:#9AA4C9;font-size:16px}
+  .sec{font-size:13px;color:#9AA4C9;margin:14px 6px 6px;font-weight:600}
+  .card{background:#ffffff0f;border-radius:20px}
+  .row{display:flex;align-items:center;justify-content:space-between;padding:11px 14px;font-size:15px;min-height:44px}
+  .row+.row{border-top:1px solid #ffffff12}
+  .v{font-weight:600}
+  .chips{display:flex;gap:8px;flex-wrap:wrap}
+  .chip{padding:7px 12px;border-radius:999px;font-size:14px;font-weight:600;background:rgba(242,176,97,.16);color:#F2B061}
+  .chip.sel{background:#F2B061;color:#0D1224}
+  .amt{display:flex;align-items:center;justify-content:space-between;padding:8px 10px}
+  .pm{width:44px;height:44px;border-radius:50%;background:rgba(242,176,97,.16);color:#F2B061;display:flex;align-items:center;justify-content:center;font-size:22px;font-weight:700}
+  .num{font-size:34px;font-weight:800;font-variant-numeric:tabular-nums}
+  .prim{position:absolute;left:16px;right:16px;bottom:18px;height:54px;border-radius:18px;background:#F3F5FD;color:#0D1224;font-weight:700;display:flex;align-items:center;justify-content:center;font-size:17px}
+  .del{color:#EF7373;text-align:center;font-weight:600;font-size:15px;margin-top:16px}
+</style>
+
+<h2>One anatomy for every sheet — which?</h2>
+<p class="subtitle">Applies to logging sheets, edit panels, and the rebuilt Settings forms (Add baby, Invite, Export…). Shown on Bottle.</p>
+
+<div class="cards">
+ <div class="card" data-choice="footer" onclick="toggleSelect(this)">
+  <div class="card-image"><div class="ph"><div class="dim"></div><div class="sheet">
+    <div class="grab"></div>
+    <div class="top"><span class="x">✕</span><span class="ttl">Bottle</span><span style="width:36px"></span></div>
+    <div class="sec">Contents</div>
+    <div class="chips"><span class="chip sel">Breast milk</span><span class="chip">Formula</span><span class="chip">Mixed</span></div>
+    <div class="sec">Amount</div>
+    <div class="card"><div class="amt"><span class="pm">−</span><span class="num">90 ml</span><span class="pm">+</span></div></div>
+    <div class="chips" style="margin-top:8px"><span class="chip">35</span><span class="chip">65</span><span class="chip">100</span><span class="chip">135</span></div>
+    <div class="sec">When</div>
+    <div class="card"><div class="row">Started<span class="v">6:08</span></div></div>
+    <div class="prim">Log bottle</div>
+  </div></div></div>
+  <div class="card-body"><h3>A · ✕ top-left, big action in the footer</h3><p>Close is always a round ✕ at top-left; the one primary action is a full-width button at the bottom, in thumb reach. Edit panels add "Delete" as red text above it. Matches today's logging sheets; Settings forms adopt it.</p></div>
+ </div>
+
+ <div class="card" data-choice="toolbar" onclick="toggleSelect(this)">
+  <div class="card-image"><div class="ph"><div class="dim"></div><div class="sheet">
+    <div class="grab"></div>
+    <div class="top"><span class="x">✕</span><span class="ttl">Bottle</span><span class="ok">✓</span></div>
+    <div class="sec">Contents</div>
+    <div class="chips"><span class="chip sel">Breast milk</span><span class="chip">Formula</span><span class="chip">Mixed</span></div>
+    <div class="sec">Amount</div>
+    <div class="card"><div class="amt"><span class="pm">−</span><span class="num">90 ml</span><span class="pm">+</span></div></div>
+    <div class="chips" style="margin-top:8px"><span class="chip">35</span><span class="chip">65</span><span class="chip">100</span><span class="chip">135</span></div>
+    <div class="sec">When</div>
+    <div class="card"><div class="row">Started<span class="v">6:08</span></div></div>
+    <div class="del">Delete entry</div>
+  </div></div></div>
+  <div class="card-body"><h3>B · iOS 26 toolbar: ✕ left, ✓ right</h3><p>System sheet convention: confirm is a round ✓ top-right, no footer button. Compact and native, but the confirm is a stretch for one thumb at 3 am.</p></div>
+ </div>
+</div>

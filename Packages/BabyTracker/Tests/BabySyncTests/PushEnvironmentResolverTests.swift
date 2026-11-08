@@ -49,7 +49,7 @@ struct PushEnvironmentResolverTests {
     /// are not a profile: push stays inert.
     @Test func profileWithoutTheKeyIsInert() {
         let withoutPush = PushEnvironmentResolver(isSimulator: false, profile: {
-            self.profile("<key>com.apple.security.application-groups</key><array><string>group.com.olhapi.babytracker</string></array>")
+            self.profile("<key>com.apple.security.application-groups</key><array><string>group.com.example.babytracker</string></array>")
         })
         #expect(withoutPush.environment() == nil)
         let odd = PushEnvironmentResolver(isSimulator: false, profile: {

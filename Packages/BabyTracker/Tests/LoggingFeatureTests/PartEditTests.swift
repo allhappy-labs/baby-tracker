@@ -476,9 +476,8 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         #expect(second.startedAt == base.addingTimeInterval(2400))
     }
 
-    /// H-R15: a feed part moved past the next part's start would reorder
-    /// the session behind its root.
-    @Test func aStartAfterTheNextPartBeganIsRefusedAndNothingIsSaved() throws {
+    /// Moved into the next part, a part is refused, and nothing is saved.
+    @Test func aStartIntoTheNextPartIsRefusedAndNothingIsSaved() throws {
         let (store, baby, clock) = try fixture()
         let base = clock.now.addingTimeInterval(-7200)
         let left = try store.logBreast(side: .left, from: base, to: base.addingTimeInterval(720), for: baby)
@@ -490,12 +489,12 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
                                   unit: .millilitres)
         let logged = try store.changeLog().count
 
-        // Both rows moved, so the span itself is sound and the H-R15 check
-        // is what refuses it.
+        // Both rows moved, so the span itself is sound and the overlap is
+        // what refuses it.
         model.start = base.addingTimeInterval(1000)
         model.end = base.addingTimeInterval(1720)
 
-        let expected = "The start can't be after the next part began, at \(clockText(base.addingTimeInterval(900), zone: left.timeZoneID))."
+        let expected = "The start can't be before the previous part ended, at \(clockText(base.addingTimeInterval(1800), zone: left.timeZoneID))."
         #expect(model.validationMessage == expected)
         #expect(try model.save() == false)
         #expect(left.components == before)
@@ -570,7 +569,65 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         #expect(try model.save())
     }
 
-    @Test func aSleepStartAfterTheNextSleepBeganIsRefused() throws {
+    /// A part moved past the next one, into a free stretch, reorders the
+    /// session: the part now first keys it, so Split still cuts where shown.
+    @Test func aPartMovedPastTheNextOneReordersTheSession() throws {
+        let (store, baby, clock) = try fixture()
+        let base = clock.now.addingTimeInterval(-7200)
+        let right = try store.logBreast(side: .right, from: base, to: base.addingTimeInterval(1140), for: baby)
+        let bottle = try store.addFeedPart(.bottle(volumeML: 100, contents: .formula, at: base.addingTimeInterval(4860)),
+                                           toSession: right.id, for: baby)
+        let left = try store.addFeedPart(.breast(side: .left, from: base.addingTimeInterval(4861),
+                                                 to: base.addingTimeInterval(5461)),
+                                         toSession: right.id, for: baby)
+        let model = PartEditModel(store: store, babyID: baby,
+                                  target: .breast(feedID: left.id, componentID: try #require(left.components.first?.id)),
+                                  unit: .millilitres)
+
+        model.start = base.addingTimeInterval(1140)
+        model.end = base.addingTimeInterval(1740)
+
+        #expect(model.validationMessage == nil)
+        #expect(try model.save())
+        let session = try #require(try store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture).first)
+        #expect(session.id == right.id)
+        #expect(session.feedIDs == [right.id, left.id, bottle.id])
+
+        // Moved before the first part, it keys the session itself.
+        model.start = base.addingTimeInterval(-900)
+        model.end = base.addingTimeInterval(-300)
+        #expect(try model.save())
+        let rekeyed = try #require(try store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture).first)
+        #expect(rekeyed.id == left.id)
+        #expect(rekeyed.feedIDs == [left.id, right.id, bottle.id])
+        #expect(left.feedingSessionID == nil)
+        #expect(right.feedingSessionID == left.id)
+        #expect(bottle.feedingSessionID == left.id)
+        try store.separateFeed(at: bottle.id, for: baby)
+        #expect(try store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture).map(\.feedIDs)
+            == [[left.id, right.id], [bottle.id]])
+    }
+
+    @Test func aSleepMovedPastTheNextSleepReordersTheSession() throws {
+        let (store, baby, clock) = try fixture()
+        let base = clock.now.addingTimeInterval(-6 * 3600)
+        let first = try store.logSleep(from: base, to: base.addingTimeInterval(2400), for: baby)
+        let second = try store.addSleepPart(from: base.addingTimeInterval(3000), to: base.addingTimeInterval(5400),
+                                            toSession: first.id, for: baby)
+        let model = PartEditModel(store: store, babyID: baby, target: .sleep(sleepID: first.id), unit: .millilitres)
+
+        model.start = base.addingTimeInterval(5500)
+        model.end = base.addingTimeInterval(6000)
+
+        #expect(model.validationMessage == nil)
+        #expect(try model.save())
+        #expect(second.sleepSessionID == nil)
+        #expect(first.sleepSessionID == second.id)
+        #expect(try store.sleepSessions(for: baby, from: .distantPast, to: .distantFuture).map(\.sleepIDs)
+            == [[second.id, first.id]])
+    }
+
+    @Test func aSleepStartIntoTheNextSleepIsRefused() throws {
         let (store, baby, clock) = try fixture()
         let base = clock.now.addingTimeInterval(-6 * 3600)
         let first = try store.logSleep(from: base, to: base.addingTimeInterval(2400), for: baby)
@@ -583,7 +640,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         model.end = base.addingTimeInterval(3200)
 
         #expect(model.validationMessage
-            == "The start can't be after the next part began, at \(clockText(base.addingTimeInterval(3000), zone: first.timeZoneID)).")
+            == "The start can't be before the previous part ended, at \(clockText(base.addingTimeInterval(5400), zone: first.timeZoneID)).")
         #expect(try model.save() == false)
         #expect(first.startedAt == base)
         #expect(second.effectiveSleepSessionID == first.id)
@@ -608,7 +665,7 @@ private func clockText(_ date: Date, zone: String = TimeZone.current.identifier)
         model.end = base.addingTimeInterval(3600)
         #expect(try model.save() == false)
         #expect(model.validationMessage
-            == "The start can't be after the next part began, at \(clockText(base.addingTimeInterval(3000), zone: first.timeZoneID)).")
+            == "The start can't be before the previous part ended, at \(clockText(base.addingTimeInterval(5400), zone: first.timeZoneID)).")
         #expect(first.startedAt == base)
         #expect(try store.changeLog().count == logged)
     }

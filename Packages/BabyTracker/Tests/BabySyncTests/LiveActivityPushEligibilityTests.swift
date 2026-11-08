@@ -150,7 +150,7 @@ struct LiveActivityAPNsEnvironmentResolverTests {
     @Test func profileWithoutTheEntitlementFailsClosed() {
         // Today's manual development profiles: present, readable, no push.
         let resolver = ProvisioningProfileEnvironmentResolver(isSimulator: false, profile: {
-            self.profile("<key>com.apple.security.application-groups</key><array><string>group.com.olhapi.babytracker</string></array>")
+            self.profile("<key>com.apple.security.application-groups</key><array><string>group.com.example.babytracker</string></array>")
         })
         #expect(resolver.environment() == nil)
     }

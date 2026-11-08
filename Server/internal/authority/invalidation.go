@@ -19,9 +19,9 @@ import (
 //   - Logout: one per revoked session of the device;
 //   - MarkIdentityUnavailable and DeleteAccount: the account;
 //   - Refresh: one per session a reuse revoked (a rotation publishes
-//     nothing: legacy's session_rotated item named the new child, which no
-//     connection holds yet, and would only take queue slots from real
-//     revocations);
+//     nothing, and appends no audit row since owner decision D1: legacy's
+//     session_rotated item named the new child, which no connection holds
+//     yet, and would only take queue slots from real revocations);
 //   - LeaveFamily, RemoveMember, ChangeRole, TransferOwner,
 //     ScheduleDeletion, operator owner recovery: each affected account in
 //     the family;

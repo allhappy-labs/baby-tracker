@@ -35,84 +35,66 @@ public struct AddBabySheet: View {
         AddBabyValidation.canSave(name: name, referenceSex: referenceSex)
     }
 
+    /// Presented full height (the switcher's sheet), or as the whole screen
+    /// on first launch, where there is no close button.
     public var body: some View {
-        NavigationStack {
-            Form {
-                TextField(L10n.tr("Name"), text: $name)
-                    #if os(iOS)
-                    // Autocapitalization is a UIKit text-input concept; no macOS equivalent.
-                    .textInputAutocapitalization(.words)
-                    #endif
-                DatePicker(L10n.tr("Born"), selection: $birthDate, displayedComponents: [.date])
+        SheetScaffold(
+            L10n.tr("Add baby"),
+            closeTitle: L10n.tr("Cancel"),
+            onClose: onCancel,
+            primary: SheetAction(L10n.tr("Save"), identifier: "addBaby.save", isEnabled: canSave, action: save)
+        ) {
+            BabyFormFields(
+                name: $name,
+                birthDate: $birthDate,
+                referenceSex: $referenceSex,
+                hasDueDate: $hasDueDate,
+                dueDate: $dueDate,
+                growthFooter: L10n.tr("Choose the reference used for growth comparisons. The expected due date is optional."),
+                identifierPrefix: "addBaby"
+            )
 
-                Picker(L10n.tr("Swiss PEZZ 2025 reference"), selection: $referenceSex) {
-                    Text(L10n.tr("Choose a reference")).tag(GrowthReferenceSex?.none)
-                    Text(L10n.tr("Girls")).tag(GrowthReferenceSex?.some(.girls))
-                    Text(L10n.tr("Boys")).tag(GrowthReferenceSex?.some(.boys))
-                }
-                .accessibilityIdentifier("addBaby.referenceSex")
-
-                Toggle(L10n.tr("Add expected due date"), isOn: $hasDueDate)
-                    .accessibilityIdentifier("addBaby.hasDueDate")
-                if hasDueDate {
-                    DatePicker(L10n.tr("Expected due date"), selection: $dueDate, displayedComponents: [.date])
-                        .accessibilityIdentifier("addBaby.dueDate")
-                }
-                Text(L10n.tr("Choose the reference used for growth comparisons. The expected due date is optional."))
-                    .font(.footnote)
-
-                // Below the fields and plainly secondary: adding a baby is
-                // what nearly everyone opening the app for the first time
-                // is here to do.
-                if let onJoinFamily {
-                    Section {
-                        Button(AddBabyCopy.joinFamily, action: onJoinFamily)
-                            .frame(minHeight: 44)
-                            .accessibilityIdentifier("addBaby.joinFamily")
-                    } footer: {
-                        Text(AddBabyCopy.joinFamilyFooter)
+            // Below the fields and plainly secondary: adding a baby is
+            // what nearly everyone opening the app for the first time
+            // is here to do.
+            if let onJoinFamily {
+                CardSection {
+                    Button(action: onJoinFamily) {
+                        Text(AddBabyCopy.joinFamily)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityIdentifier("addBaby.joinFamily")
+                } footer: {
+                    Text(AddBabyCopy.joinFamilyFooter)
                 }
             }
-            .navigationTitle(L10n.tr("Add baby"))
-            #if os(iOS)
-            // Inline title display mode is a UIKit navigation-bar concept.
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                if let onCancel {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(L10n.tr("Cancel"), action: onCancel)
-                    }
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.tr("Save")) {
-                        guard let referenceSex else { return }
-                        do {
-                            try AddBabyValidation.save(
-                                store: store,
-                                name: name.trimmingCharacters(in: .whitespaces),
-                                birthDate: birthDate,
-                                referenceSex: referenceSex,
-                                expectedDueDate: try AddBabyValidation.dueDate(enabled: hasDueDate, date: dueDate)
-                            ) { baby in
-                                errorReporter.clear()
-                                onAdded(baby)
-                            }
-                        } catch {
-                            // On first launch this sheet IS the app: a silent
-                            // return here left a parent tapping Save forever.
-                            errorReporter.report(
-                                ErrorBannerCopy.saveFailed(what: ErrorSubject.baby),
-                                error: error,
-                                category: AppLog.store
-                            )
-                        }
-                    }
-                    .disabled(!canSave)
-                    .accessibilityIdentifier("addBaby.save")
-                }
+        }
+        .tint(Palette.feed)
+    }
+
+    private func save() {
+        guard let referenceSex else { return }
+        do {
+            try AddBabyValidation.save(
+                store: store,
+                name: name.trimmingCharacters(in: .whitespaces),
+                birthDate: birthDate,
+                referenceSex: referenceSex,
+                expectedDueDate: try AddBabyValidation.dueDate(enabled: hasDueDate, date: dueDate)
+            ) { baby in
+                errorReporter.clear()
+                onAdded(baby)
             }
+        } catch {
+            // On first launch this sheet IS the app: a silent
+            // return here left a parent tapping Save forever.
+            errorReporter.report(
+                ErrorBannerCopy.saveFailed(what: ErrorSubject.baby),
+                error: error,
+                category: AppLog.store
+            )
         }
     }
 }

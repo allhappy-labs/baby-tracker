@@ -1,6 +1,7 @@
 import Testing
 import Foundation
 import BabyCore
+import BabyUI
 @testable import BabyStore
 @testable import HomeFeature
 
@@ -12,7 +13,7 @@ import BabyCore
         let screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: try store.suggestedSide(for: baby),
                                      canLog: true, now: clock.now)
         #expect(screen.hero == .awake(since: nil))
-        #expect(screen.dock == .start(suggested: .left))
+        #expect(screen.dock == .start(suggested: .left, big: .breast, tiles: [.bottle, .sleep, .diaper]))
         #expect(screen.status.map(\.tracker) == [.feed])
         #expect(screen.strip?.feedCount == 1)
     }
@@ -27,7 +28,7 @@ import BabyCore
         #expect(icon == .breastLeft)
         #expect(startedAt == left.startedAt)
         #expect(Set(screen.status.map(\.tracker)) == [.sleep, .diaper])
-        #expect(screen.dock == .feedRunning(timerID: left.id, isBottle: false))
+        #expect(screen.dock == .feedRunning(timerID: left.id, isBottle: false, tiles: [.diaper]))
     }
 
     /// Today stays on Home while a timer runs. The running part is not an
@@ -112,7 +113,7 @@ import BabyCore
         let screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: .right, canLog: true, now: clock.now)
         guard case .feedBreak(_, let parts) = screen.hero else { Issue.record("expected break hero"); return }
         #expect(parts == [PartSummary(icon: .breastLeft, seconds: 542)])
-        #expect(screen.dock == .start(suggested: .right))
+        #expect(screen.dock == .start(suggested: .right, big: .breast, tiles: [.bottle, .sleep, .diaper]))
     }
 
     @Test func aJoinedPartShowsTheChip() throws {
@@ -140,6 +141,13 @@ import BabyCore
         #expect(HomeCopy.elapsed(since: now.addingTimeInterval(-7_500), now: now) == "2h 5m")
     }
 
+    /// A bare "23m" beside a moon read as a sleep 23 minutes long, so the
+    /// status line says when: "23m ago".
+    @Test func theStatusLineSaysItsTimesAreAgo() {
+        #expect(HomeCopy.ago("23m") == "23m ago")
+        #expect(HomeCopy.ago("2h 57m") == "2h 57m ago")
+    }
+
     @Test func feedAndSleepTogetherShowFeedHeroAndSleepChip() throws {
         let (store, baby, clock) = try fixture()
         let sleep = try store.startSleep(for: baby)
@@ -147,7 +155,7 @@ import BabyCore
         let feed = try store.startPart(.breast(.left), for: baby)
         let screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: .right, canLog: true, now: clock.now)
         #expect(screen.hero == .feedRunning(icon: .breastLeft, title: "Left breast", startedAt: feed.startedAt))
-        #expect(screen.dock == .feedRunning(timerID: feed.id, isBottle: false))
+        #expect(screen.dock == .feedRunning(timerID: feed.id, isBottle: false, tiles: [.diaper]))
         #expect(!screen.status.contains { $0.tracker == .sleep })
         #expect(screen.sleepChip == sleep.startedAt)
     }
@@ -156,5 +164,40 @@ import BabyCore
         let (store, baby, clock) = try fixture()
         let screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: .left, canLog: false, now: clock.now)
         #expect(screen.dock == .readOnly)
+    }
+
+    @Test func theFirstActionOfTheOrderIsTheBigButton() throws {
+        let (store, baby, clock) = try fixture()
+        let layout = HomeLayout(order: [.bottle, .breast, .solids, .diaper, .sleep, .meds, .growth])
+        let screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: .left,
+                                     canLog: true, layout: layout, now: clock.now)
+        #expect(screen.dock == .start(suggested: .left, big: .bottle, tiles: [.breast, .solids, .diaper]))
+    }
+
+    @Test func runningDocksCarryTheOrdersTiles() throws {
+        let (store, baby, clock) = try fixture()
+        let layout = HomeLayout(order: [.bottle, .solids, .diaper, .growth, .breast, .sleep, .meds])
+        let sleep = try store.startSleep(for: baby)
+        var screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: .left,
+                                     canLog: true, layout: layout, now: clock.now)
+        #expect(screen.dock == .sleepRunning(timerID: sleep.id, tiles: [.feed, .action(.solids), .action(.diaper)]))
+        let left = try store.startPart(.breast(.left), for: baby)
+        screen = HomeScreen.make(snapshot: try store.homeSnapshot(for: baby), suggested: .right,
+                                 canLog: true, layout: layout, now: clock.now)
+        // Feed and sleep together: the feed's dock, as before.
+        #expect(screen.dock == .feedRunning(timerID: left.id, isBottle: false, tiles: [.solids, .diaper, .growth]))
+    }
+
+    /// Home's parts go to the kit's `PartsRow` in the colours Home's own row
+    /// used: a sleep in the sleep colour, every feed part in the feed colour.
+    @Test func partSummaryMapsToTheKitPartsRow() {
+        let sleep = PartSummary(icon: .sleep, seconds: 542).partsRowItem
+        let left = PartSummary(icon: .breastLeft, seconds: 250).partsRowItem
+        let bottle = PartSummary(icon: .bottle, seconds: 60).partsRowItem
+        #expect(sleep.tint == Palette.sleep)
+        #expect(left.tint == Palette.feed)
+        #expect(bottle.tint == Palette.feed)
+        #expect(left.text == "4:10")
+        #expect(left.accessibilityLabel == HomeCopy.spokenPart(PartSummary(icon: .breastLeft, seconds: 250)))
     }
 }

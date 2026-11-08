@@ -44,7 +44,7 @@ enum UITestFamily {
     private nonisolated static let instanceID = UUID(uuidString: "a1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")!
     private nonisolated static let familyID = UUID(uuidString: "b1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")!
     private nonisolated static let deviceID = UUID(uuidString: "f1b2c3d4-e5f6-4a7b-8c9d-0e1f2a3b4c5d")!
-    private static let defaultsSuite = "com.olhapi.babytracker.uiTestOwnerFamily"
+    private static let defaultsSuite = AppIdentity.identifier("uiTestOwnerFamily")
 
     static func makeOwnerFamily(store: BabyStore) -> FamilySettingsViewModel {
         make(store: store, inFamily: true)

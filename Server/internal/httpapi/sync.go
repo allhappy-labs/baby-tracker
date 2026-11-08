@@ -46,7 +46,7 @@ func syncHandler(options Options) http.HandlerFunc {
 			writeSyncCode(w, r, options, "service_unavailable")
 			return
 		}
-		admitted, ok := admitAfterBody(w, r, options, int64(options.SyncLimits.SyncBodyBytes))
+		admitted, ok := admitAfterBody(w, r, options, digests, int64(options.SyncLimits.SyncBodyBytes), writeRequestError)
 		if !ok {
 			return
 		}
@@ -118,7 +118,9 @@ func syncCredential(w http.ResponseWriter, r *http.Request, options Options) ([]
 	}
 	digests, err := options.SessionService.AccessDigests(token)
 	if err != nil {
-		writeSyncFamilyCode(w, r, options, auth.Code(err))
+		// A refusal (session_revoked) logs nothing; any other failure is a
+		// 5xx whose fault line carries err.
+		writeSyncFamilyFault(w, r, options, auth.Code(err), err)
 		return nil, false
 	}
 	return digests, true

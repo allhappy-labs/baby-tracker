@@ -214,8 +214,8 @@ public struct ActivityPresentation: Sendable, Equatable {
         ActivityPhase.isActionable(breakEndsAt: breakEndsAt, now: now)
     }
 
-    /// One label per milk part, in session order. Solids never join a milk
-    /// session, so they have no part here. The same reading Home's parts row
+    /// One label per milk part, in session order. Solids added to a feed
+    /// have no part here: the card reads its milk. The same reading Home's parts row
     /// makes (`HomeScreen.parts(of:in:)`).
     @MainActor
     static func parts(of members: [FeedEntry]) -> [PartLabel] {

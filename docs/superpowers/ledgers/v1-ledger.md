@@ -72,7 +72,7 @@ Task 1-5: minor (deferred): BabyStore/BabySync placeholder tests assert a tautol
   Tests/BabyStoreTests with ChangeLogTests, Task 11 replaces Tests/BabySyncTests with
   SyncClientTests. Carried into both dispatches as "delete the placeholder file".
 Task 6: complete (commit 0d0b662, spec PASS, quality approved, 24/24 tests)
-  App Group id confirmed: group.com.olhapi.babytracker (cross-check at Task 20)
+  App Group id confirmed: group.com.example.babytracker (cross-check at Task 20)
   Placeholder source+test for BabyStore deleted as instructed.
 Task 7: fix round 1/5 (1 addressed, 0 open — record() had no rollback, leaving orphaned
   pending inserts with no log entry; commits 5a07912..4e6b0e0)

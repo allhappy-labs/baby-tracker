@@ -60,6 +60,8 @@ public final class SyncCoordinator {
     /// issue and not offline": a transient server answer backs off without
     /// either, and a caller must not report that as up to date.
     public private(set) var lastAttemptSucceeded = false
+    /// What the last failed attempt ran into, by kind only, for the log.
+    public private(set) var lastFailureKind: String?
     public private(set) var lastReason: SyncReason?
     /// Shrinks when the server says the batch was too big, and is remembered
     /// so the next attempt does not walk into the same refusal.
@@ -129,12 +131,14 @@ public final class SyncCoordinator {
         diagnosticSession?.beginAttempt()
         defer { diagnosticSession?.endAttempt() }
 
+        lastFailureKind = nil
         do {
             try await drainPages()
             currentIssue = nil
             isOffline = false
             lastAttemptSucceeded = true
         } catch let failure as CredentialBoundAuthFailure {
+            lastFailureKind = SyncLogKind.of(failure.underlying)
             // A response to an older install cannot revoke a newer sign-in
             // or clear an existing terminal issue. Retry itself is owned by
             // the transport's verified snapshot callback.
@@ -146,6 +150,7 @@ public final class SyncCoordinator {
                 await handle(SyncErrorCode(rawValue: code ?? "") ?? .serviceUnavailable)
             }
         } catch let error as SyncErrorCode {
+            lastFailureKind = SyncLogKind.of(error)
             // The server answered, so the network is not the problem.
             isOffline = false
             await handle(error)
@@ -154,6 +159,7 @@ public final class SyncCoordinator {
             // the entries are safe and the next attempt will carry them.
             // Transient Keychain/lease/network failures provide no evidence
             // that an existing fresh-proof requirement has been resolved.
+            lastFailureKind = SyncLogKind.of(error)
             if currentIssue.flatMap({ SyncErrorCode(rawValue: $0.code) })?.action != .freshProofRequired {
                 currentIssue = nil
             }

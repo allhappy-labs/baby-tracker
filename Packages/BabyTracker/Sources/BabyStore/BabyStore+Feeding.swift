@@ -183,17 +183,7 @@ public extension BabyStore {
         at date: Date? = nil,
         note: String? = nil
     ) throws -> FeedEntry {
-        let stamp = date ?? now
-        let entry = FeedEntry(
-            babyID: babyID,
-            kind: .solids,
-            startedAt: stamp,
-            timeZoneID: TimeZone.current.identifier,
-            createdBy: deviceID,
-            realm: activeRealm
-        )
-        entry.components = [.solids(id: UUID(), foods: foods, amount: amount)]
-        entry.endedAt = stamp
+        let entry = solidsEntry(foods: foods, amount: amount, at: date ?? now, for: babyID)
         entry.note = note
 
         context.insert(entry)
@@ -262,6 +252,20 @@ public extension BabyStore {
 extension BabyStore {
     /// A bottle, not yet inserted or linked to a session — shared by
     /// `logBottle` and `addFeedPart`, which differ only in that.
+    func solidsEntry(foods: [String], amount: SolidsAmount, at stamp: Date, for babyID: UUID) -> FeedEntry {
+        let entry = FeedEntry(
+            babyID: babyID,
+            kind: .solids,
+            startedAt: stamp,
+            timeZoneID: TimeZone.current.identifier,
+            createdBy: deviceID,
+            realm: activeRealm
+        )
+        entry.components = [.solids(id: UUID(), foods: foods, amount: amount)]
+        entry.endedAt = stamp
+        return entry
+    }
+
     func bottleEntry(volumeML: Double, contents: BottleContents, at stamp: Date, endedAt end: Date? = nil,
                      for babyID: UUID) -> FeedEntry {
         let entry = FeedEntry(

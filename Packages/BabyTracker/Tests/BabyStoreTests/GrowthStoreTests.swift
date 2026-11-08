@@ -301,7 +301,7 @@ struct GrowthStoreTests {
     // SwiftData's read-only configuration rejects the actual save, after the
     // API has mutated rows and recorded its change log inside the boundary.
     private func readOnlyStore(at url: URL, lock: URL) throws -> BabyStore {
-        let schema = Schema(versionedSchema: SchemaV10.self)
+        let schema = Schema(versionedSchema: SchemaV12.self)
         let container = try BabySchema.makeContainer(schema: schema,
             configurations: [ModelConfiguration(schema: schema, url: url, allowsSave: false)])
         return BabyStore(container: container, dateProvider: TestDateProvider(instant), deviceID: "readonly-test", coordinationLockURL: lock)

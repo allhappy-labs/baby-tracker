@@ -579,6 +579,89 @@ func TestMemoryPoolsLogAtMostOncePerMinute(t *testing.T) {
 	}
 }
 
+// The log throttle is a compare-and-swap on the pool's last-log time: 64
+// goroutines refused by a full verified pool inside one window, released
+// together, log exactly one line, and every refusal is still counted.
+func TestFullPoolLogsOncePerWindowUnderConcurrency(t *testing.T) {
+	const callers = 64
+	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
+	for round := range 25 {
+		var buffer lockedLog
+		store := newMemoryStore(memoryShards, 0) // one verified bucket per shard
+		limiter := newLimiter(store, testPepper(), func() time.Time { return now })
+		for i := range 2000 { // fill every shard; the store has no logger yet, so nothing is logged
+			_, _ = limiter.Take(t.Context(), ScopeSyncPullDevice, testUUID(i), Policy{Count: 120, Window: time.Minute})
+		}
+		if store.len() != memoryShards {
+			t.Fatalf("round %d: %d buckets, want the pool full at %d", round, store.len(), memoryShards)
+		}
+		before := limiter.Stats().VerifiedFull
+		store.logger = slog.New(slog.NewTextHandler(&buffer, nil))
+		var refused atomic.Int32
+		var ready, wait sync.WaitGroup
+		release := make(chan struct{})
+		ready.Add(callers)
+		for g := range callers {
+			wait.Go(func() {
+				ready.Done()
+				<-release
+				if _, err := limiter.Take(t.Context(), ScopeSyncPullDevice, testUUID(100000+g), Policy{Count: 120, Window: time.Minute}); err != nil {
+					refused.Add(1)
+				}
+			})
+		}
+		ready.Wait()
+		close(release)
+		wait.Wait()
+		if refused.Load() != callers {
+			t.Fatalf("round %d: %d of %d callers refused", round, refused.Load(), callers)
+		}
+		if logged := buffer.count("rate limiter verified-key pool full"); logged != 1 {
+			t.Fatalf("round %d: %d log lines for %d refusals in one window\n%s", round, logged, callers, buffer.String())
+		}
+		if got := limiter.Stats().VerifiedFull - before; got != callers {
+			t.Fatalf("round %d: %d refusals counted, want %d", round, got, callers)
+		}
+	}
+}
+
+// The same throttle at its narrowest: the decision itself, hammered by 64
+// goroutines released together, round after round, each round on a fresh
+// window; exactly one caller per round may log. (A load-then-store throttle
+// passes the single-shot test above by luck; this loop is what catches it.)
+func TestLogThrottleAdmitsOneCallerPerWindow(t *testing.T) {
+	const callers, rounds = 64, 3000
+	now := time.Date(2026, 9, 20, 12, 3, 4, 0, time.UTC)
+	store := newMemoryStore(0, 0)
+	store.logger = slog.New(slog.DiscardHandler)
+	for round := range rounds {
+		store.loggedAt[verifiedPool].Store(0)
+		var logged atomic.Int32
+		var ready, wait sync.WaitGroup
+		release := make(chan struct{})
+		ready.Add(callers)
+		for range callers {
+			wait.Go(func() {
+				ready.Done()
+				<-release
+				if store.shouldLog(verifiedPool, now) {
+					logged.Add(1)
+				}
+			})
+		}
+		ready.Wait()
+		close(release)
+		wait.Wait()
+		if logged.Load() != 1 {
+			t.Fatalf("round %d: %d callers logged in one window, want 1", round, logged.Load())
+		}
+		// Inside the window nobody logs; a minute later one does.
+		if store.shouldLog(verifiedPool, now.Add(fullLogEvery-time.Nanosecond)) || !store.shouldLog(verifiedPool, now.Add(fullLogEvery)) {
+			t.Fatalf("round %d: the window is not one minute", round)
+		}
+	}
+}
+
 type lockedLog struct {
 	mu      sync.Mutex
 	builder strings.Builder

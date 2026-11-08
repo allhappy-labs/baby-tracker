@@ -30,14 +30,15 @@ struct AskPlan {
 
 @Generable
 struct AskRead: Equatable {
-    @Guide(description: "totals for how many, how much, comparisons, trends and summaries; entries for individual entries and their times; latest for when the last feed, sleep, diaper or med was",
+    @Guide(description: "totals for how many, how much, comparisons, trends and summaries; entries for individual entries and their times; latest for when the last feed, sleep, diaper, med, vaccine or pumping session was",
            .anyOf(["totals", "entries", "latest"]))
     var tool: String
     @Guide(description: "The period to read; date for one specific day", .anyOf(AskCareLog.ranges))
     var range: String
     @Guide(description: "The day as YYYY-MM-DD when range is date; otherwise empty")
     var date: String
-    @Guide(description: "Which entries, for entries reads", .anyOf(["all", "feed", "sleep", "diaper", "med"]))
+    @Guide(description: "Which entries, for entries reads; vaccine lists every vaccination the baby has had; pump is the parent's milk pumping, not a feed",
+           .anyOf(["all", "feed", "sleep", "diaper", "med", "vaccine", "pump"]))
     var kind: String
     @Guide(description: "true for one totals line per day")
     var byDay: Bool

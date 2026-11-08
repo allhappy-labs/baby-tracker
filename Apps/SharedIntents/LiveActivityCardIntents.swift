@@ -25,7 +25,7 @@ import BabyFeature
 // Not discoverable: these mean nothing outside the card that built them.
 
 /// The card's Stop, for a breast part or a timed bottle. A running bottle is
-/// saved at the baby's usual amount — the tap must work on a locked phone —
+/// saved at the previous bottle's amount — the tap must work on a locked phone —
 /// and the app offers "Set amount" for it next time it is on screen.
 struct StopFeedCardIntent: LiveActivityIntent {
     static let title: LocalizedStringResource = "Stop the feed"

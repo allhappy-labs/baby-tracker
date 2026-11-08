@@ -4,6 +4,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
@@ -17,10 +18,17 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"babytracker/server/internal/apns"
 	"babytracker/server/internal/config"
+	"babytracker/server/internal/protocol"
+	"babytracker/server/internal/realtime"
+	"babytracker/server/internal/testpg"
+	"babytracker/server/internal/wake"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
 // identityTestAPNSConfig is a throwaway key and made-up identifiers: nothing
@@ -52,13 +60,21 @@ type recordedAPNS struct {
 		ProviderTokenIssuer string            `json:"provider_token_issuer"`
 		Payload             json.RawMessage   `json:"payload"`
 		Acknowledged        bool              `json:"acknowledged"`
+		ReceivedAt          string            `json:"received_at"`
 	} `json:"requests"`
+	Total        int `json:"total"`
+	InFlightPeak int `json:"in_flight_peak"`
 }
 
 func readIdentityTestAPNS(t *testing.T, handler http.Handler) recordedAPNS {
 	t.Helper()
+	return readIdentityTestAPNSPath(t, handler, "/__identitytest/apns")
+}
+
+func readIdentityTestAPNSPath(t *testing.T, handler http.Handler, path string) recordedAPNS {
+	t.Helper()
 	response := httptest.NewRecorder()
-	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__identitytest/apns", nil))
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, path, nil))
 	if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("GET /__identitytest/apns: %d %s", response.Code, response.Body)
 	}
@@ -194,6 +210,139 @@ func TestIdentityTestAPNSWithoutTheSinkRefusesToStart(t *testing.T) {
 	}
 }
 
+// BT_IDENTITYTEST_APNS_SINK_LATENCY_MS is the recorder's delay before it
+// answers: whole milliseconds from 0 to 2,000, 0 when unset. Anything else
+// refuses to start, naming the variable.
+func TestIdentityTestAPNSSinkLatencyIsBoundedAtStartup(t *testing.T) {
+	t.Setenv(identityTestAPNSSinkEnv, "1")
+	for _, value := range []string{"-1", "2001", "abc", "1.5", " 5", "5ms", "+5", "99999999999999999999"} {
+		t.Setenv(identityTestAPNSSinkLatencyEnv, value)
+		client, err := newAPNSClient(identityTestAPNSConfig(t))
+		if err == nil || client != nil || !strings.Contains(err.Error(), identityTestAPNSSinkLatencyEnv) {
+			t.Fatalf("latency %q: %v %v, want a refusal naming %s", value, client, err, identityTestAPNSSinkLatencyEnv)
+		}
+	}
+	for value, want := range map[string]time.Duration{"": 0, "0": 0, "100": 100 * time.Millisecond, "2000": 2 * time.Second} {
+		t.Setenv(identityTestAPNSSinkLatencyEnv, value)
+		client, err := newAPNSClient(identityTestAPNSConfig(t))
+		if err != nil || client == nil {
+			t.Fatalf("latency %q: %v", value, err)
+		}
+		identityTestAPNS.RLock()
+		got := identityTestAPNS.recorder.latency
+		identityTestAPNS.RUnlock()
+		if got != want {
+			t.Fatalf("latency %q: the recorder waits %v, want %v", value, got, want)
+		}
+	}
+}
+
+// The delay comes before the answer: a push waits for it, pushes made at
+// once overlap in the recorder (which reports the most it held at once),
+// and a push whose context ends inside the delay is Ambiguous (the recorder
+// had the request) and recorded unacknowledged.
+func TestIdentityTestAPNSSinkLatencyDelaysTheAnswer(t *testing.T) {
+	t.Setenv(identityTestAPNSSinkEnv, "1")
+	t.Setenv(identityTestAPNSSinkLatencyEnv, "300")
+	client, err := newAPNSClient(identityTestAPNSConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := wrapIdentityTestHandler(http.NotFoundHandler(), "com.example.protocol")
+	token := bytes.Repeat([]byte{0x7c}, 32)
+	started := time.Now()
+	if result, err := client.Wake(t.Context(), apns.Sandbox, token); err != nil || result.Class != apns.Accepted {
+		t.Fatalf("%+v %v", result, err)
+	}
+	if elapsed := time.Since(started); elapsed < 300*time.Millisecond {
+		t.Fatalf("the answer came after %v, want the 300 ms delay", elapsed)
+	}
+	started = time.Now()
+	var wg sync.WaitGroup
+	for range 5 {
+		wg.Go(func() {
+			if result, err := client.Wake(t.Context(), apns.Sandbox, token); err != nil || result.Class != apns.Accepted {
+				t.Errorf("%+v %v", result, err)
+			}
+		})
+	}
+	wg.Wait()
+	if elapsed := time.Since(started); elapsed >= 1500*time.Millisecond {
+		t.Fatalf("five pushes at once took %v: the delay serialised them", elapsed)
+	}
+	record := readIdentityTestAPNS(t, handler)
+	if record.InFlightPeak != 5 || record.Total != 6 {
+		t.Fatalf("in_flight_peak %d total %d, want 5 and 6", record.InFlightPeak, record.Total)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 50*time.Millisecond)
+	defer cancel()
+	started = time.Now()
+	if result, err := client.Wake(ctx, apns.Sandbox, token); !errors.Is(err, apns.ErrOutcomeUnknown) || result.Class != apns.Ambiguous {
+		t.Fatalf("a push whose context ended in the delay: %+v %v, want Ambiguous", result, err)
+	}
+	if elapsed := time.Since(started); elapsed >= 300*time.Millisecond {
+		t.Fatalf("the cancelled push returned after %v, want at its context's end", elapsed)
+	}
+	record = readIdentityTestAPNS(t, handler)
+	if last := record.Requests[len(record.Requests)-1]; last.Sequence != 7 || last.Acknowledged {
+		t.Fatalf("the cancelled push was recorded %+v, want sequence 7 unacknowledged", last)
+	}
+}
+
+// The recorder keeps the latest 4,096 requests, numbered from the first, and
+// GET /__identitytest/apns?after=N returns only those numbered past N, so a
+// sampler reads each request once however long the run.
+func TestIdentityTestAPNSRecorderKeepsTheLatestRequests(t *testing.T) {
+	t.Setenv(identityTestAPNSSinkEnv, "1")
+	t.Setenv(identityTestAPNSSinkLatencyEnv, "")
+	client, err := newAPNSClient(identityTestAPNSConfig(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := wrapIdentityTestHandler(http.NotFoundHandler(), "com.example.protocol")
+	started := time.Now()
+	for i := range 4100 {
+		token := bytes.Repeat([]byte{byte(i)}, 32)
+		if _, err := client.Wake(t.Context(), apns.Sandbox, token); err != nil {
+			t.Fatal(err)
+		}
+	}
+	record := readIdentityTestAPNS(t, handler)
+	if len(record.Requests) != 4096 || record.Total != 4100 || record.InFlightPeak != 1 {
+		t.Fatalf("%d requests, total %d, in_flight_peak %d; want the latest 4,096 of 4,100, one at a time", len(record.Requests), record.Total, record.InFlightPeak)
+	}
+	for i, got := range record.Requests {
+		if got.Sequence != i+5 || got.Token != hex.EncodeToString(bytes.Repeat([]byte{byte(i + 4)}, 32)) {
+			t.Fatalf("request %d: sequence %d token %s, want sequence %d", i, got.Sequence, got.Token, i+5)
+		}
+	}
+	after := readIdentityTestAPNSPath(t, handler, "/__identitytest/apns?after=4098")
+	if len(after.Requests) != 2 || after.Requests[0].Sequence != 4099 || after.Requests[1].Sequence != 4100 || after.Total != 4100 {
+		t.Fatalf("after=4098: %+v", after)
+	}
+	if all := readIdentityTestAPNSPath(t, handler, "/__identitytest/apns?after=0"); len(all.Requests) != 4096 {
+		t.Fatalf("after=0: %d requests", len(all.Requests))
+	}
+	// Every request carries when the recorder took it (the load runner's
+	// duplicate check reads it): RFC 3339 with nanoseconds, UTC, in
+	// sequence order, within the test's own time.
+	var previous time.Time
+	for _, got := range record.Requests {
+		at, err := time.Parse(time.RFC3339Nano, got.ReceivedAt)
+		if err != nil || at.Location() != time.UTC || at.Before(previous) || at.Before(started) || at.After(time.Now()) {
+			t.Fatalf("request %d received_at %q (%v), previous %v", got.Sequence, got.ReceivedAt, err, previous)
+		}
+		previous = at
+	}
+	for _, bad := range []string{"x", "-1", "1.5", ""} {
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__identitytest/apns?after="+bad, nil))
+		if response.Code != http.StatusBadRequest {
+			t.Fatalf("after=%q: %d, want 400", bad, response.Code)
+		}
+	}
+}
+
 // apns-preflight in an identitytest build goes to the recorder through
 // newAPNSClient, and a Live Activity preflight reaches it with its push type,
 // derived topic, priority and main's quiet update payload.
@@ -231,5 +380,101 @@ func TestIdentityTestAPNSRecorderSeesTheLiveActivityPreflight(t *testing.T) {
 		if pushType == "background" && string(got.Payload) != apns.WakePayload {
 			t.Fatalf("background preflight payload %s", got.Payload)
 		}
+	}
+}
+
+// wakeTickRoute isolates GET /__identitytest/wake's worker for one test and
+// returns its count reader.
+func wakeTickRoute(t *testing.T) (http.Handler, func() uint64) {
+	t.Helper()
+	identityTestWake.Lock()
+	previous := identityTestWake.worker
+	identityTestWake.worker = nil
+	identityTestWake.Unlock()
+	t.Cleanup(func() { identityTestWakeWorker(previous) })
+	handler := wrapIdentityTestHandler(http.NotFoundHandler(), "com.example.protocol")
+	return handler, func() uint64 {
+		t.Helper()
+		response := httptest.NewRecorder()
+		handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__identitytest/wake", nil))
+		if response.Code != http.StatusOK || response.Header().Get("Cache-Control") != "no-store" || response.Header().Get("Content-Type") != "application/json" {
+			t.Fatalf("GET /__identitytest/wake: %d %v %s", response.Code, response.Header(), response.Body)
+		}
+		var body map[string]json.RawMessage
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || len(body) != 1 {
+			t.Fatalf("wake body %s: %v", response.Body, err)
+		}
+		var count uint64
+		if err := json.Unmarshal(body["ticks"], &count); err != nil {
+			t.Fatalf("ticks %s: %v", body["ticks"], err)
+		}
+		return count
+	}
+}
+
+// GET /__identitytest/wake reports the composed wake worker's successful
+// ticks (Totals().TicksSucceeded), so the E2E harness waits for whole ticks
+// rather than sleeping past the interval: 503 before newWakeWorker composed
+// a worker, then 0 however many ticks fail. Here the pool points at a
+// closed port, so every tick fails at BEGIN: it ran (Ticks grows), but it
+// scanned and sent nothing, so the route does not count it.
+func TestWakeTickRouteReportsTheWorkersTicks(t *testing.T) {
+	handler, ticks := wakeTickRoute(t)
+	response := httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/__identitytest/wake", nil))
+	if response.Code != http.StatusServiceUnavailable || response.Header().Get("Cache-Control") != "no-store" {
+		t.Fatalf("wake route before a worker: %d %v", response.Code, response.Header())
+	}
+	pool, err := pgxpool.New(t.Context(), "postgres://identitytest@127.0.0.1:1/none?sslmode=disable&connect_timeout=5")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(pool.Close)
+	hub, err := realtime.NewHub(t.Context(), realtime.HubOptions{Limits: protocol.DefaultLimits()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	worker := newWakeWorker(config.Config{}, hub, pool, nil, wake.NewTracker(0), nil, nil)
+	if got := ticks(); got != 0 {
+		t.Fatalf("a new worker reports %d ticks", got)
+	}
+	for ran := uint64(1); ran <= 3; ran++ {
+		if _, err := worker.Tick(t.Context()); err == nil {
+			t.Fatal("a tick against a closed port succeeded")
+		}
+		if got, totals := ticks(), worker.Totals(); got != 0 || totals.Ticks != ran {
+			t.Fatalf("after failed tick %d the route reports %d (worker %+v)", ran, got, totals)
+		}
+	}
+}
+
+// With a database, each successful tick of the newest composed worker
+// counts once.
+func TestWakeTickRouteCountsSuccessfulTicksOfTheNewestWorker(t *testing.T) {
+	db := testpg.New(t)
+	_, ticks := wakeTickRoute(t)
+	hub, err := realtime.NewHub(t.Context(), realtime.HubOptions{Limits: protocol.DefaultLimits()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	first := newWakeWorker(config.Config{}, hub, db.Maintenance, nil, wake.NewTracker(0), nil, nil)
+	for want := uint64(1); want <= 3; want++ {
+		if _, err := first.Tick(t.Context()); err != nil {
+			t.Fatalf("tick %d: %v", want, err)
+		}
+		if got := ticks(); got != want || got != first.Totals().TicksSucceeded {
+			t.Fatalf("after tick %d the route reports %d (worker %+v)", want, got, first.Totals())
+		}
+	}
+	// The route follows the worker newWakeWorker composed last.
+	second := newWakeWorker(config.Config{}, hub, db.Maintenance, nil, wake.NewTracker(0), nil, nil)
+	if got := ticks(); got != 0 {
+		t.Fatalf("the route reports %d ticks for a new worker", got)
+	}
+	if _, err := second.Tick(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := ticks(); got != 1 {
+		t.Fatalf("after the new worker's tick the route reports %d", got)
 	}
 }

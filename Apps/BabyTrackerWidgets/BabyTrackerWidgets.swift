@@ -7,5 +7,6 @@ struct BabyTrackerWidgets: WidgetBundle {
         StatusWidget()
         QuickLogWidget()
         FeedActivityWidget()
+        PumpActivityWidget()
     }
 }

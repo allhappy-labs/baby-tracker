@@ -129,7 +129,7 @@ func AcceptedPayloadVersion(kind, operation string, version uint32) bool {
 func decodeMutationPayload(kind, operation string, raw []byte) (Payload, error) {
 	var target Payload
 	switch {
-	case operation == "delete" && (kind == "baby" || kind == "feed" || kind == "sleep" || kind == "diaper" || kind == "supplement" || kind == "growth_profile" || kind == "measurement"):
+	case operation == "delete" && (kind == "baby" || kind == "feed" || kind == "sleep" || kind == "diaper" || kind == "supplement" || kind == "growth_profile" || kind == "measurement" || kind == "immunization" || kind == "pump"):
 		target = DeletePayload{}
 	case (operation == "create" || operation == "update") && kind == "baby":
 		target = BabyPayload{}
@@ -143,6 +143,10 @@ func decodeMutationPayload(kind, operation string, raw []byte) (Payload, error) 
 		target = MeasurementPayload{}
 	case (operation == "create" || operation == "update") && kind == "supplement":
 		target = SupplementPayload{}
+	case (operation == "create" || operation == "update") && kind == "immunization":
+		target = ImmunizationPayload{}
+	case (operation == "create" || operation == "update") && kind == "pump":
+		target = PumpPayload{}
 	case (operation == "create" || operation == "update") && kind == "diaper":
 		target = DiaperPayload{}
 	case operation == "timer_start" && kind == "timer":
@@ -161,7 +165,7 @@ func decodeMutationPayload(kind, operation string, raw []byte) (Payload, error) 
 		if json.Unmarshal(raw, &object) != nil || object == nil {
 			return nil, ErrInvalidMutation
 		}
-		if kind == "baby" {
+		if kind == "baby" || kind == "pump" {
 			if len(object) != 0 {
 				return nil, ErrInvalidMutation
 			}
@@ -229,6 +233,20 @@ func validateRequiredPayloadShape(payload Payload, raw []byte) error {
 		}
 	case SupplementPayload:
 		required = []string{"baby_id", "started_at", "time_zone_id", "name", "logged_at"}
+	case ImmunizationPayload:
+		required = []string{"baby_id", "given_at", "time_zone_id", "vaccine"}
+		for _, key := range []string{"dose", "note"} {
+			if _, present := object[key]; !present {
+				return errInvalidRequest
+			}
+		}
+	case PumpPayload:
+		required = []string{"started_at", "time_zone_id", "side"}
+		for _, key := range []string{"ended_at", "volume_ml", "note"} {
+			if _, present := object[key]; !present {
+				return errInvalidRequest
+			}
+		}
 	case DiaperPayload:
 		required = []string{"baby_id", "started_at", "time_zone_id", "contents"}
 	case TimerStartPayload:
@@ -392,6 +410,19 @@ func normalizeDecodedPayload(payload Payload) Payload {
 		value.StartedAt = normalizeTimestampForHash(value.StartedAt)
 		value.TimeZoneID = normalizeString(value.TimeZoneID)
 		value.Name = strings.TrimSpace(normalizeString(value.Name))
+		value.Note = normalizeOptionalString(value.Note)
+		return value
+	case ImmunizationPayload:
+		value.GivenAt = normalizeTimestampForHash(value.GivenAt)
+		value.TimeZoneID = normalizeString(value.TimeZoneID)
+		value.Vaccine = strings.TrimSpace(normalizeString(value.Vaccine))
+		value.Note = normalizeOptionalString(value.Note)
+		return value
+	case PumpPayload:
+		value.StartedAt = normalizeTimestampForHash(value.StartedAt)
+		value.EndedAt = normalizeOptionalTimestamp(value.EndedAt)
+		value.TimeZoneID = normalizeString(value.TimeZoneID)
+		value.Side = normalizeString(value.Side)
 		value.Note = normalizeOptionalString(value.Note)
 		return value
 	case DiaperPayload:

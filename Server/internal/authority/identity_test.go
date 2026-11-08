@@ -181,6 +181,38 @@ func TestSignInExactRetryReturnsSameSession(t *testing.T) {
 	wantCode(t, err, "command_id_reused")
 }
 
+// The receipt outlives the sign-in's audit row (rows are kept at least 13
+// months, receipts forever): an exact retry after the row expired with its
+// partition, so its seq is at the account's retention anchor, still replays,
+// without the registration flag. The same row missing with no anchor over it
+// is not expired, and stays service_unavailable.
+func TestSignInExactRetryAfterItsAuditRowExpired(t *testing.T) {
+	f := authoritytest.New(t)
+	key := identityKey(t, "identity.v1")
+	accountID := authoritytest.NewID(t)
+	c := newSignIn(t, f, []string{key}, accountID, 1)
+	first, err := f.Service.SignIn(t.Context(), c.in)
+	if err != nil || !first.Registered {
+		t.Fatalf("first sign-in %+v (%v), want a registration", first, err)
+	}
+	row := readAudit(t, f, authority.ScopeAccount, accountID)[0]
+	f.Exec(t, `DELETE FROM security_audit_events WHERE scope='account' AND scope_id=$1`, accountID)
+	_, err = f.Service.SignIn(t.Context(), c.in)
+	wantCode(t, err, "service_unavailable")
+
+	f.Exec(t, `INSERT INTO audit_retention_anchors(scope,scope_id,anchor_seq,anchor_hash,anchored_at,dropped_before) VALUES ('account',$1,$2,$3,$4,$4)`,
+		accountID, int64(row.Seq), row.Hash[:], f.Now)
+	retry, err := f.Service.SignIn(t.Context(), c.in)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := first
+	want.Registered, want.Restored = false, false
+	if retry != want {
+		t.Fatalf("retry after expiry %+v, want %+v", retry, want)
+	}
+}
+
 func TestSignInRestoresIdentityUnavailable(t *testing.T) {
 	f := authoritytest.New(t)
 	account := f.Account(t)
@@ -304,7 +336,7 @@ func TestIdentityUnavailableRevokesSessionsAndIsIdempotentByNotification(t *test
 
 	in := authority.IdentityUnavailable{CommandID: stored, AccountID: account, Candidates: []string{key}, NotificationDigest: hex.EncodeToString(make([]byte, 32)), At: f.Now}
 	result, err := f.Service.MarkIdentityUnavailable(t.Context(), in)
-	if err != nil || result.CommandID != stored || result.Revision != 1 {
+	if err != nil || result.CommandID != stored || result.Revision != 2 { // after the sign-in's row (authoritytest.Session)
 		t.Fatalf("%+v %v", result, err)
 	}
 	if n := count(t, f, `SELECT count(*) FROM accounts WHERE id=$1 AND status='identity_unavailable'`, account); n != 1 {
@@ -320,7 +352,7 @@ func TestIdentityUnavailableRevokesSessionsAndIsIdempotentByNotification(t *test
 		t.Fatalf("revoked_at %v", row.RevokedAt)
 	}
 	rows := readAudit(t, f, authority.ScopeAccount, account)
-	if len(rows) != 1 || rows[0].Kind != "identity_unavailable" {
+	if len(rows) != 2 || rows[1].Kind != "identity_unavailable" {
 		t.Fatalf("audit %+v", rows)
 	}
 	retry, err := f.Service.MarkIdentityUnavailable(t.Context(), in)
@@ -334,7 +366,7 @@ func TestIdentityUnavailableRevokesSessionsAndIsIdempotentByNotification(t *test
 	changed.CommandID, changed.NotificationDigest = stored, ""
 	_, err = f.Service.MarkIdentityUnavailable(t.Context(), changed)
 	wantCode(t, err, "command_id_reused")
-	if n := len(readAudit(t, f, authority.ScopeAccount, account)); n != 1 {
+	if n := len(readAudit(t, f, authority.ScopeAccount, account)); n != 2 {
 		t.Fatalf("%d audit rows", n)
 	}
 	wrongAccount := in

@@ -48,6 +48,11 @@ func ReadOnlyForTest(s *Service, ctx context.Context, fn func(pgx.Tx) error) err
 	return s.readOnly(ctx, fn)
 }
 
+// VerifierReadForTest runs fn in the verifier's read transaction.
+func VerifierReadForTest(v *Verifier, ctx context.Context, fn func(pgx.Tx) error) error {
+	return v.read(ctx, fn)
+}
+
 // PublishForTest publishes items as a committed command would.
 func (s *Service) PublishForTest(items ...SecurityInvalidation) { s.publish(items...) }
 
@@ -67,3 +72,12 @@ var PruneSQL = map[string]string{
 
 // PruneBegin is the prune transaction's BEGIN query.
 const PruneBegin = pruneBegin
+
+// SetAckBegin replaces AuthenticateAndAcknowledgeRefresh's BEGIN (a failing
+// one stands for a database that refuses read-write transactions) until the
+// returned restore is called. Tests using it must not run in parallel.
+func SetAckBegin(sql string) (restore func()) {
+	previous := ackBegin
+	ackBegin = sql
+	return func() { ackBegin = previous }
+}

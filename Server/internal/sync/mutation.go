@@ -40,6 +40,9 @@ type Service struct {
 	policy    care.Policy
 	imports   care.ImportAdmission
 	progress  Progress
+	// pageLookup fills a first page's random token lookup (nil: crypto/rand;
+	// tests force a repeat).
+	pageLookup func([]byte) (int, error)
 }
 
 // SetImportAdmission admits import-tagged mutations (the importer).

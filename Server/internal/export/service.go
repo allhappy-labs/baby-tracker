@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"time"
 
 	"babytracker/server/internal/access"
 	"babytracker/server/internal/authority"
@@ -93,14 +92,15 @@ func (s *Service) Create(ctx context.Context, p access.Principal, request protoc
 		var j Job
 		var bytes *uint64
 		var sha, code *string
-		err := tx.QueryRow(ctx, `SELECT id::text,family_id::text,requester_account_id::text,request_id::text,server_instance_id::text,recovery_epoch,state,created_at,expires_at,plaintext_bytes,plaintext_sha256,last_code
+		var lapsed bool
+		err := tx.QueryRow(ctx, `SELECT id::text,family_id::text,requester_account_id::text,request_id::text,server_instance_id::text,recovery_epoch,state,created_at,expires_at,plaintext_bytes,plaintext_sha256,last_code,expires_at<=now()
 			FROM public.export_jobs WHERE requester_account_id=$1 AND request_id=$2`, p.AccountID, request.RequestID).
-			Scan(&j.ID, &j.FamilyID, &j.RequesterAccountID, &j.RequestID, &j.InstanceID, &j.RecoveryEpoch, &j.State, &j.CreatedAt, &j.ExpiresAt, &bytes, &sha, &code)
+			Scan(&j.ID, &j.FamilyID, &j.RequesterAccountID, &j.RequestID, &j.InstanceID, &j.RecoveryEpoch, &j.State, &j.CreatedAt, &j.ExpiresAt, &bytes, &sha, &code, &lapsed)
 		if err == nil {
 			if j.InstanceID != s.options.Identity.InstanceID || j.RecoveryEpoch != s.options.Identity.RecoveryEpoch {
 				return ErrAuthorizationChanged
 			}
-			if !s.options.Now().Before(j.ExpiresAt) {
+			if lapsed {
 				j.State, bytes, sha, code = "expired", nil, nil, nil
 			}
 			result = statusFromJob(j, bytes, sha, code)
@@ -126,8 +126,8 @@ func (s *Service) Create(ctx context.Context, p access.Principal, request protoc
 			return ErrInProgress
 		}
 		var recent bool
-		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.export_rate_reservations WHERE accepted_at>$3
-			AND ((scope='family' AND key_id=$1) OR (scope='account' AND key_id=$2)))`, familyID, p.AccountID, s.options.Now().UTC().Add(-6*time.Hour)).Scan(&recent); err != nil {
+		if err := tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM public.export_rate_reservations WHERE accepted_at>now()-interval '6 hours'
+			AND ((scope='family' AND key_id=$1) OR (scope='account' AND key_id=$2)))`, familyID, p.AccountID).Scan(&recent); err != nil {
 			return err
 		}
 		if recent {
@@ -137,14 +137,21 @@ func (s *Service) Create(ctx context.Context, p access.Principal, request protoc
 		if err != nil {
 			return err
 		}
-		now := s.options.Now().UTC().Truncate(time.Microsecond)
-		j = Job{ID: id, FamilyID: familyID, RequesterAccountID: p.AccountID, RequestID: request.RequestID, State: "queued", CreatedAt: now, ExpiresAt: now.Add(24 * time.Hour)}
-		if _, err := tx.Exec(ctx, `INSERT INTO public.export_jobs(id,family_id,requester_account_id,request_id,server_instance_id,recovery_epoch,security_revision,state,created_at,expires_at,next_attempt_at)
-			VALUES($1,$2,$3,$4,$5,$6,$7,'queued',$8,$9,now())`, id, familyID, p.AccountID, request.RequestID, s.options.Identity.InstanceID, s.options.Identity.RecoveryEpoch, grant.Revision, now, j.ExpiresAt); err != nil {
+		// One clock stamps the job: the database's, which the worker's claim
+		// and expiry pass, the rate window and the expiry checks here all
+		// read. now() is the transaction's start, so created_at, expires_at,
+		// next_attempt_at and accepted_at are one instant, and any skew
+		// between this node and PostgreSQL moves none of them against each
+		// other.
+		j = Job{ID: id, FamilyID: familyID, RequesterAccountID: p.AccountID, RequestID: request.RequestID, State: "queued"}
+		if err := tx.QueryRow(ctx, `INSERT INTO public.export_jobs(id,family_id,requester_account_id,request_id,server_instance_id,recovery_epoch,security_revision,state,created_at,expires_at,next_attempt_at)
+			VALUES($1,$2,$3,$4,$5,$6,$7,'queued',now(),now()+interval '24 hours',now()) RETURNING created_at,expires_at`,
+			id, familyID, p.AccountID, request.RequestID, s.options.Identity.InstanceID, s.options.Identity.RecoveryEpoch, grant.Revision).
+			Scan(&j.CreatedAt, &j.ExpiresAt); err != nil {
 			return err
 		}
 		if _, err := tx.Exec(ctx, `INSERT INTO public.export_rate_reservations(scope,key_id,request_id,accepted_at)
-			VALUES('family',$1,$3,$4),('account',$2,$3,$4)`, familyID, p.AccountID, request.RequestID, now); err != nil {
+			VALUES('family',$1,$3,now()),('account',$2,$3,now())`, familyID, p.AccountID, request.RequestID); err != nil {
 			return err
 		}
 		result = statusFromJob(j, nil, nil, nil)
@@ -170,9 +177,10 @@ func (s *Service) Status(ctx context.Context, p access.Principal, id string) (pr
 		var j Job
 		var bytes *uint64
 		var sha, code *string
-		err := tx.QueryRow(ctx, `SELECT id::text,family_id::text,requester_account_id::text,request_id::text,server_instance_id::text,recovery_epoch,state,created_at,expires_at,plaintext_bytes,plaintext_sha256,last_code
+		var lapsed bool
+		err := tx.QueryRow(ctx, `SELECT id::text,family_id::text,requester_account_id::text,request_id::text,server_instance_id::text,recovery_epoch,state,created_at,expires_at,plaintext_bytes,plaintext_sha256,last_code,expires_at<=now()
 			FROM public.export_jobs WHERE id=$1 AND family_id=$2 AND requester_account_id=$3`, id, familyID, p.AccountID).
-			Scan(&j.ID, &j.FamilyID, &j.RequesterAccountID, &j.RequestID, &j.InstanceID, &j.RecoveryEpoch, &j.State, &j.CreatedAt, &j.ExpiresAt, &bytes, &sha, &code)
+			Scan(&j.ID, &j.FamilyID, &j.RequesterAccountID, &j.RequestID, &j.InstanceID, &j.RecoveryEpoch, &j.State, &j.CreatedAt, &j.ExpiresAt, &bytes, &sha, &code, &lapsed)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -182,7 +190,7 @@ func (s *Service) Status(ctx context.Context, p access.Principal, id string) (pr
 		if j.InstanceID != s.options.Identity.InstanceID || j.RecoveryEpoch != s.options.Identity.RecoveryEpoch {
 			return ErrAuthorizationChanged
 		}
-		if !s.options.Now().Before(j.ExpiresAt) {
+		if lapsed {
 			j.State = "expired"
 			bytes = nil
 			sha = nil
@@ -234,11 +242,11 @@ func (s *Service) Download(ctx context.Context, p access.Principal, id string, o
 		var headerRaw []byte
 		var attempt int
 		var state string
-		var expires time.Time
+		var lapsed bool
 		var instanceID string
 		var recoveryEpoch uint64
-		err := tx.QueryRow(ctx, `SELECT header,attempt,state,expires_at,server_instance_id::text,recovery_epoch FROM public.export_jobs WHERE id=$1 AND family_id=$2 AND requester_account_id=$3`, id, familyID, p.AccountID).
-			Scan(&headerRaw, &attempt, &state, &expires, &instanceID, &recoveryEpoch)
+		err := tx.QueryRow(ctx, `SELECT header,attempt,state,expires_at<=now(),server_instance_id::text,recovery_epoch FROM public.export_jobs WHERE id=$1 AND family_id=$2 AND requester_account_id=$3`, id, familyID, p.AccountID).
+			Scan(&headerRaw, &attempt, &state, &lapsed, &instanceID, &recoveryEpoch)
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrNotFound
 		}
@@ -248,7 +256,7 @@ func (s *Service) Download(ctx context.Context, p access.Principal, id string, o
 		if instanceID != s.options.Identity.InstanceID || recoveryEpoch != s.options.Identity.RecoveryEpoch {
 			return ErrAuthorizationChanged
 		}
-		if !s.options.Now().Before(expires) {
+		if lapsed {
 			return ErrExpired
 		}
 		if state != "ready" {

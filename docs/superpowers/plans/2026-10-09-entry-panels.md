@@ -19,7 +19,7 @@
 - Every new user-facing string goes through `LoggingL10n` / `HomeL10n` and gets `de`, `fr`, `es`, `it`, `uk` translations in the target's `Localizable.xcstrings` via `scripts/add-catalog-strings.py`.
 - Tests assert logic, never geometry (no point sizes, no stated heights).
 - `make test` asserts a literal total (`EXPECTED_TESTS` in `Makefile`): bump/lower it in the same commit as any test added/removed, and say so in the commit message.
-- Simulator: only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`; `pgrep xcodebuild` first — one run at a time.
+- Simulator: only `platform=iOS Simulator,id=<simulator-udid>`; `pgrep xcodebuild` first — one run at a time.
 - UI tests: run only the affected classes with `-only-testing:`; never the full suite.
 - Work in worktree `.worktrees/entry-panels` on branch `entry-panels`; use `/usr/bin/git` there (RTK rewrite trips the worktree guard).
 
@@ -112,10 +112,10 @@ Expected: `Build complete!`
 
 ```bash
 pgrep xcodebuild && echo "BUSY — wait" || xcodebuild test -scheme BabyTracker \
-  -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -only-testing:BabyTrackerUITests/EditFlowTests 2>&1 | tail -20
 ```
-Expected: `** TEST SUCCEEDED **`, and no "Restarting after unexpected exit" / "Failed to get matching snapshot" / idle-timeout lines in the log. Then open History → a lone breast feed in the simulator, screenshot with Details collapsed and expanded (`xcrun simctl io D17101C9-01EB-488D-AFE1-58E6C089B853 screenshot /tmp/part-collapsed.png`): no empty band below the footer; expanding grows the sheet.
+Expected: `** TEST SUCCEEDED **`, and no "Restarting after unexpected exit" / "Failed to get matching snapshot" / idle-timeout lines in the log. Then open History → a lone breast feed in the simulator, screenshot with Details collapsed and expanded (`xcrun simctl io <simulator-udid> screenshot /tmp/part-collapsed.png`): no empty band below the footer; expanding grows the sheet.
 
 **If the run hangs or the sheet oscillates: STOP, do not continue to Task 2, and report** — the whole plan relies on this.
 
@@ -1601,13 +1601,13 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 
 ```bash
 pgrep xcodebuild && echo BUSY || xcodebuild -scheme BabyTracker \
-  -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build 2>&1 | tail -3
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' build 2>&1 | tail -3
 ```
 Expected: `** BUILD SUCCEEDED **`.
 
 - [ ] **Step 2: Screenshot every panel**
 
-For each of: Past entry (breast, bottle without end, bottle with end, sleep), History edit of breast / bottle / sleep / diaper / solids / supplement / measurement, the session sheet, a running-timer editor with a finished part, Diaper / Solids / Supplement / Measurement new — capture Details collapsed and expanded, at default text size and at `accessibility-large` (`xcrun simctl ui D17101C9-01EB-488D-AFE1-58E6C089B853 content_size accessibility-large`, then back to `large`). Save as `docs/verification/2026-10-09-entry-panels/<panel>-<state>.png`.
+For each of: Past entry (breast, bottle without end, bottle with end, sleep), History edit of breast / bottle / sleep / diaper / solids / supplement / measurement, the session sheet, a running-timer editor with a finished part, Diaper / Solids / Supplement / Measurement new — capture Details collapsed and expanded, at default text size and at `accessibility-large` (`xcrun simctl ui <simulator-udid> content_size accessibility-large`, then back to `large`). Save as `docs/verification/2026-10-09-entry-panels/<panel>-<state>.png`.
 
 Check each by eye: no empty band between the last row and the footer/bottom; no row clipped under the footer; collapsing Details shrinks the sheet; no Duration stepper anywhere.
 

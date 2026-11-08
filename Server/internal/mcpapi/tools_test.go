@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -159,33 +160,71 @@ func TestCompleteResponseCapIsExactAt256KiB(t *testing.T) {
 	}
 }
 
+// TestHistoryFittingUsesTheCompleteEnvelope requires the handler's history
+// budget to count the complete response (the ~20 KB request ID, the
+// version's metadata and the text duplicate), so the page is the longest
+// prefix whose whole response fits 256 KiB. The request ID is sized so that
+// one more entry overflows the cap by exactly one byte, as the exact-cap
+// test sizes its body: a budget that leaves out any byte of the envelope,
+// even the current version's few bytes of metadata, accepts that entry.
+//
+// Root cause of the intermittent EOF under -race load (Phase 3 ledger C22):
+// the fake reader used to scan prefixes linearly inside the request, 62
+// encodings of a ~256 KiB response each. Under -race on a loaded machine that
+// took about 12 s, past the handler's five-second request budget; the fake
+// ignores its context, so the reply was written after the write deadline and
+// the server closed the connection (EOF), or the client gave up first. The
+// longest fitting prefix is now found by bisection before the request, and
+// inside the request the fake only asks the handler's budget about that
+// prefix and the next one: two encodings, far inside the budget.
 func TestHistoryFittingUsesTheCompleteEnvelope(t *testing.T) {
 	for _, version := range bothVersions {
 		e := newEnv(t, nil)
 		full := sampleHistory(100, strings.Repeat("x", 2000)+hostileNote)
-		var tried []int
-		e.reader.history = func(_ context.Context, _ familyread.HistoryQuery, fits familyread.HistoryBudget) (familyread.HistoryResult, error) {
-			// Model familyread's fitting: the longest fitting prefix with a
-			// cursor bound to its last entry.
-			for n := len(full.Entries); n >= 1; n-- {
-				candidate := full
-				candidate.Entries = full.Entries[:n]
-				candidate.NextCursor = ""
-				if n < len(full.Entries) {
-					candidate.NextCursor = "h1." + strings.Repeat("c", 300)
-				}
-				ok, err := fits(candidate)
-				if err != nil {
-					return familyread.HistoryResult{}, err
-				}
-				if ok {
-					tried = append(tried, n)
-					return candidate, nil
-				}
+		requestID := strings.Repeat("r", 20000)
+		prefix := func(n int) familyread.HistoryResult {
+			candidate := full
+			candidate.Entries = full.Entries[:n]
+			candidate.NextCursor = ""
+			if n < len(full.Entries) {
+				candidate.NextCursor = "h1." + strings.Repeat("c", 300)
 			}
-			return familyread.HistoryResult{}, familyread.ErrResultTooLarge
+			return candidate
 		}
-		body, headers := versionRequest(version, strings.Repeat("r", 20000), "get_history", `{"baby_id":"`+testBabyID+`","start":"2026-09-09T00:00:00Z","end":"2026-09-10T00:00:00Z","limit":100}`)
+		sizeOf := func(n int) int {
+			size, err := encodedToolResponseSize(mustID(t, requestID), version == ProtocolCurrent, prefix(n))
+			if err != nil {
+				t.Fatal(err)
+			}
+			return size
+		}
+		// longest is the largest n whose complete response fits; the
+		// response size is monotone in n.
+		longestFit := func() int {
+			return sort.Search(len(full.Entries), func(i int) bool { return sizeOf(i+1) > MaxResponseBytes })
+		}
+		longest := longestFit()
+		if longest == 0 || longest >= len(full.Entries) {
+			t.Fatalf("%s: fixture must overflow mid-page, longest=%d", version, longest)
+		}
+		// Shorten the ID (each byte is one response byte) until one more
+		// entry overflows by exactly one byte; the shorter ID only shrinks
+		// the fitting page, so longest is unchanged.
+		requestID = requestID[:len(requestID)-(sizeOf(longest+1)-MaxResponseBytes-1)]
+		if got := longestFit(); got != longest || sizeOf(longest+1) != MaxResponseBytes+1 {
+			t.Fatalf("%s: sizing the ID moved the boundary: longest %d->%d, next %d bytes", version, longest, got, sizeOf(longest+1))
+		}
+		e.reader.history = func(_ context.Context, _ familyread.HistoryQuery, fits familyread.HistoryBudget) (familyread.HistoryResult, error) {
+			if ok, err := fits(prefix(longest + 1)); err != nil || ok {
+				t.Errorf("%s: the budget accepted %d entries, whose complete response exceeds the cap (ok=%v err=%v)", version, longest+1, ok, err)
+			}
+			if ok, err := fits(prefix(longest)); err != nil || !ok {
+				t.Errorf("%s: the budget refused %d entries, whose complete response fits (ok=%v err=%v)", version, longest, ok, err)
+				return familyread.HistoryResult{}, familyread.ErrResultTooLarge
+			}
+			return prefix(longest), nil
+		}
+		body, headers := versionRequest(version, requestID, "get_history", `{"baby_id":"`+testBabyID+`","start":"2026-09-09T00:00:00Z","end":"2026-09-10T00:00:00Z","limit":100}`)
 		response := e.do(t, http.MethodPost, body, headers)
 		result := decodeTool(t, response)
 		var page struct {
@@ -195,14 +234,14 @@ func TestHistoryFittingUsesTheCompleteEnvelope(t *testing.T) {
 		if err := json.Unmarshal(result.StructuredContent, &page); err != nil || result.IsError {
 			t.Fatalf("%s: %s", version, response.body[len(response.body)-min(600, len(response.body)):])
 		}
-		if len(page.Entries) == 0 || len(page.Entries) >= 100 || page.NextCursor == "" || len(response.body) > MaxResponseBytes {
+		if len(page.Entries) != longest || page.NextCursor == "" || len(response.body) > MaxResponseBytes {
 			t.Fatalf("%s page entries=%d cursor=%q bytes=%d", version, len(page.Entries), page.NextCursor, len(response.body))
 		}
 		// The page is the longest prefix: one more entry would not fit.
 		next := full
 		next.Entries = full.Entries[:len(page.Entries)+1]
 		next.NextCursor = page.NextCursor
-		size, _ := encodedToolResponseSize(mustID(t, strings.Repeat("r", 20000)), version == ProtocolCurrent, next)
+		size, _ := encodedToolResponseSize(mustID(t, requestID), version == ProtocolCurrent, next)
 		if size <= MaxResponseBytes {
 			t.Fatalf("%s: a longer page (%d bytes) would have fit", version, size)
 		}

@@ -1,6 +1,6 @@
 # Self-sizing bottom sheets on iPhone
 
-Research date: 2026-10-10. Repository inspected at `616dcc63dd40a36050655f8dd1d61e7d137cf8ad`. Toolchain: Xcode 27.0 (27A266a), `iPhoneOS27.0.sdk`; simulator runtime iOS 26.5 on the shared iPhone 17 Pro (`D17101C9-…`). The app targets iOS 26.0, Swift 6. This is research plus a throwaway experiment, not an implemented change.
+Research date: 2026-10-10. Repository inspected at `616dcc63dd40a36050655f8dd1d61e7d137cf8ad`. Toolchain: Xcode 27.0 (27A266a), `iPhoneOS27.0.sdk`; simulator runtime iOS 26.5 on the shared iPhone 17 Pro (`<simulator-udid>`). The app targets iOS 26.0, Swift 6. This is research plus a throwaway experiment, not an implemented change.
 
 Evidence labels used below:
 - **[SDK]** read from the installed SDK (`.swiftinterface`, `.swiftdoc`, UIKit headers).

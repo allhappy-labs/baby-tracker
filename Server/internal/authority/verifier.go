@@ -187,8 +187,9 @@ func (v *Verifier) unverified(ctx context.Context, ref ScopeRef, err error) erro
 	return err
 }
 
-// VerifyAll verifies every account and family chain from genesis and
-// fails closed every broken chain. Checkpoints are read, never written: the
+// VerifyAll verifies every account and family chain from genesis (from its
+// retention anchor when its oldest rows expired) and fails closed every
+// broken chain. Checkpoints are read, never written: the
 // walk also requires the checkpointed row to still carry the checkpointed
 // hash (and the head not to be behind it), so a consistent rewrite of a
 // checkpointed row is reported here too; writing them would replace that
@@ -276,8 +277,17 @@ func (v *Verifier) Run(ctx context.Context, interval time.Duration) {
 // mismatch. With crossCheck (a walk from genesis), the chain's checkpoint is
 // read in the same snapshot and held to as well: checkpoints are written
 // only after a verified snapshot, so a legitimate one is never ahead of the
-// head nor different from its row. The walk is broken when:
-//   - the head is behind the anchor or the checkpoint;
+// head nor different from its row.
+//
+// A chain that lost rows to audit retention (owner decision D1) has a
+// retention anchor, read in the same snapshot: the seq and hash of its last
+// dropped row. A walk whose anchor is at or below it (a walk from genesis
+// included) starts there instead, the first kept row linking to the
+// anchor's hash; a checkpoint below it names an expired row and is not held
+// to. The walk is broken when:
+//   - the head is behind the anchor, the retention anchor or the checkpoint;
+//   - an anchor or checkpoint at the retention anchor's seq carries another
+//     hash;
 //   - the anchored row is missing, duplicated, or no longer hashes to the
 //     anchored hash, or the checkpointed row no longer carries the
 //     checkpointed hash;
@@ -313,7 +323,43 @@ func (v *Verifier) verifyScope(ctx context.Context, ref ScopeRef, anchor chainCh
 		}
 		out.head.seq = headSeq
 		copy(out.head.hash[:], headHash)
+		retained, droppedBefore, err := retentionAnchor(ctx, tx, ref)
+		if err != nil {
+			return err
+		}
+		if retained.seq > headSeq {
+			out.mismatch = &chainMismatch{seq: retained.seq, reason: "head behind retention anchor"}
+			return nil
+		}
+		if retained.seq > 0 {
+			// Rows at or below the anchor are not walked. Every one the chain
+			// had when the anchor was taken was stamped before the end of the
+			// partition dropped with it (give or take clock skew at the month
+			// boundary): one stamped well after can only have been inserted
+			// after the drop, where no walk would see it.
+			var late uint64
+			err := tx.QueryRow(ctx, `SELECT seq FROM security_audit_events WHERE scope=$1::text::app.audit_scope AND scope_id=$2 AND seq <= $3 AND at >= $4
+				ORDER BY seq, at LIMIT 1`, string(ref.Scope), ref.ID, int64(retained.seq), droppedBefore.Add(retentionBoundarySkew)).Scan(&late)
+			switch {
+			case err == nil:
+				out.mismatch = &chainMismatch{seq: late, reason: "row below the retention anchor postdates its partition"}
+				return nil
+			case !errors.Is(err, pgx.ErrNoRows):
+				return err
+			}
+		}
 		walk := chainWalk{scope: ref, anchor: anchor, expected: max(anchor.seq, 1)}
+		if retained.seq > 0 && anchor.seq <= retained.seq {
+			// The anchored row expired with its partition (or the walk is
+			// from genesis): walk from the retention anchor, the first kept
+			// row linking to the last dropped row's hash. An anchor at the
+			// very row the retention anchor names must agree with it.
+			if anchor.seq == retained.seq && anchor.hash != retained.hash {
+				out.mismatch = &chainMismatch{seq: retained.seq, reason: "checkpoint hash"}
+				return nil
+			}
+			walk.anchor, walk.expected, walk.running = chainCheckpoint{}, retained.seq+1, retained.hash
+		}
 		floor := anchor.seq // the head may not be behind the anchor or the checkpoint
 		if crossCheck {
 			var cp chainCheckpoint
@@ -328,8 +374,16 @@ func (v *Verifier) verifyScope(ctx context.Context, ref ScopeRef, anchor chainCh
 				return fmt.Errorf("checkpoint of %s %s has a %d-byte hash", ref.Scope, ref.ID, len(hash))
 			case cp.seq > 0:
 				copy(cp.hash[:], hash)
-				walk.checkpoint = &cp
 				floor = max(floor, cp.seq)
+				switch {
+				case cp.seq > retained.seq:
+					walk.checkpoint = &cp
+				case cp.seq == retained.seq && cp.hash != retained.hash:
+					out.mismatch = &chainMismatch{seq: cp.seq, reason: "checkpoint hash"}
+					return nil
+				}
+				// A checkpoint below the retention anchor names a row that
+				// expired: nothing is left to hold it to.
 			}
 		}
 		if floor > headSeq {
@@ -404,6 +458,35 @@ func (v *Verifier) verifyScope(ctx context.Context, ref ScopeRef, anchor chainCh
 	}
 	return out, nil
 }
+
+// retentionAnchor reads ref's retention anchor (zero when none): its rows up
+// to anchor.seq expired with their audit partition
+// (app.drop_expired_audit_partition), and anchor.hash is the last dropped
+// row's hash, the first kept row's prev_hash. droppedBefore is the end of
+// the partition the anchor row was dropped with.
+func retentionAnchor(ctx context.Context, tx pgx.Tx, ref ScopeRef) (anchor chainCheckpoint, droppedBefore time.Time, err error) {
+	var hash []byte
+	err = tx.QueryRow(ctx, `SELECT anchor_seq, anchor_hash, dropped_before FROM audit_retention_anchors WHERE scope_id=$2 AND scope=$1::text::app.audit_scope`,
+		string(ref.Scope), ref.ID).Scan(&anchor.seq, &hash, &droppedBefore)
+	switch {
+	case errors.Is(err, pgx.ErrNoRows):
+		return chainCheckpoint{}, time.Time{}, nil
+	case err != nil:
+		return chainCheckpoint{}, time.Time{}, err
+	case len(hash) != sha256.Size:
+		return chainCheckpoint{}, time.Time{}, fmt.Errorf("retention anchor of %s %s has a %d-byte hash", ref.Scope, ref.ID, len(hash))
+	}
+	copy(anchor.hash[:], hash)
+	return anchor, droppedBefore, nil
+}
+
+// retentionBoundarySkew is how far past the end of its dropped partition a
+// row at or below a retention anchor may be stamped and still be one the
+// chain had at the drop: rows are stamped by the app clock when their
+// command runs, so near a month boundary a lower seq can carry a slightly
+// later time than the next. A day is far beyond any such skew; a row stamped
+// later than that was inserted after the drop.
+const retentionBoundarySkew = 24 * time.Hour
 
 type storedAuditRow struct {
 	seq                      uint64
@@ -521,9 +604,10 @@ func (v *Verifier) writeCheckpoints(ctx context.Context, refs []ScopeRef, heads 
 	return nil
 }
 
-// read runs fn in a read-only repeatable-read authority transaction.
+// read runs fn in a read-only repeatable-read authority transaction that
+// holds the audit table against a retention drop (beginVerifierRead).
 func (v *Verifier) read(ctx context.Context, fn func(pgx.Tx) error) error {
-	tx, err := v.s.beginReadOnly(ctx)
+	tx, err := v.s.beginVerifierRead(ctx)
 	if err != nil {
 		return err
 	}

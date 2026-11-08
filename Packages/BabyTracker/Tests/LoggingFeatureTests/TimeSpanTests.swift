@@ -1,5 +1,6 @@
 import Testing
 import Foundation
+import SwiftUI
 @testable import LoggingFeature
 
 @Suite struct TimeSpanTests {
@@ -48,5 +49,10 @@ import Foundation
         for problem in [TimeSpan.Problem.endBeforeStart, .inTheFuture, .tooShort] {
             #expect(!TimeSpanCopy.message(problem).isEmpty)
         }
+    }
+
+    @Test func aRunningEndHasCopy() {
+        #expect(TimeSpanCopy.running == "Running")
+        #expect(TimeSpanSection<EmptyView>.EndStyle.running != .required)
     }
 }

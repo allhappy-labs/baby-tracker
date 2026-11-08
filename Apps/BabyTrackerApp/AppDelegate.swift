@@ -1,4 +1,5 @@
 import BabySync
+import BabyCore
 import os
 import SettingsFeature
 import UIKit
@@ -30,7 +31,7 @@ final class AppDelegate: NSObject, UIApplicationDelegate {
         sentinel: .app,
         make: { AppEnvironment() }
     )
-    private let log = Logger(subsystem: "com.olhapi.babytracker", category: "push")
+    private let log = Logger(subsystem: AppIdentity.bundlePrefix, category: "push")
     /// One registration failure is worth a line; every later one says the same.
     private var loggedRegistrationFailure = false
 

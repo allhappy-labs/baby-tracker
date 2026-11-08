@@ -8,6 +8,7 @@ enum HomeSyncCopy {
     static let signInButton = HomeL10n.text("Sign in with Apple")
     static let queued = HomeL10n.text("Queued entries remain on this phone until syncing resumes.")
     static let offline = HomeL10n.text("Offline — this phone will retry syncing")
+    static let serverUnreachable = HomeL10n.text("Can't reach the family server")
     static let failed = HomeL10n.text("Family sync needs attention. Please try again later.")
     static let signInFailed = HomeL10n.text("Could not sign in. Your queued entries remain on this phone.")
 }
@@ -18,7 +19,19 @@ public enum HomeAction: Equatable, Sendable {
     /// The Bottle sheet: start a timed bottle, or log what was drunk.
     case bottle
     case diaper
-    /// The ··· sheet: Solids, Growth, Past entry and Meds.
+    case solids
+    /// The Meds panel: the saved meds as chips, and "+".
+    case meds
+    case growth
+    /// Opens the vaccine panel.
+    case vaccine
+    /// Opens the pump panel: start a session, or edit the one running.
+    case pump
+    /// The pump strip's tap: the running session in the pump panel.
+    case editPump(UUID)
+    /// The pump strip's Stop: the session ended and needs its amount.
+    case pumpStopped(UUID)
+    /// The ··· sheet: whatever the dock has no room for, and Past entry.
     case more
     /// History at today, from the today strip.
     case history
@@ -37,12 +50,17 @@ public struct HomeView: View {
     /// Kept as well as handed to the model, so a change to the preference can
     /// be noticed while this screen is alive.
     private let volumeUnit: VolumeUnit
+    /// The order of this baby's Home buttons: a preference, as the unit is.
+    private let homeOrder: [HomeActionKind]
     private let onSwitchBaby: () -> Void
     private let onAction: (HomeAction) -> Void
     /// A running bottle was stopped and needs its amount. Presented by the
     /// app layer with every other log sheet.
     private let onFinishBottle: (UUID) -> Void
     private let syncStatus: HomeSyncStatus
+    /// While set, the store may predate the other phone's last taps: a timer
+    /// verb waits for it (see `HomeViewModel.onCurrentState`).
+    private let awaitCurrentState: (() async -> Void)?
     private let onSignIn: (() async throws -> Void)?
     private let syncSignInTitle: String
     private let syncSignInButton: String
@@ -67,10 +85,12 @@ public struct HomeView: View {
         babyBirthDate: Date? = nil,
         babyAvatar: BabyAvatar = .neutral,
         volumeUnit: VolumeUnit = .millilitres,
+        homeOrder: [HomeActionKind] = HomeActionKind.defaultOrder,
         onSwitchBaby: @escaping () -> Void,
         onAction: @escaping (HomeAction) -> Void,
         onFinishBottle: @escaping (UUID) -> Void,
         syncStatus: HomeSyncStatus = .hidden,
+        awaitCurrentState: (() async -> Void)? = nil,
         onSignIn: (() async throws -> Void)? = nil,
         syncSignInTitle: String? = nil,
         syncSignInButton: String? = nil,
@@ -80,14 +100,16 @@ public struct HomeView: View {
         self.babyBirthDate = babyBirthDate
         self.babyAvatar = babyAvatar
         self.volumeUnit = volumeUnit
+        self.homeOrder = homeOrder
         self.onSwitchBaby = onSwitchBaby
         self.onAction = onAction
         self.onFinishBottle = onFinishBottle
         self.syncStatus = syncStatus
+        self.awaitCurrentState = awaitCurrentState
         self.onSignIn = onSignIn
         self.syncSignInTitle = syncSignInTitle ?? HomeSyncCopy.signInAgain
         self.syncSignInButton = syncSignInButton ?? HomeSyncCopy.signInButton
-        _model = State(wrappedValue: HomeViewModel(store: store, babyID: babyID, volumeUnit: volumeUnit))
+        _model = State(wrappedValue: HomeViewModel(store: store, babyID: babyID, volumeUnit: volumeUnit, homeOrder: homeOrder))
     }
 
     private var screen: HomeScreen { model.screen }
@@ -112,33 +134,47 @@ public struct HomeView: View {
 
     public var body: some View {
         NavigationStack {
-            ZStack(alignment: .bottom) {
-                ScrollView {
-                    VStack(spacing: 0) {
-                        header
-                        syncStatusCard
-                            .padding(.horizontal, 20)
-                            .padding(.top, 8)
-                        glance
-                            .padding(.horizontal, 20)
-                            .padding(.top, 28)
-                    }
-                    // Standard text keeps the floating dock. At accessibility
-                    // sizes it scrolls with the content, leaving the recovery
-                    // card and every care action reachable.
-                    .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 12 : 190)
+            // The scaffold draws the ground and builds the switcher header;
+            // Home places the header inside its own scroll view, so it
+            // scrolls away as before. Home owns the scrolling because the
+            // dock floats outside the scroll view (glass must not scroll
+            // under glass) except at the accessibility sizes, where it
+            // scrolls with the content.
+            ScreenScaffold(
+                header: .baby(name: babyName, avatar: babyAvatar, switcherID: "home.babySwitcher",
+                              headingID: "home.babyName", onSwitch: onSwitchBaby)
+            ) {
+                age
+            } hostingHeader: { header in
+                ZStack(alignment: .bottom) {
+                    ScrollView {
+                        VStack(spacing: 0) {
+                            // No top padding: the row sits where the other tabs'
+                            // pinned header rows do.
+                            header
+                            syncStatusCard
+                                .padding(.horizontal, Spacing.l)
+                                .padding(.top, Spacing.s)
+                            glance
+                                .padding(.horizontal, Spacing.l)
+                                .padding(.top, 28)
+                        }
+                        // Standard text keeps the floating dock. At accessibility
+                        // sizes it scrolls with the content, leaving the recovery
+                        // card and every care action reachable.
+                        .padding(.bottom, dynamicTypeSize.isAccessibilitySize ? 12 : (screen.pump == nil ? 198 : 258))
 
-                    if dynamicTypeSize.isAccessibilitySize {
-                        dock
+                        if dynamicTypeSize.isAccessibilitySize {
+                            dockArea
+                        }
                     }
-                }
-                .accessibilityIdentifier("home.scrollView")
+                    .accessibilityIdentifier("home.scrollView")
 
-                if !dynamicTypeSize.isAccessibilitySize {
-                    dock
+                    if !dynamicTypeSize.isAccessibilitySize {
+                        dockArea
+                    }
                 }
             }
-            .background(backgroundGradient)
             .navigationTitle(babyName)
             #if os(iOS)
             // The name is drawn in the content as a tappable heading, so the
@@ -177,6 +213,10 @@ public struct HomeView: View {
         .onChange(of: volumeUnit) { _, unit in
             model.volumeUnit = unit
         }
+        .onChange(of: homeOrder) { _, order in
+            model.homeOrder = order
+            reload()
+        }
         // A write from another process — the widget, an App Intent — does
         // not bump `revision`. Coming back to the app is the moment to re-read.
         .onChange(of: scenePhase) { _, phase in
@@ -186,22 +226,16 @@ public struct HomeView: View {
 
     // MARK: - Layout
 
-    /// The baby's name IS the switcher; the age sits opposite.
-    private var header: some View {
-        HStack(alignment: .center, spacing: 8) {
-            BabySwitcherHeader(babyName: babyName, avatar: babyAvatar,
-                               switcherID: "home.babySwitcher", headingID: "home.babyName",
-                               onSwitchBaby: onSwitchBaby)
-            Spacer(minLength: 0)
-            if let babyBirthDate, let age = HomeCopy.age(birthDate: babyBirthDate, now: .now) {
-                Text(age)
-                    .font(.footnote)
-                    .foregroundStyle(Palette.secondaryText)
-                    .accessibilityIdentifier("home.age")
-            }
+    /// The baby's name IS the switcher (the scaffold's header); the age sits
+    /// opposite.
+    @ViewBuilder
+    private var age: some View {
+        if let babyBirthDate, let age = HomeCopy.age(birthDate: babyBirthDate, now: .now) {
+            Text(age)
+                .font(.footnote)
+                .foregroundStyle(Palette.secondaryText)
+                .accessibilityIdentifier("home.age")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
     }
 
     /// Only a caregiver who may write can detach or edit a running part.
@@ -234,6 +268,20 @@ public struct HomeView: View {
         }
     }
 
+    /// The pump strip, when a pump runs, sits on the dock. It is a separate
+    /// view: the dock's feed and sleep controls never change because of it.
+    private var dockArea: some View {
+        VStack(spacing: Spacing.s) {
+            if let pump = screen.pump {
+                PumpStripView(pump: pump, canLog: canLog,
+                              onOpen: { onAction(.editPump(pump.id)) },
+                              onStop: stopPump)
+                    .padding(.horizontal, Spacing.l)
+            }
+            dock
+        }
+    }
+
     private var dock: some View {
         HomeDock(
             dock: screen.dock,
@@ -243,48 +291,47 @@ public struct HomeView: View {
             onWake: wake,
             onAction: onAction
         )
-        .padding(.bottom, 12)
+        .padding(.bottom, Spacing.m)
     }
 
     @ViewBuilder
     private var syncStatusCard: some View {
         if syncStatus != .hidden {
-            VStack(alignment: .leading, spacing: 8) {
-                Text(syncTitle)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Palette.primaryText)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .accessibilityIdentifier("home.syncTitle")
-                if syncStatus.showsQueuedExplanation {
-                    Text(HomeSyncCopy.queued)
-                        .font(.footnote)
-                        .foregroundStyle(Palette.secondaryText)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("home.syncQueued")
-                }
-                if syncStatus.offersSignIn, let onSignIn {
-                    Button {
-                        Task {
-                            do { try await onSignIn(); signInFailed = false }
-                            catch { signInFailed = true }
-                        }
-                    } label: {
-                        Text(syncSignInButton)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .accessibilityIdentifier("home.syncSignIn")
-                    .accessibilityLabel(syncSignInButton)
-                }
-                if signInFailed, syncStatus.offersSignIn {
-                    Text(HomeSyncCopy.signInFailed)
-                        .font(.footnote)
+            Card {
+                VStack(alignment: .leading, spacing: Spacing.s) {
+                    Text(syncTitle)
+                        .font(.subheadline.weight(.semibold))
                         .foregroundStyle(Palette.primaryText)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("home.syncTitle")
+                    if syncStatus.showsQueuedExplanation {
+                        Text(HomeSyncCopy.queued)
+                            .font(.footnote)
+                            .foregroundStyle(Palette.secondaryText)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .accessibilityIdentifier("home.syncQueued")
+                    }
+                    if syncStatus.offersSignIn, let onSignIn {
+                        Button {
+                            Task {
+                                do { try await onSignIn(); signInFailed = false }
+                                catch { signInFailed = true }
+                            }
+                        } label: {
+                            Text(syncSignInButton)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .buttonStyle(.primary)
+                        .accessibilityIdentifier("home.syncSignIn")
+                        .accessibilityLabel(syncSignInButton)
+                    }
+                    if signInFailed, syncStatus.offersSignIn {
+                        Text(HomeSyncCopy.signInFailed)
+                            .font(.footnote)
+                            .foregroundStyle(Palette.primaryText)
+                    }
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(14)
-            .background(.white.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
             .accessibilityElement(children: .contain)
             .accessibilityIdentifier("home.syncStatus")
         }
@@ -294,19 +341,10 @@ public struct HomeView: View {
         switch syncStatus {
         case .hidden: ""
         case .offline: HomeSyncCopy.offline
+        case .serverUnreachable: HomeSyncCopy.serverUnreachable
         case .needsSignIn: syncSignInTitle
         case .recoveryFailed: HomeSyncCopy.failed
         }
-    }
-
-    private var backgroundGradient: some View {
-        RadialGradient(
-            colors: [Color(red: 0.106, green: 0.145, blue: 0.278), Palette.ground],
-            center: .top,
-            startRadius: 0,
-            endRadius: 700
-        )
-        .ignoresSafeArea()
     }
 
     // MARK: - Loading
@@ -332,15 +370,15 @@ public struct HomeView: View {
     }
 
     private func startBreast(_ side: BreastSide) {
-        perform(ErrorSubject.feed) { try await model.startBreast(side) }
+        performOnCurrentState(ErrorSubject.feed) { try await model.startBreast(side) }
     }
 
     private func startSleep() {
-        perform(ErrorSubject.sleep) { try await model.startSleep() }
+        performOnCurrentState(ErrorSubject.sleep) { try await model.startSleep() }
     }
 
     private func stopFeed() {
-        perform(ErrorSubject.feed) {
+        performOnCurrentState(ErrorSubject.feed) {
             if case .needsBottleAmount(let timerID) = try await model.stopFeed() {
                 onFinishBottle(timerID)
             }
@@ -348,13 +386,26 @@ public struct HomeView: View {
     }
 
     private func wake() {
-        perform(ErrorSubject.sleep) { try await model.stopSleep() }
+        performOnCurrentState(ErrorSubject.sleep) { try await model.stopSleep() }
+    }
+
+    private func stopPump() {
+        performOnCurrentState(ErrorSubject.pump) {
+            if let id = try await model.stopPump() { onAction(.pumpStopped(id)) }
+        }
     }
 
     private func detach(_ kind: SessionKind) {
-        perform(kind == .feed ? ErrorSubject.feed : ErrorSubject.sleep) {
+        performOnCurrentState(kind == .feed ? ErrorSubject.feed : ErrorSubject.sleep) {
             try await model.detachRunning(kind)
         }
+    }
+
+    /// A timer verb, run only once the store has caught up and only if the
+    /// catch-up left its target as the parent saw it.
+    private func performOnCurrentState(_ subject: String, _ work: @escaping () async throws -> Void) {
+        let catchUp = awaitCurrentState
+        perform(subject) { try await model.onCurrentState(catchUp: catchUp, work) }
     }
 
     /// Runs a verb, then re-reads. There is no sheet to hold a failure, so the

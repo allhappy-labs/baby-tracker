@@ -21,7 +21,7 @@ func TestRecoverySchemaRoleSeparation(t *testing.T) {
 	if legacy || !present {
 		t.Fatalf("legacy receipts=%t refresh receipts=%t", legacy, present)
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 37); err != nil {
 		t.Fatal(err)
 	}
 	ids := seedAuthorityFamilies(t, fixture)

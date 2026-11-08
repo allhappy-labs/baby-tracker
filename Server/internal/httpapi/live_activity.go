@@ -90,7 +90,7 @@ func liveActivityRegistrationHandler(options Options, device bool) http.HandlerF
 			writeSyncCode(w, r, options, "service_unavailable")
 			return
 		}
-		admitted, ok := admitAfterBody(w, r, options, liveActivityBodyBytes)
+		admitted, ok := admitAfterBody(w, r, options, digests, liveActivityBodyBytes, writeLiveActivityError)
 		if !ok {
 			return
 		}

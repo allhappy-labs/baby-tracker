@@ -101,7 +101,7 @@ The generic editor (`EntryEditSheet`, `EntryEditModel`) is deleted once every ki
   - the session sheet model: join, split, add part, delete part and delete session, including deleting the last part;
   - each edit sheet's prefill and save;
   - the part-time validation message.
-- **UI tests on the shared simulator** (`platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`):
+- **UI tests on the shared simulator** (`platform=iOS Simulator,id=<simulator-udid>`):
   - History → tap a session → Split here → Join the earlier feed;
   - swipe to delete, for a single entry and for a session;
   - the filter, and clearing it;

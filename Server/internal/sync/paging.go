@@ -174,7 +174,8 @@ func sessionFamily(p access.Principal) (string, error) {
 // moved into recovery since the principal was authenticated is
 // family_unavailable, not recovery_only. (ServeSync and ServeSnapshot never
 // see recovery_only: their caller's Admit refuses every session that is not
-// a family session before family policy runs.)
+// a family session before family policy runs, in a pull's binding
+// transaction (settle) as in its first.)
 func familyReadError(err error) error {
 	if errors.Is(err, authority.ErrRecoveryOnly) {
 		return authority.ErrFamilyUnavailable
@@ -202,9 +203,12 @@ func (s *Service) ApplyAndPull(ctx context.Context, principal access.Principal, 
 	err = s.withFamily(txCtx, principal, familyID, func(tx pgx.Tx, grant access.Grant) error {
 		var err error
 		// validateSync accepted the request above, once per request.
-		exchanged, err = s.exchange(txCtx, tx, principal, grant, request)
+		exchanged, err = s.exchange(txCtx, tx, principal, grant, request, true)
 		return err
 	})
+	if err == nil {
+		err = s.settle(txCtx, &exchanged, s.principalBindingTx(txCtx, principal, familyID))
+	}
 	cancel()
 	if err != nil {
 		return protocol.SyncResponse{}, familyReadError(err)
@@ -239,15 +243,19 @@ func (s *Service) firstRange(after, highWater uint64) syncRange {
 	return syncRange{resume: after, highWater: highWater, itemLimit: s.limits.SyncPageSize, byteLimit: s.limits.SyncPageBytes}
 }
 
+// issueFunc issues a page's continuation token for binding; presented is
+// the continuation's own token (nil on a first page).
+type issueFunc func(presented *decodedPageToken, binding pageBinding) (string, error)
+
 // syncPage serves the changes of r from rows (read with a limit of
 // itemLimit+1, in sequence order): the longest prefix within the item and
 // byte limits, each change encoded once around its stored wire. A row left
 // over after the prefix means more: the page carries a continuation token
-// (counted in its size) bound to (last sequence, high water]. A
-// continuation (presented) derives its successor's lookup and keeps the
-// first page's created and expiry times.
-func (s *Service) syncPage(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, r syncRange, rows []care.ChangeRow,
-	outcomes []protocol.Outcome, presented *decodedPageToken) (protocol.SyncResponse, error) {
+// (counted in its size) bound to (last sequence, high water], issued by
+// issue. A continuation (presented) derives its successor's lookup and
+// keeps the first page's created and expiry times.
+func (s *Service) syncPage(p access.Principal, g access.Grant, r syncRange, rows []care.ChangeRow,
+	outcomes []protocol.Outcome, presented *decodedPageToken, issue issueFunc) (protocol.SyncResponse, error) {
 	highWater, itemLimit, byteLimit, created, expires := r.highWater, r.itemLimit, r.byteLimit, r.created, r.expires
 	encoded := make([]json.RawMessage, 0, len(rows))
 	for _, row := range rows {
@@ -279,7 +287,7 @@ func (s *Service) syncPage(ctx context.Context, tx pgx.Tx, p access.Principal, g
 	}
 	binding := s.bindingFor(p, g, "sync", highWater, itemLimit, byteLimit, created, expires)
 	binding.resumeSequence = rows[count-1].Seq
-	token, err := s.issueToken(ctx, tx, presented, binding)
+	token, err := issue(presented, binding)
 	if err != nil {
 		return protocol.SyncResponse{}, err
 	}
@@ -318,42 +326,116 @@ func (s *Service) bindingFor(p access.Principal, g access.Grant, kind string, hi
 		itemLimit: itemLimit, byteLimit: byteLimit, createdAt: created, expiresAt: expires}
 }
 
+// pendingBinding is a prepared token's binding, not yet stored: its digest
+// and, for a continuation (whose successor lookup is derived, so a replay
+// finds the binding it stored), continuation set.
+type pendingBinding struct {
+	digest       [32]byte
+	binding      pageBinding
+	continuation bool
+}
+
 // prepareToken encodes the token for binding: a first page's lookup is
-// random, a continuation's is its successor lookup. It returns the
-// binding's digest and the binding with its key id.
-func (s *Service) prepareToken(presented *decodedPageToken, binding pageBinding) (string, [32]byte, pageBinding, error) {
+// random, a continuation's is its successor lookup. It returns the token
+// and the binding, with its key id, under its digest.
+func (s *Service) prepareToken(presented *decodedPageToken, binding pageBinding) (string, pendingBinding, error) {
 	key, lookup := s.pageKeys.Current, [32]byte{}
 	if presented == nil {
-		if _, err := rand.Read(lookup[:]); err != nil {
-			return "", [32]byte{}, pageBinding{}, err
+		random := rand.Read
+		if s.pageLookup != nil {
+			random = s.pageLookup
+		}
+		if _, err := random(lookup[:]); err != nil {
+			return "", pendingBinding{}, err
 		}
 	} else {
 		key, lookup = presented.key, successorLookup(*presented, binding)
 	}
 	token, err := encodePageToken(key, lookup)
 	binding.keyID = key.ID
-	return token, pageDigest(lookup), binding, err
+	return token, pendingBinding{digest: pageDigest(lookup), binding: binding, continuation: presented != nil}, err
 }
 
-// issueToken stores binding in one round trip and returns its token. A
-// binding already stored under the digest (a replayed continuation) must
+// issueToken stores binding in tx in one round trip and returns its token.
+// A binding already stored under the digest (a replayed continuation) must
 // equal it.
 func (s *Service) issueToken(ctx context.Context, tx pgx.Tx, presented *decodedPageToken, binding pageBinding) (string, error) {
-	token, digest, binding, err := s.prepareToken(presented, binding)
+	token, pending, err := s.prepareToken(presented, binding)
 	if err != nil {
 		return "", err
 	}
+	return token, storeBinding(ctx, tx, pending)
+}
+
+// issuedIn issues tokens whose bindings are stored in tx before its commit
+// (issueToken).
+func (s *Service) issuedIn(ctx context.Context, tx pgx.Tx) issueFunc {
+	return func(presented *decodedPageToken, binding pageBinding) (string, error) {
+		return s.issueToken(ctx, tx, presented, binding)
+	}
+}
+
+// storeBinding stores b in tx in one round trip; a binding already stored
+// under its digest must equal it (requireStoredBinding).
+func storeBinding(ctx context.Context, tx pgx.Tx, b pendingBinding) error {
 	batch := &pgx.Batch{}
-	queueBinding(batch, digest, binding)
+	queueBinding(batch, b.digest, b.binding)
 	results := tx.SendBatch(ctx, batch)
 	inserted, err := bindingInserted(results)
 	if closeErr := results.Close(); err == nil {
 		err = closeErr
 	}
 	if err == nil && !inserted {
-		err = requireStoredBinding(ctx, tx, digest, binding)
+		err = requireStoredBinding(ctx, tx, b.digest, b.binding)
 	}
-	return token, err
+	return err
+}
+
+// storeBindingAtCommit stores b in a transaction that wrote nothing (a
+// pull's binding, settle): in a request transaction
+// (authority.CommitPipeline) the binding's INSERT goes with the COMMIT, in
+// its round trip, and the binding is checked from the results. A binding
+// not inserted then refuses the request after the commit, which is the
+// same as before it: the transaction wrote nothing else, and the INSERT
+// nothing. A continuation's binding is read back in the same round trip,
+// after the INSERT, and must equal it; a first page's lookup is random, so
+// a binding stored under it is never this one. Any other transaction
+// stores the binding before the commit (storeBinding).
+func storeBindingAtCommit(ctx context.Context, tx pgx.Tx, b pendingBinding) error {
+	pipeline, ok := tx.(authority.CommitPipeline)
+	if !ok {
+		return storeBinding(ctx, tx, b)
+	}
+	pipeline.PipelineWithCommit(func(batch *pgx.Batch) {
+		queueBinding(batch, b.digest, b.binding)
+		if b.continuation {
+			batch.Queue(sqlStoredBinding, b.binding.familyID, b.digest[:])
+		}
+	}, func(results pgx.BatchResults) error {
+		inserted, err := bindingInserted(results)
+		if err != nil {
+			return err
+		}
+		if !b.continuation {
+			if !inserted {
+				return ErrInvalidPageToken
+			}
+			return nil
+		}
+		// Inserted, a read-back error refuses: a statement's error skipped
+		// the commit; a Go-side scan error comes after it, leaving the binding
+		// stored, unused until the sweep (harmless). Not inserted, anything but
+		// an equal binding refuses, as requireStoredBinding does.
+		stored, err := scanBinding(results.QueryRow())
+		if inserted {
+			return err
+		}
+		if err != nil || !samePageBinding(stored, b.binding) {
+			return ErrInvalidPageToken
+		}
+		return nil
+	})
+	return nil
 }
 
 const bindingColumns = `b.kind::text, b.token_key_id, b.family_id::text, b.account_id::text, b.device_id::text, b.session_id::text,
@@ -389,13 +471,15 @@ func bindingInserted(results pgx.BatchResults) (bool, error) {
 	return err == nil && tag.RowsAffected() == 1, err
 }
 
+// sqlStoredBinding reads the binding stored under a digest.
+const sqlStoredBinding = `SELECT ` + bindingColumns + ` FROM sync_page_bindings b WHERE b.family_id=$1 AND b.token_digest=$2`
+
 // requireStoredBinding accepts a binding that was not inserted only when
 // the stored one under its digest equals b (a replayed continuation);
 // anything else is an invalid token. The caller has closed the batch
 // results first.
 func requireStoredBinding(ctx context.Context, tx pgx.Tx, digest [32]byte, b pageBinding) error {
-	stored, err := scanBinding(tx.QueryRow(ctx, `SELECT `+bindingColumns+` FROM sync_page_bindings b WHERE b.family_id=$1 AND b.token_digest=$2`,
-		b.familyID, digest[:]))
+	stored, err := scanBinding(tx.QueryRow(ctx, sqlStoredBinding, b.familyID, digest[:]))
 	if err != nil || !samePageBinding(stored, b) {
 		return ErrInvalidPageToken
 	}
@@ -461,8 +545,10 @@ const sqlSyncContinuation = `SELECT ` + bindingColumns + `, c.changed_seq, c.kin
 		ORDER BY changed_seq LIMIT b.item_limit + 1) c ON true
 	WHERE b.family_id = $1 AND b.token_digest = $2`
 
-// syncContinuation serves a continuation: the binding and its range's
-// current rows in one statement, then the page.
+// syncContinuation serves a continuation in tx: the binding and its
+// range's current rows in one statement, then the page, its successor's
+// binding stored in tx (a transaction without a commit pipeline; a request
+// transaction reads it with the commit, continuationAtCommit).
 func (s *Service) syncContinuation(ctx context.Context, tx pgx.Tx, p access.Principal, g access.Grant, raw string) (protocol.SyncResponse, error) {
 	token, err := decodePageToken(s.pageKeys, raw)
 	if err != nil {
@@ -473,6 +559,14 @@ func (s *Service) syncContinuation(ctx context.Context, tx pgx.Tx, p access.Prin
 	if err != nil {
 		return protocol.SyncResponse{}, err
 	}
+	return s.continuationPage(p, g, token, rows, s.issuedIn(ctx, tx))
+}
+
+// continuationPage serves a continuation from sqlSyncContinuation's rows,
+// which it closes: the binding must be the token's, the principal's and
+// unexpired; the page is its range's current rows, its successor's token
+// issued by issue.
+func (s *Service) continuationPage(p access.Principal, g access.Grant, token decodedPageToken, rows pgx.Rows, issue issueFunc) (protocol.SyncResponse, error) {
 	var binding pageBinding
 	found := false
 	changes := []care.ChangeRow{}
@@ -509,8 +603,165 @@ func (s *Service) syncContinuation(ctx context.Context, tx pgx.Tx, p access.Prin
 	if err := validatePageBinding(binding, token, p, g, s.identity, "sync", s.now()); err != nil {
 		return protocol.SyncResponse{}, err
 	}
-	return s.syncPage(ctx, tx, p, g, syncRange{resume: binding.resumeSequence, highWater: binding.highWater, itemLimit: binding.itemLimit,
-		byteLimit: binding.byteLimit, created: binding.createdAt, expires: binding.expiresAt}, changes, []protocol.Outcome{}, &token)
+	return s.syncPage(p, g, syncRange{resume: binding.resumeSequence, highWater: binding.highWater, itemLimit: binding.itemLimit,
+		byteLimit: binding.byteLimit, created: binding.createdAt, expires: binding.expiresAt}, changes, []protocol.Outcome{}, &token, issue)
+}
+
+// pageAtCommit is a pull page read with the commit of its request
+// transaction (pullAtCommit, continuationAtCommit): read once the queued
+// statement's results were served, the response, and for a page with more
+// the binding its token names, which settle stores after the commit.
+type pageAtCommit struct {
+	read     bool
+	response protocol.SyncResponse
+	binding  *pendingBinding
+}
+
+// serve keeps a page served from the commit's results.
+func (page *pageAtCommit) serve(response protocol.SyncResponse, err error) error {
+	if err != nil {
+		return err
+	}
+	page.response, page.read = response, true
+	return nil
+}
+
+// deferredTo issues a page's token at once and leaves its binding to
+// settle (pageAtCommit.binding).
+func (s *Service) deferredTo(page *pageAtCommit) issueFunc {
+	return func(presented *decodedPageToken, binding pageBinding) (string, error) {
+		token, pending, err := s.prepareToken(presented, binding)
+		if err != nil {
+			return "", err
+		}
+		page.binding = &pending
+		return token, nil
+	}
+}
+
+// pullAtCommit is a first pull page in a request transaction that wrote
+// nothing: its one statement (care.QueuePull) goes with the COMMIT, in its
+// round trip (authority.CommitPipeline), so a pull is two round trips,
+// BEGIN with the authority read, then the pull with the commit. Every
+// Go-side refusal before the statement (authentication, Admit, family
+// policy, Charge, validateSync) has run by then. The refusals decided from
+// the statement's rows (snapshot_required, page_limit, a family the tenant
+// cannot see) come after a commit, which is safe only because the
+// transaction wrote nothing: the pipeline checks that in the server before
+// the statement (ErrPipelineAfterWrite), and the statement only reads.
+// A page with more needs its binding stored, which settle does after this
+// commit.
+func (s *Service) pullAtCommit(pipeline authority.CommitPipeline, p access.Principal, g access.Grant, after uint64, limit int) Exchanged {
+	page := &pageAtCommit{}
+	var read func(pgx.BatchResults) (uint64, []care.ChangeRow, error)
+	pipeline.PipelineWithCommit(func(b *pgx.Batch) { read = care.QueuePull(b, g.FamilyID, after, limit) }, func(results pgx.BatchResults) error {
+		highWater, changes, err := read(results)
+		if err != nil {
+			return err
+		}
+		if after > highWater {
+			return ErrSnapshotRequired
+		}
+		return page.serve(s.syncPage(p, g, s.firstRange(after, highWater), changes, []protocol.Outcome{}, nil, s.deferredTo(page)))
+	})
+	return Exchanged{page: page}
+}
+
+// continuationAtCommit is pullAtCommit for a continuation: the token is
+// decoded (and refused) before any statement, then sqlSyncContinuation
+// goes with the COMMIT and the binding is validated from its rows
+// (invalid_page_token, page_expired, epoch_changed after a commit that
+// wrote nothing).
+func (s *Service) continuationAtCommit(pipeline authority.CommitPipeline, p access.Principal, g access.Grant, raw string) (Exchanged, error) {
+	token, err := decodePageToken(s.pageKeys, raw)
+	if err != nil {
+		return Exchanged{}, err
+	}
+	digest := pageDigest(token.lookup)
+	page := &pageAtCommit{}
+	pipeline.PipelineWithCommit(func(b *pgx.Batch) { b.Queue(sqlSyncContinuation, g.FamilyID, digest[:]) }, func(results pgx.BatchResults) error {
+		rows, err := results.Query()
+		if err != nil {
+			return err
+		}
+		return page.serve(s.continuationPage(p, g, token, rows, s.deferredTo(page)))
+	})
+	return Exchanged{page: page}, nil
+}
+
+// bindingTx runs run in the second transaction of a pull page with more
+// (settle), authorized as a new request of the same caller would be, with
+// the principal and grant of that authorization.
+type bindingTx func(run func(pgx.Tx, access.Principal, access.Grant) error) error
+
+// requestBindingTx is ServeSync's binding transaction: req's credential
+// authorized again by WithRequestTx with req's Admit and no Charge (the
+// request was charged once, in its first transaction).
+func (s *Service) requestBindingTx(ctx context.Context, req authority.Request) bindingTx {
+	again := authority.Request{Digests: req.Digests, Admit: req.Admit}
+	return func(run func(pgx.Tx, access.Principal, access.Grant) error) error {
+		return s.guard.WithRequestTx(ctx, again, "read", run)
+	}
+}
+
+// principalBindingTx is ApplyAndPull's binding transaction: p's session
+// family re-read as ApplyAndPull's own (withFamily).
+func (s *Service) principalBindingTx(ctx context.Context, p access.Principal, familyID string) bindingTx {
+	return func(run func(pgx.Tx, access.Principal, access.Grant) error) error {
+		return s.withFamily(ctx, p, familyID, func(tx pgx.Tx, g access.Grant) error { return run(tx, p, g) })
+	}
+}
+
+// settle completes a request whose pull page was read with the commit
+// (pageAtCommit): Response becomes the page. A page with more names a
+// binding not stored yet: settle stores it in a second transaction (in),
+// its INSERT with that COMMIT (storeBindingAtCommit). That transaction's
+// refusal or failure is the request's, and the page is not served. Any
+// other request's exchange is left as it is.
+//
+// The second transaction is authorized the way a new request of the same
+// caller is, in the same order, before any statement, so a refusal there
+// is the code a new request would get in that state (docs/protocol/v1.md,
+// paged pulls):
+//   - ServeSync (requestBindingTx) repeats everything the first
+//     transaction checked except the rate limit: the bearer's digests
+//     looked up again, the session (live, epoch, deadline, access token
+//     expiry), the caller's Admit (family-scope session), family policy for
+//     "read" and the entitlement. Charge is not repeated: the request was
+//     charged once, and a second charge would count one request twice.
+//   - ApplyAndPull (principalBindingTx) repeats withFamily: the session
+//     re-read by ID, then family policy, as its first transaction.
+//
+// The binding must then be the one the page's token names: the same
+// session, account, device and security revision (a digest lookup that
+// found another session) and the same family (a session whose family
+// changed since the page was read). Otherwise the page is refused as
+// unavailable (retryable): its token would name a binding that is not the
+// caller's, and the next request is served from the new state.
+func (s *Service) settle(ctx context.Context, exchanged *Exchanged, in bindingTx) error {
+	page := exchanged.page
+	if page == nil {
+		return nil
+	}
+	exchanged.page = nil
+	if !page.read {
+		return errUnavailable
+	}
+	if page.binding != nil {
+		pending := *page.binding
+		b := pending.binding
+		if err := in(func(tx pgx.Tx, p access.Principal, g access.Grant) error {
+			if p.SessionID != b.sessionID || p.AccountID != b.accountID || p.DeviceID != b.deviceID || p.SecurityRevision != b.securityRevision ||
+				g.AccountID != b.accountID || g.FamilyID != b.familyID {
+				return authority.ErrUnavailable
+			}
+			return storeBindingAtCommit(ctx, tx, pending)
+		}); err != nil {
+			return err
+		}
+	}
+	exchanged.Response = page.response
+	return nil
 }
 
 func validatePageBinding(binding pageBinding, token decodedPageToken, principal access.Principal, grant access.Grant, identity protocol.ServerInfo, kind string, now time.Time) error {

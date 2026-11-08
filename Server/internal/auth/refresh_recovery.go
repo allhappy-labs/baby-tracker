@@ -7,9 +7,15 @@ import (
 	"babytracker/server/internal/identity"
 )
 
+// RecoverableRefreshInput is a recoverable refresh. Subject is optional: the
+// subject ResolveRecoverableRefreshSubject returned for this input, whose
+// session RefreshRecoverable then rotates without looking it up again (the
+// rotation still locks and re-reads it). A subject resolved for another
+// refresh token is refused.
 type RecoverableRefreshInput struct {
 	RefreshToken, AttemptID string
 	DeviceContinuity        identity.DeviceContinuityClaim
+	Subject                 RefreshSubject
 }
 type RecoveredSessionBundle struct {
 	SessionBundle
@@ -23,16 +29,18 @@ var ErrRefreshReceiptUnavailable = codedError("refresh_receipt_unavailable")
 // recoverable refresh without consuming it: the refresh token's account and
 // device (ResolveRefreshSubject's refusals) once the device proof matches
 // that device. Whether the rotation itself is still allowed (scope,
-// entitlement, receipt) is decided by RefreshRecoverable.
+// entitlement, receipt) is decided by RefreshRecoverable, which takes the
+// returned subject (RecoverableRefreshInput.Subject) to skip the lookup.
 func (service *Service) ResolveRecoverableRefreshSubject(ctx context.Context, input RecoverableRefreshInput) (RefreshSubject, error) {
 	if !service.validRecoveryRequest(input) {
 		return RefreshSubject{}, ErrInvalidRequest
 	}
-	device, err := service.recoveryContinuity(ctx, input)
+	parent, err := service.recoveryContinuity(ctx, input)
 	if err != nil {
 		return RefreshSubject{}, err
 	}
-	return RefreshSubject{AccountID: device.AccountID, DeviceID: device.DeviceID}, nil
+	device, _ := parent.Device()
+	return RefreshSubject{AccountID: device.AccountID, DeviceID: device.DeviceID, parent: parent}, nil
 }
 
 // RefreshRecoverable rotates a refresh token under a client attempt ID and
@@ -47,8 +55,10 @@ func (service *Service) RefreshRecoverable(ctx context.Context, input Recoverabl
 		return RecoveredSessionBundle{}, ErrInvalidRequest
 	}
 	claim := input.DeviceContinuity
-	result, err := service.authority.Refresh(ctx, service.refreshCommand(input.RefreshToken, input.AttemptID,
-		func(stored authority.DeviceBinding) bool { return service.continuityMatches(stored, &claim) }))
+	command := service.refreshCommand(input.RefreshToken, input.AttemptID,
+		func(stored authority.DeviceBinding) bool { return service.continuityMatches(stored, &claim) })
+	command.Parent = input.Subject.parent
+	result, err := service.authority.Refresh(ctx, command)
 	if err != nil {
 		return RecoveredSessionBundle{}, err
 	}
@@ -62,13 +72,14 @@ func (service *Service) validRecoveryRequest(input RecoverableRefreshInput) bool
 
 // recoveryContinuity proves the request's device claim against the device
 // the refresh token's session is bound to, for quota charging only.
-func (service *Service) recoveryContinuity(ctx context.Context, input RecoverableRefreshInput) (authority.DeviceBinding, error) {
-	device, status, err := service.authority.RefreshDevice(ctx, service.tokenCandidates("refresh", input.RefreshToken))
+func (service *Service) recoveryContinuity(ctx context.Context, input RecoverableRefreshInput) (*authority.RefreshParent, error) {
+	parent, err := service.authority.ResolveRefreshParent(ctx, service.tokenCandidates("refresh", input.RefreshToken))
 	if err != nil {
-		return authority.DeviceBinding{}, err
+		return nil, err
 	}
+	device, status := parent.Device()
 	if status != "active" || !service.continuityMatches(device, &input.DeviceContinuity) {
-		return authority.DeviceBinding{}, ErrDeviceContinuityInvalid
+		return nil, ErrDeviceContinuityInvalid
 	}
-	return device, nil
+	return parent, nil
 }

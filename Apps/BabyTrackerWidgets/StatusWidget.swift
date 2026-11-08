@@ -89,7 +89,7 @@ struct StatusWidget: Widget {
                         .foregroundStyle(.primary)
                         .lineLimit(1)
                         .minimumScaleFactor(0.8)
-                    Spacer(minLength: 4)
+                    Spacer(minLength: Spacing.xs)
                     Label {
                         Text(entry.summary.feedAge)
                     } icon: {
@@ -97,7 +97,7 @@ struct StatusWidget: Widget {
                     }
                     .foregroundStyle(Tracker.feed.color)
                     .accessibilityLabel("Last feed: \(entry.summary.feedAge)")
-                    Spacer(minLength: 4)
+                    Spacer(minLength: Spacing.xs)
                     Label {
                         Text(entry.summary.sleepText)
                     } icon: {
@@ -105,7 +105,7 @@ struct StatusWidget: Widget {
                     }
                     .foregroundStyle(Tracker.sleep.color)
                     .accessibilityLabel("Sleep: \(entry.summary.sleepText)")
-                    Spacer(minLength: 4)
+                    Spacer(minLength: Spacing.xs)
                     Label {
                         Text(entry.summary.diaperAge)
                     } icon: {

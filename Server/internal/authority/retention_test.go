@@ -278,6 +278,119 @@ func TestConcurrentPrunesDeleteEachRowOnce(t *testing.T) {
 	}
 }
 
+// While rotations consume parents, insert children and write receipts,
+// small repeated session prunes delete exactly the sessions eligible at the
+// cutoff (consumed or revoked before it, or refresh-expired, and named by no
+// receipt), each counted once, and nothing a rotation touched: the
+// address-based delete takes the same rows the key-based one did.
+func TestPruneSessionsDeletesTheEligibleSetUnderConcurrentRefresh(t *testing.T) {
+	f := authoritytest.New(t)
+	account := liveAccount(t, f)
+	device := f.Device(t, account)
+	start := f.Now
+	consumedParents(t, f, account, device, 24) // consumed at start: eligible
+	for range 4 {
+		seedReceipt(t, f, account, device) // a consumed parent and an active child a receipt names: kept
+	}
+	revoked := make([]string, 6)
+	for i := range revoked {
+		revoked[i], _, _ = f.Session(t, account, device, "account", "", "")
+	}
+	f.Exec(t, `UPDATE sessions SET status='revoked', revoked_at=$2, revoke_reason='device_revoked' WHERE id = ANY($1::uuid[])`, revoked, start)
+	cutoff := start.Add(time.Hour)
+	eligible := `SELECT coalesce(array_agg(s.id::text ORDER BY s.id), '{}') FROM sessions s
+		WHERE ((s.status = 'consumed' AND s.consumed_at < $1) OR (s.status = 'revoked' AND s.revoked_at < $1)
+		       OR (s.status = 'active' AND s.refresh_expires_at < $1))
+		  AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.parent_id = s.id)
+		  AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.child_id = s.id)`
+	ids := func(query string, args ...any) []string {
+		var out []string
+		inAuthorityTx(t, f, func(tx pgx.Tx) {
+			if err := tx.QueryRow(t.Context(), query, args...).Scan(&out); err != nil {
+				t.Fatalf("%s: %v", query, err)
+			}
+		})
+		return out
+	}
+	want := ids(eligible, cutoff)
+	if len(want) != 24+len(revoked) {
+		t.Fatalf("%d sessions eligible before the run, want %d", len(want), 24+len(revoked))
+	}
+	before := ids(`SELECT array_agg(id::text ORDER BY id) FROM sessions`)
+
+	// The rotations run two days later: what they consume is past the
+	// cutoff, so the eligible set must not change while they run.
+	f.Now = start.Add(48 * time.Hour)
+	type rotation struct{ raw, attempt string }
+	rotations := make([]rotation, 40)
+	for i := range rotations {
+		_, _, raw := f.Session(t, account, device, "account", "", "")
+		rotations[i] = rotation{raw: raw}
+		if i%2 == 0 {
+			rotations[i].attempt = newAttempt(t) // recoverable: writes a receipt
+		}
+	}
+	errs := make(chan error, len(rotations))
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for _, r := range rotations {
+			var continuity *authority.DeviceBinding
+			if r.attempt != "" {
+				continuity = binding(account, device)
+			}
+			if _, err := f.Service.Refresh(context.Background(), refreshOf(f, r.raw, r.attempt, continuity)); err != nil {
+				errs <- err
+			}
+		}
+	}()
+	deleted, rotating := 0, true
+	for rotating {
+		select {
+		case <-done:
+			rotating = false
+		default:
+		}
+		n, err := f.Service.PruneSessions(t.Context(), cutoff, 3)
+		if err != nil {
+			t.Fatal(err)
+		}
+		deleted += n
+		if !rotating {
+			for n > 0 { // drain what is left once the rotations ended
+				if n, err = f.Service.PruneSessions(t.Context(), cutoff, 3); err != nil {
+					t.Fatal(err)
+				}
+				deleted += n
+			}
+		}
+	}
+	close(errs)
+	for err := range errs {
+		t.Errorf("concurrent rotation: %v", err)
+	}
+	after := ids(`SELECT array_agg(id::text ORDER BY id) FROM sessions`)
+	var gone []string
+	for _, id := range before {
+		if !slices.Contains(after, id) {
+			gone = append(gone, id)
+		}
+	}
+	if !slices.Equal(gone, want) || deleted != len(want) {
+		t.Fatalf("deleted %v (reported %d), want exactly the eligible %v", gone, deleted, want)
+	}
+	if left := ids(eligible, cutoff); len(left) != 0 {
+		t.Fatalf("eligible sessions left: %v", left)
+	}
+	// Every rotation's parent (consumed at start + 48 h) and child survive.
+	if n := count(t, f, `SELECT count(*) FROM sessions WHERE consumed_at = $1`, f.Now); n != len(rotations) {
+		t.Fatalf("%d of the %d rotations' consumed parents survive", n, len(rotations))
+	}
+	if n := count(t, f, `SELECT count(*) FROM sessions WHERE created_at = $1`, f.Now); n != 2*len(rotations) {
+		t.Fatalf("%d of the rotations' %d parents and children survive", n, 2*len(rotations))
+	}
+}
+
 func TestPruneChallengesAndRefreshReceipts(t *testing.T) {
 	f := authoritytest.New(t)
 	// A fixed clock months behind the database's, so every cutoff below,
@@ -570,7 +683,9 @@ func lockedByAnother(t *testing.T, f *authoritytest.Fixture, parent string) bool
 }
 
 // The prune statements read their retention indexes, in custom and generic
-// plans, and never scan the swept table whole.
+// plans, and never scan the swept table whole. Consumed and revoked sessions
+// are deleted through a TID scan of the rows the selection locked, never
+// through a probe of sessions_id_key or sessions_pkey.
 func TestPruneStatementsUseTheirIndexes(t *testing.T) {
 	f := authoritytest.New(t)
 	account := liveAccount(t, f)
@@ -606,12 +721,13 @@ func TestPruneStatementsUseTheirIndexes(t *testing.T) {
 	for _, c := range []struct {
 		name, sql, table, index string
 		args                    []any
+		byAddress               bool
 	}{
-		{"consumed", authority.PruneSQL["consumed"], "sessions", "sessions_consumed_idx", []any{cutoff, 5000}},
-		{"revoked", authority.PruneSQL["revoked"], "sessions", "sessions_revoked_idx", []any{cutoff, 5000}},
-		{"refresh-expired", authority.PruneSQL["expired"], "sessions", "sessions_expired_idx", []any{cutoff, 5000}},
-		{"challenges", authority.PruneSQL["challenges"], "auth_challenges", "auth_challenges_expiry_idx", []any{cutoff, 5000}},
-		{"refresh receipts", authority.PruneSQL["receipts"], "refresh_receipts", "refresh_receipts_expiry_idx", []any{cutoff, 2000}},
+		{"consumed", authority.PruneSQL["consumed"], "sessions", "sessions_consumed_idx", []any{cutoff, 5000}, true},
+		{"revoked", authority.PruneSQL["revoked"], "sessions", "sessions_revoked_idx", []any{cutoff, 5000}, true},
+		{"refresh-expired", authority.PruneSQL["expired"], "sessions", "sessions_expired_idx", []any{cutoff, 5000}, false},
+		{"challenges", authority.PruneSQL["challenges"], "auth_challenges", "auth_challenges_expiry_idx", []any{cutoff, 5000}, false},
+		{"refresh receipts", authority.PruneSQL["receipts"], "refresh_receipts", "refresh_receipts_expiry_idx", []any{cutoff, 2000}, false},
 	} {
 		for _, mode := range []string{"force_custom_plan", "force_generic_plan"} {
 			t.Run(c.name+"/"+mode, func(t *testing.T) {
@@ -627,7 +743,7 @@ func TestPruneStatementsUseTheirIndexes(t *testing.T) {
 					if err := json.Unmarshal([]byte(raw), &plans); err != nil || len(plans) != 1 {
 						t.Fatalf("plan %s: %v", raw, err)
 					}
-					usesIndex := false
+					usesIndex, tidScan := false, false
 					plans[0].Plan.walk(func(n pruneNode) {
 						if n.RelationName == c.table && n.NodeType == "Seq Scan" {
 							t.Fatalf("a sequential scan of %s: %s", c.table, raw)
@@ -635,9 +751,18 @@ func TestPruneStatementsUseTheirIndexes(t *testing.T) {
 						if n.IndexName == c.index {
 							usesIndex = true
 						}
+						if n.RelationName == c.table && n.NodeType == "Tid Scan" {
+							tidScan = true
+						}
+						if c.byAddress && (n.IndexName == "sessions_id_key" || n.IndexName == "sessions_pkey") {
+							t.Fatalf("the delete probes %s per row: %s", n.IndexName, raw)
+						}
 					})
 					if !usesIndex {
 						t.Fatalf("the plan does not read %s: %s", c.index, raw)
+					}
+					if tidScan != c.byAddress {
+						t.Fatalf("TID scan of %s: %v, want %v: %s", c.table, tidScan, c.byAddress, raw)
 					}
 				})
 			})

@@ -25,8 +25,8 @@ public struct BreakLimits: Equatable, Sendable {
     }
 }
 
-/// How long a break may last before the next part starts a new feed or sleep
-/// session, as the person using this device set it.
+/// How this phone tracks: the break limits, and the order of each baby's Home
+/// buttons.
 ///
 /// Per device, in the App Group: a widget or an intent decides whether a tap
 /// joins or starts fresh using the same limits the app shows in Settings,
@@ -61,6 +61,30 @@ public struct TrackingPreferences {
 
     public var limits: BreakLimits {
         BreakLimits(feed: TimeInterval(feedMinutes * 60), sleep: TimeInterval(sleepMinutes * 60))
+    }
+
+    // MARK: - Home buttons
+
+    public static func homeOrderKey(for babyID: UUID) -> String {
+        "tracking.homeOrder.\(babyID.uuidString)"
+    }
+
+    /// The order of Home's actions for one baby, as this phone arranged it.
+    /// Always complete — see `HomeActionKind.order(fromStored:)`.
+    public func homeOrder(for babyID: UUID) -> [HomeActionKind] {
+        HomeActionKind.order(fromStored: defaults.stringArray(forKey: Self.homeOrderKey(for: babyID)) ?? [])
+    }
+
+    /// The default order is stored as nothing at all, so a baby left at the
+    /// default follows whatever the default becomes.
+    public func setHomeOrder(_ order: [HomeActionKind], for babyID: UUID) {
+        let complete = HomeLayout(order: order).order
+        guard complete != HomeActionKind.defaultOrder else { return resetHomeOrder(for: babyID) }
+        defaults.set(complete.map(\.rawValue), forKey: Self.homeOrderKey(for: babyID))
+    }
+
+    public func resetHomeOrder(for babyID: UUID) {
+        defaults.removeObject(forKey: Self.homeOrderKey(for: babyID))
     }
 
     static func clamp(_ minutes: Int) -> Int {

@@ -70,12 +70,13 @@ public struct HistoryView: View {
     @State private var isExporting = false
     /// The session row whose swipe is waiting on "Delete this feed?".
     @State private var pendingDelete: HistoryListRow?
+    @State private var isConfirmingDelete = false
     @Environment(\.errorReporter) private var errorReporter
     @Environment(\.scenePhase) private var scenePhase
 
     /// Rows sit close, as in the mockup: the list's default insets around a
     /// 44-point row left a day of entries spread over two screens.
-    private static let rowInsets = EdgeInsets(top: 4, leading: 16, bottom: 4, trailing: 16)
+    private static let rowInsets = EdgeInsets(top: Spacing.xs, leading: Spacing.l, bottom: Spacing.xs, trailing: Spacing.l)
 
     public init(
         store: BabyStore,
@@ -104,14 +105,27 @@ public struct HistoryView: View {
 
     public var body: some View {
         NavigationStack {
-            list
+            ScreenScaffold(
+                header: .baby(name: babyName, avatar: babyAvatar, switcherID: "history.babySwitcher",
+                              headingID: "history.babyName", onSwitch: onSwitchBaby),
+                scrolls: false,
+                trailing: {
+                    exportButton
+                    filterButton
+                },
+                content: {
+                    if model.isFiltered {
+                        showingChip
+                    }
+                    list
+                }
+            )
                 .navigationTitle(HistoryCopy.title)
                 #if os(iOS)
-                // The header is drawn below, so the bar would leave a tall
-                // empty band above it.
+                // The header is drawn by the scaffold, so the bar would leave
+                // a tall empty band above it.
                 .toolbar(.hidden, for: .navigationBar)
                 #endif
-                .safeAreaInset(edge: .top, spacing: 0) { header }
                 .overlay {
                     // While older days may still hold something, the footer
                     // keeps paging rather than calling the list empty.
@@ -121,21 +135,19 @@ public struct HistoryView: View {
         .fittedSheet(isPresented: $isShowingFilter) {
             HistoryFilterSheet(filter: model.filter, toggle: toggle) { isShowingFilter = false }
         }
-        .sheet(isPresented: $isExporting) {
+        .fittedSheet(isPresented: $isExporting) {
             HistoryExportSheet(
                 model: HistoryExportViewModel(store: store, babyID: babyID, babyName: babyName, volumeUnit: model.volumeUnit)
             ) { isExporting = false }
         }
-        .confirmationDialog(
-            pendingDelete.map(HistoryCopy.deleteConfirmTitle) ?? "",
-            isPresented: Binding(get: { pendingDelete != nil }, set: { if !$0 { pendingDelete = nil } }),
-            titleVisibility: .visible,
-            presenting: pendingDelete
-        ) { row in
-            Button(HistoryCopy.delete, role: .destructive) { deleteConfirmed(row) }
-                .accessibilityIdentifier("history.confirmDelete")
-            Button(HistoryCopy.keep, role: .cancel) {}
-                .accessibilityIdentifier("history.keep")
+        .confirmDelete(
+            isPresented: $isConfirmingDelete,
+            title: pendingDelete.map(HistoryCopy.deleteConfirmTitle) ?? "",
+            deleteTitle: HistoryCopy.delete,
+            keepTitle: HistoryCopy.keep,
+            identifierPrefix: "history"
+        ) {
+            if let row = pendingDelete { deleteConfirmed(row) }
         }
         .task { reload(); openFocusedEntry() }
         .onChange(of: focus?.id) { _, _ in openFocusedEntry() }
@@ -175,8 +187,9 @@ public struct HistoryView: View {
                 pageLoader
             }
         }
-        // Plain, so the day headers stay pinned while the day scrolls under.
-        .listStyle(.plain)
+        // Each day is a card on the scaffold's ground; the list stays a
+        // `List` so the swipe actions keep working.
+        .cardListStyle()
     }
 
     /// The end of the list while older days remain (ruling H-R23). Reaching
@@ -187,6 +200,7 @@ public struct HistoryView: View {
         ProgressView()
             .frame(maxWidth: .infinity, minHeight: 44)
             .listRowSeparator(.hidden)
+            .listRowBackground(Color.clear)
             .accessibilityIdentifier("history.loadingMore")
             .task(id: model.dayCount) { loadMore() }
     }
@@ -215,6 +229,7 @@ public struct HistoryView: View {
             .buttonStyle(.plain)
             .accessibilityIdentifier("history.row.\(index)")
             .listRowSeparator(.hidden)
+            .listRowBackground(Surface.card)
             .listRowInsets(Self.rowInsets)
             #if os(iOS)
             .swipeActions(edge: .trailing, allowsFullSwipe: !row.deleteConfirmation) {
@@ -226,6 +241,7 @@ public struct HistoryView: View {
             content
                 .accessibilityIdentifier("history.row.\(index)")
                 .listRowSeparator(.hidden)
+                .listRowBackground(Surface.card)
                 .listRowInsets(Self.rowInsets)
         }
     }
@@ -235,7 +251,7 @@ public struct HistoryView: View {
         if row.deleteConfirmation {
             // No destructive role: that role removes the row at once, before
             // the confirmation has been answered.
-            Button { pendingDelete = row } label: {
+            Button { pendingDelete = row; isConfirmingDelete = true } label: {
                 Label(HistoryCopy.delete, systemImage: "trash")
             }
             .tint(Palette.destructive)
@@ -250,98 +266,29 @@ public struct HistoryView: View {
 
     // MARK: - Header
 
-    /// The baby's name and the filter button, with the "Showing: …" chip
-    /// under them while a filter is on. Pinned above the list.
-    private var header: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            HStack(alignment: .center, spacing: 12) {
-                name
-                Spacer(minLength: 0)
-                exportButton
-                filterButton
-            }
-            if model.isFiltered {
-                showingChip
-            }
-        }
-        // Home's inset, so the switcher sits in the same place on every tab.
-        .padding(.horizontal, 20)
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        .background(.bar)
-    }
-
-    private var name: some View {
-        BabySwitcherHeader(babyName: babyName, avatar: babyAvatar,
-                           switcherID: "history.babySwitcher", headingID: "history.babyName",
-                           onSwitchBaby: onSwitchBaby)
-    }
+    // MARK: - Header
 
     private var exportButton: some View {
-        Button { isExporting = true } label: {
-            Image(systemName: "square.and.arrow.up")
-                .font(.body.weight(.semibold))
-                // Capped, as the filter button: a 44-point circle cannot hold
-                // an accessibility-size glyph.
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .foregroundStyle(Palette.secondaryText)
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(Palette.secondaryText.opacity(0.14)))
-                .contentShape(Circle())
-        }
-        .buttonStyle(.plain)
-        .accessibilityLabel(HistoryCopy.exportPDF)
-        .accessibilityIdentifier("history.export")
+        CircleIconButton(systemImage: "square.and.arrow.up", label: HistoryCopy.exportPDF,
+                         identifier: "history.export") { isExporting = true }
     }
 
     private var filterButton: some View {
-        Button { isShowingFilter = true } label: {
-            Image(systemName: "line.3.horizontal.decrease")
-                .font(.body.weight(.semibold))
-                // Capped: a 44-point circle cannot hold an accessibility-size
-                // glyph, and the two header buttons would overlap.
-                .dynamicTypeSize(...DynamicTypeSize.xxxLarge)
-                .foregroundStyle(model.isFiltered ? Palette.primaryText : Palette.secondaryText)
-                .frame(width: 44, height: 44)
-                .background(Circle().fill(Palette.secondaryText.opacity(0.14)))
-                .overlay(alignment: .topTrailing) {
-                    if model.isFiltered {
-                        Circle()
-                            .fill(Palette.feed)
-                            .frame(width: 10, height: 10)
-                            .offset(x: -3, y: 3)
-                    }
-                }
-                .contentShape(Circle())
+        CircleIconButton(systemImage: "line.3.horizontal.decrease", label: HistoryCopy.filter,
+                         identifier: "history.filter", showsBadge: model.isFiltered) {
+            isShowingFilter = true
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(HistoryCopy.filter)
         .accessibilityValue(model.isFiltered ? HistoryCopy.showing(model.filter) : "")
-        .accessibilityIdentifier("history.filter")
     }
 
     /// One tap clears the filter.
     private var showingChip: some View {
-        Button(action: clearFilter) {
-            HStack(spacing: 6) {
-                Text(HistoryCopy.showing(model.filter))
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Palette.primaryText)
-                    .multilineTextAlignment(.leading)
-                Image(systemName: "xmark")
-                    .font(.caption.weight(.bold))
-                    .foregroundStyle(Palette.secondaryText)
-            }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .frame(minHeight: 44)
-            .background(Capsule().fill(Palette.secondaryText.opacity(0.14)).padding(.vertical, 4))
-            .contentShape(Capsule())
+        HStack {
+            Chip(HistoryCopy.showing(model.filter), onRemove: clearFilter,
+                 removeLabel: HistoryCopy.clearFilter, removeIdentifier: "history.filter.clear")
+            Spacer(minLength: 0)
         }
-        .buttonStyle(.plain)
-        .accessibilityLabel(HistoryCopy.showing(model.filter))
-        .accessibilityHint(HistoryCopy.clearFilter)
-        .accessibilityIdentifier("history.filter.clear")
+        .padding(.horizontal, Spacing.l)
     }
 
     // MARK: - Empty
@@ -352,33 +299,22 @@ public struct HistoryView: View {
         case .noData:
             // One line with the icon: the list will fill in as things are
             // logged, so there is nothing to explain.
-            Label {
-                Text(HistoryCopy.nothingLogged)
-            } icon: {
-                Image(systemName: "list.bullet").accessibilityHidden(true)
-            }
-            .font(.body)
-            .foregroundStyle(Palette.secondaryText)
-            .padding(24)
-            .accessibilityIdentifier("history.empty")
+            EmptyState(systemImage: "list.bullet", title: HistoryCopy.nothingLogged, message: nil)
+                .accessibilityIdentifier("history.empty")
         case .nothingMatches:
-            VStack(spacing: 12) {
-                Text(HistoryCopy.nothingMatches)
-                    .font(.headline)
-                    .foregroundStyle(Palette.primaryText)
-                    .multilineTextAlignment(.center)
+            VStack(spacing: Spacing.s) {
+                EmptyState(systemImage: "line.3.horizontal.decrease", title: HistoryCopy.nothingMatches, message: nil)
                     .accessibilityIdentifier("history.empty")
                 Button(HistoryCopy.clearFilter, action: clearFilter)
-                    .buttonStyle(.bordered)
-                    .frame(minHeight: 44)
+                    .buttonStyle(.secondary)
+                    .padding(.horizontal, Spacing.l)
                     .accessibilityIdentifier("history.empty.clearFilter")
             }
-            .padding(24)
         case .nothingRecent(let dayCount):
-            ContentUnavailableView(
-                HistoryCopy.nothingRecentTitle(dayCount),
+            EmptyState(
                 systemImage: "list.bullet",
-                description: Text(HistoryCopy.nothingRecentMessage(dayCount))
+                title: HistoryCopy.nothingRecentTitle(dayCount),
+                message: HistoryCopy.nothingRecentMessage(dayCount)
             )
             .accessibilityIdentifier("history.empty")
         }
@@ -469,6 +405,9 @@ public struct HistoryView: View {
 
 public enum HistoryCopy {
     public static let title = L10n.tr("History")
+    static let pumping = L10n.tr("Pumping…")
+    /// A finished session with no amount. A dash, not a word: nothing to translate.
+    static let noAmount = "—"
     static let filter = L10n.tr("Filter")
     static let clearFilter = L10n.tr("Clear filter")
     static let delete = L10n.tr("Delete")
@@ -477,6 +416,7 @@ public enum HistoryCopy {
     static let nothingMatches = L10n.tr("Nothing matches")
     static let show = L10n.tr("Show")
     static let done = L10n.tr("Done")
+    static let cancel = L10n.tr("Cancel")
     static let exportPDF = L10n.tr("Export PDF")
     static let columnTime = L10n.tr("Time")
     static let columnType = L10n.tr("Type")
@@ -503,6 +443,8 @@ public enum HistoryCopy {
         case .diaper: L10n.tr("Diapers")
         case .supplement: L10n.tr("Meds")
         case .growth: L10n.tr("Growth")
+        case .vaccine: L10n.tr("Vaccines")
+        case .pump: L10n.tr("Pumping")
         }
     }
 
@@ -530,19 +472,19 @@ struct HistoryDayHeader: View {
     var body: some View {
         Group {
             if typeSize.isAccessibilitySize {
-                VStack(alignment: .leading, spacing: 4) {
+                VStack(alignment: .leading, spacing: Spacing.xs) {
                     title
                     totals
                 }
             } else {
-                HStack(alignment: .firstTextBaseline, spacing: 12) {
+                HStack(alignment: .firstTextBaseline, spacing: Spacing.m) {
                     title
                     Spacer(minLength: 0)
                     totals
                 }
             }
         }
-        .padding(.vertical, 4)
+        .padding(.vertical, Spacing.xs)
         .textCase(nil)
         .accessibilityElement(children: .ignore)
         .accessibilityAddTraits(.isHeader)
@@ -555,8 +497,16 @@ struct HistoryDayHeader: View {
             .foregroundStyle(Palette.primaryText)
     }
 
-    private var totals: some View {
-        HStack(spacing: 10) {
+    @ViewBuilder private var totals: some View {
+        if typeSize.isAccessibilitySize {
+            ChipFlow(spacing: Spacing.m) { totalItems }
+        } else {
+            HStack(spacing: Spacing.m) { totalItems }
+        }
+    }
+
+    @ViewBuilder private var totalItems: some View {
+        Group {
             if day.totals.feeds > 0 {
                 total(Tracker.feed.icon, Tracker.feed.color, "\(day.totals.feeds)")
             }
@@ -579,6 +529,8 @@ struct HistoryDayHeader: View {
             Text(value)
                 .font(.footnote.weight(.bold))
                 .monospacedDigit()
+                .lineLimit(1)
+                .fixedSize()
                 .foregroundStyle(Palette.primaryText)
         }
     }
@@ -596,51 +548,80 @@ struct HistoryListRowView: View {
     let index: Int
     @ScaledMetric(relativeTo: .subheadline) private var timeWidth = 48
 
+    @Environment(\.dynamicTypeSize) private var typeSize
+
     var body: some View {
-        HStack(alignment: .center, spacing: 10) {
-            VStack(alignment: .leading, spacing: 1) {
-                Text(row.start)
-                    .font(.subheadline.weight(.semibold))
-                    .foregroundStyle(Palette.primaryText)
-                if let end = row.end {
-                    Text(end)
-                        .font(.caption)
-                        .foregroundStyle(Palette.secondaryText)
-                }
-            }
-            .monospacedDigit()
-            .lineLimit(1)
-            .fixedSize()
-            .frame(minWidth: timeWidth, alignment: .leading)
-
-            TrackerIcon(row.tracker)
-                .foregroundStyle(row.tracker.color)
-                .accessibilityHidden(true)
-
-            ChipFlow(spacing: 6) {
-                if let text = row.text {
-                    Text(text)
-                        .font(.body)
-                        .foregroundStyle(Palette.primaryText)
-                }
-                ForEach(row.chips) { chip in
-                    HistoryChipView(chip: chip, tint: row.tracker.color)
-                }
-                if let since = row.runningSince {
-                    TimelineView(.periodic(from: .now, by: 1)) { context in
-                        Text(ElapsedFormatter.precise(Int(context.date.timeIntervalSince(since))))
-                            .font(.subheadline.weight(.semibold))
-                            .monospacedDigit()
-                            .foregroundStyle(row.tracker.color)
+        Group {
+            if typeSize.isAccessibilitySize {
+                // Time and glyph above, the content under them at the full
+                // width: beside them it would break words mid-word.
+                VStack(alignment: .leading, spacing: Spacing.xs) {
+                    HStack(alignment: .firstTextBaseline, spacing: Spacing.m) {
+                        times(stacked: false)
+                        glyph
                     }
-                    .accessibilityIdentifier("history.row.\(index).running")
+                    details
+                }
+            } else {
+                HStack(alignment: .center, spacing: Spacing.m) {
+                    times(stacked: true)
+                    glyph
+                    details
                 }
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
         }
         .frame(minHeight: 40)
         .accessibilityElement(children: .combine)
         .accessibilityLabel(label)
+    }
+
+    @ViewBuilder
+    private func times(stacked: Bool) -> some View {
+        let layout = stacked ? AnyLayout(VStackLayout(alignment: .leading, spacing: 1))
+                             : AnyLayout(HStackLayout(alignment: .firstTextBaseline, spacing: Spacing.s))
+        layout {
+            Text(row.start)
+                .font(.subheadline.weight(.semibold))
+                .foregroundStyle(Palette.primaryText)
+            if let end = row.end {
+                Text(stacked ? end : "–\(end)")
+                    .font(.caption)
+                    .foregroundStyle(Palette.secondaryText)
+            }
+        }
+        .monospacedDigit()
+        .lineLimit(1)
+        .fixedSize()
+        .frame(minWidth: stacked ? timeWidth : nil, alignment: .leading)
+    }
+
+    private var glyph: some View {
+        TrackerIcon(row.tracker)
+            .foregroundStyle(row.tracker.color)
+            .accessibilityHidden(true)
+    }
+
+    private var details: some View {
+        ChipFlow(spacing: Spacing.s) {
+            if let text = row.text {
+                Text(text)
+                    .font(.body)
+                    .foregroundStyle(Palette.primaryText)
+            }
+            ForEach(row.chips) { chip in
+                Chip(chip.text, icon: chip.icon, tint: row.tracker.color, size: .small, monospacedDigits: true)
+            }
+            if let since = row.runningSince {
+                TimelineView(.periodic(from: .now, by: 1)) { context in
+                    Text(ElapsedFormatter.precise(Int(context.date.timeIntervalSince(since))))
+                        .font(.subheadline.weight(.semibold))
+                        .monospacedDigit()
+                        .foregroundStyle(row.tracker.color)
+                }
+                .accessibilityIdentifier("history.row.\(index).running")
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
     /// "Diaper, Wet, at 13:20", "Feed, L 12m, R 15m, at 10:23–11:48". A
@@ -655,29 +636,6 @@ struct HistoryListRowView: View {
 
     private var summary: String {
         ([row.text].compactMap { $0 } + row.chips.map(\.text)).joined(separator: ", ")
-    }
-}
-
-/// One part of a feed: "L 12m", a bottle's volume, a solids feed's foods.
-private struct HistoryChipView: View {
-    let chip: HistoryChip
-    let tint: Color
-
-    var body: some View {
-        HStack(spacing: 3) {
-            if let icon = chip.icon {
-                BabyIconView(icon, size: 12)
-                    .foregroundStyle(tint)
-                    .accessibilityHidden(true)
-            }
-            Text(chip.text)
-                .font(.footnote.weight(.medium))
-                .foregroundStyle(Palette.primaryText)
-                .monospacedDigit()
-        }
-        .padding(.horizontal, 7)
-        .padding(.vertical, 2)
-        .background(Palette.secondaryText.opacity(0.16), in: Capsule())
     }
 }
 
@@ -746,33 +704,26 @@ struct HistoryFilterSheet: View {
     let onDone: () -> Void
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    /// Presented with `fittedSheet`: as tall as this, so the title and Done
-    /// are drawn here.
+    /// Presented with `fittedSheet`: as tall as this, so the title, the close
+    /// button and Done are drawn here. The toggles apply as they are tapped
+    /// (`toggle` reloads the list), so Done only closes the sheet.
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader(cancelTitle: "", onCancel: nil) {
-                SheetTitleText(HistoryCopy.show)
-            } trailing: {
-                Button(HistoryCopy.done, action: onDone)
-                    .buttonStyle(.glass)
-                    .controlSize(.large)
-                    .accessibilityIdentifier("history.filter.done")
-            }
-            ScrollView {
-                if typeSize.isAccessibilitySize {
-                    VStack(alignment: .leading, spacing: 8) {
-                        ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
-                    }
-                    .padding(20)
-                } else {
-                    HStack(alignment: .top, spacing: 8) {
-                        ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
-                    }
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 8)
+        SheetScaffold(
+            HistoryCopy.show,
+            closeTitle: HistoryCopy.cancel,
+            onClose: onDone,
+            primary: SheetAction(HistoryCopy.done, identifier: "history.filter.done", action: onDone)
+        ) {
+            if typeSize.isAccessibilitySize {
+                VStack(alignment: .leading, spacing: Spacing.s) {
+                    ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
+                }
+            } else {
+                // Wraps onto more lines rather than shrinking a chip.
+                ChipFlow(spacing: Spacing.s) {
+                    ForEach(HistoryViewModel.trackers, id: \.self) { toggleButton($0) }
                 }
             }
-            .scrollBounceBehavior(.basedOnSize)
         }
     }
 
@@ -780,43 +731,15 @@ struct HistoryFilterSheet: View {
         let isOn = filter.contains(tracker)
         let isLast = isOn && filter.count == 1
         return Button { toggle(tracker) } label: {
-            Group {
-                if typeSize.isAccessibilitySize {
-                    HStack(spacing: 12) {
-                        icon(tracker, isOn: isOn)
-                        Text(HistoryCopy.filterName(tracker))
-                            .font(.body.weight(.semibold))
-                        Spacer(minLength: 0)
-                    }
-                } else {
-                    VStack(spacing: 6) {
-                        icon(tracker, isOn: isOn)
-                        Text(HistoryCopy.filterName(tracker))
-                            .font(.caption.weight(.semibold))
-                            .lineLimit(2)
-                            .minimumScaleFactor(0.8)
-                            .multilineTextAlignment(.center)
-                    }
-                    .frame(maxWidth: .infinity)
-                }
+            HStack(spacing: Spacing.s) {
+                BabyIconView(tracker.icon, size: 18)
+                    .accessibilityHidden(true)
+                Text(HistoryCopy.filterName(tracker))
             }
-            .foregroundStyle(isOn ? Palette.primaryText : Palette.secondaryText)
-            .contentShape(Rectangle())
+            .frame(maxWidth: typeSize.isAccessibilitySize ? .infinity : nil, alignment: .leading)
         }
-        .buttonStyle(.plain)
+        .buttonStyle(.selectableChip(tracker.color, isSelected: isOn))
         .disabled(isLast)
-        .accessibilityLabel(HistoryCopy.filterName(tracker))
-        .accessibilityAddTraits(isOn ? [.isSelected] : [])
         .accessibilityIdentifier("history.filter.\(tracker.rawValue)")
-    }
-
-    private func icon(_ tracker: Tracker, isOn: Bool) -> some View {
-        BabyIconView(tracker.icon, size: 24)
-            .foregroundStyle(isOn ? tracker.color : Palette.secondaryText)
-            .frame(width: 52, height: 52)
-            .background(Circle().fill(isOn ? tracker.color.opacity(0.20) : Palette.secondaryText.opacity(0.07)))
-            .overlay(Circle().strokeBorder(isOn ? tracker.color.opacity(0.85) : Palette.secondaryText.opacity(0.30),
-                                           lineWidth: 1))
-            .accessibilityHidden(true)
     }
 }

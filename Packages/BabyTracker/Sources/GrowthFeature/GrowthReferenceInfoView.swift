@@ -9,7 +9,7 @@ struct GrowthReferenceInfoView: View {
     var body: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 20) {
-                Text(GrowthCopy.text("Swiss PEZZ 2025 reference")).font(.title2.bold())
+                Text(GrowthCopy.text("Swiss PEZZ 2025 reference")).textRole(.sheetTitle)
                 Text(GrowthCopy.text("Weight and length/height comparisons cover birth through the fifth calendar birthday. Head circumference keeps its recorded values and history without a reference percentile."))
                 Text(GrowthCopy.text("These comparisons describe a population reference; they do not diagnose growth concerns."))
                 Text(GrowthCopy.text("Ranks are rounded estimates. Values below P3 or above P97 show <3rd or >97th rather than an extrapolated rank."))
@@ -17,7 +17,7 @@ struct GrowthReferenceInfoView: View {
                 Text(GrowthCopy.text("A later due date supplies corrected age until the third chronological birthday. This is the app’s application of AAP guidance; the Swiss study did not validate preterm growth."))
                 Link(GrowthCopy.text("AAP corrected-age guidance"), destination: URL(string: "https://www.aap.org/en/patient-care/newborn-infant-and-early-childhood-nutrition/newborn-and-infant-nutrition-assessment-tools/term-infant-growth-tools/")!)
                 Text(GrowthCopy.text("For standing measurements before the second reference-age birthday, only the comparison value receives +1 cm. Lying measurements from that birthday have no reference comparison. Recorded values stay unchanged."))
-                Text(GrowthCopy.text("Source and license")).font(.headline)
+                Text(GrowthCopy.text("Source and license")).textRole(.cardTitle)
                 // Author names and the published article title remain in their original form.
                 Text("Eiholzer U, Stephan A, Dubinski I, Fritz C, Noordam C. Updated Swiss Growth References 2025: No Height Differences, but BMI Variations Associated with Migration. Journal of Clinical Medicine 14 (2025), 5912.")
                 Link("DOI: 10.3390/jcm14165912", destination: URL(string: "https://doi.org/10.3390/jcm14165912")!)
@@ -25,9 +25,9 @@ struct GrowthReferenceInfoView: View {
                 Text(GrowthCopy.text("© 2025 by the authors; licensed to MDPI. Reference data and this extraction use CC BY 4.0. The app’s original code has separate licensing. No endorsement by the authors, PEZZ or MDPI is implied."))
                 Link(GrowthCopy.text("Creative Commons Attribution 4.0 (CC BY 4.0)"), destination: URL(string: "https://creativecommons.org/licenses/by/4.0/")!)
                 if let provenance {
-                    Text(GrowthCopy.text("Original ZIP SHA-256")).font(.headline)
+                    Text(GrowthCopy.text("Original ZIP SHA-256")).textRole(.cardTitle)
                     Text(provenance.source.sha256).font(.caption.monospaced())
-                    Text(GrowthCopy.text("Extracted CSV SHA-256")).font(.headline)
+                    Text(GrowthCopy.text("Extracted CSV SHA-256")).textRole(.cardTitle)
                     Text(provenance.csv.sha256).font(.caption.monospaced())
                 } else {
                     Text(GrowthCopy.text("Reference data is unavailable."))

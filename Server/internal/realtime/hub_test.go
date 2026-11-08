@@ -174,6 +174,92 @@ func TestCursorDomainChangeClosesSocket(t *testing.T) {
 	waitCloses(t, connection, ClosePolicyViolation)
 }
 
+// pingHeldConnection holds its first ping, as a ping waiting for its pong
+// does, until release closes or the ping's context ends. A cancelled
+// context aborts it the way coder/websocket aborts a write whose context
+// ends (setupWriteTimeout closes the transport), so the close frame that
+// follows never reaches the client: aborted records that.
+type pingHeldConnection struct {
+	testConnection
+	pinging chan struct{}
+	release chan struct{}
+	once    sync.Once
+}
+
+func newPingHeldConnection() *pingHeldConnection {
+	return &pingHeldConnection{pinging: make(chan struct{}), release: make(chan struct{})}
+}
+
+func (connection *pingHeldConnection) Ping(ctx context.Context) error {
+	first := false
+	connection.once.Do(func() { first = true; close(connection.pinging) })
+	if !first {
+		return nil
+	}
+	select {
+	case <-connection.release:
+		return nil
+	case <-ctx.Done():
+		if errors.Is(ctx.Err(), context.Canceled) {
+			connection.mu.Lock()
+			connection.aborted = true
+			connection.mu.Unlock()
+		}
+		return ctx.Err()
+	}
+}
+
+// A ping in flight when another path ends the lease neither answers for it
+// nor aborts the socket under it: the invalidation's 1008 is the only close
+// and reaches the client. The v5 and v6 runs' lost sockets saw 1013 "slow
+// consumer", or no frame at all, when the sweep's retirement met a ping. A
+// ping cut off by the socket's lifetime closes 1000, not 1013.
+func TestAPingInFlightLeavesTheCloseToWhatEndedTheLease(t *testing.T) {
+	t.Run("invalidated", func(t *testing.T) {
+		hub, _ := NewHub(t.Context(), HubOptions{Limits: protocol.DefaultLimits()})
+		hub.pingInterval = 5 * time.Millisecond
+		connection := newPingHeldConnection()
+		reservation, _ := hub.Reserve(t.Context(), principal(testDevice), grant())
+		cleanup, err := reservation.Bind(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		<-connection.pinging
+		hub.Invalidate(t.Context(), authority.SecurityInvalidation{FamilyID: testFamily, Revision: 6})
+		waitCloses(t, &connection.testConnection, ClosePolicyViolation)
+		close(connection.release)
+		time.Sleep(50 * time.Millisecond)
+		connection.mu.Lock()
+		defer connection.mu.Unlock()
+		if len(connection.closes) != 1 || connection.aborted {
+			t.Fatalf("closes %v, aborted %v; want only %d, not aborted", connection.closes, connection.aborted, ClosePolicyViolation)
+		}
+	})
+	t.Run("lifetime", func(t *testing.T) {
+		now := time.Now().UTC()
+		hub, _ := NewHub(t.Context(), HubOptions{Limits: protocol.DefaultLimits(), Now: func() time.Time { return now }})
+		hub.pingInterval = 5 * time.Millisecond
+		hub.maximumLife = 50 * time.Millisecond
+		hub.writeTimeout = 100 * time.Millisecond
+		p := principal(testDevice)
+		p.AccessExpiresAt = now.Add(time.Hour)
+		connection := newPingHeldConnection()
+		reservation, _ := hub.Reserve(t.Context(), p, grant())
+		cleanup, err := reservation.Bind(connection)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer cleanup()
+		waitCloses(t, &connection.testConnection, CloseNormal)
+		connection.mu.Lock()
+		defer connection.mu.Unlock()
+		if len(connection.closes) != 1 || connection.aborted {
+			t.Fatalf("closes %v, aborted %v; want only %d, not aborted", connection.closes, connection.aborted, CloseNormal)
+		}
+	})
+}
+
 func TestPingDeadlineAndGracefulThenForcedShutdown(t *testing.T) {
 	t.Run("ping and deadline", func(t *testing.T) {
 		now := time.Now().UTC()
@@ -1659,4 +1745,157 @@ func TestDeviceConnected(t *testing.T) {
 	if nilHub.DeviceConnected(testDevice) {
 		t.Fatal("a nil hub reports a connection")
 	}
+}
+
+// Stats counts what the hub holds now: a bound reservation becomes a lease,
+// and a released one counts as neither. It carries no identifiers.
+func TestHubStatsCountsLeasesAndReservations(t *testing.T) {
+	hub, err := NewHub(t.Context(), HubOptions{Limits: protocol.DefaultLimits()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hub.Stats(); got != (HubStats{}) {
+		t.Fatalf("empty hub stats %+v", got)
+	}
+	first, err := hub.Reserve(t.Context(), principal(testDevice), grant())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := hub.Reserve(t.Context(), principal("40000000-0000-4000-8000-000000000002"), grant())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hub.Stats(); got != (HubStats{Reservations: 2}) {
+		t.Fatalf("two reserved: %+v", got)
+	}
+	cleanup, err := first.Bind(&testConnection{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := hub.Stats(); got != (HubStats{Leases: 1, Reservations: 1}) {
+		t.Fatalf("one bound: %+v, want {Leases:1 Reservations:1}", got)
+	}
+	second.Release()
+	cleanup()
+	if got := hub.Stats(); got != (HubStats{}) {
+		t.Fatalf("all released: %+v", got)
+	}
+	var none *Hub
+	if got := none.Stats(); got != (HubStats{}) {
+		t.Fatalf("nil hub stats %+v", got)
+	}
+}
+
+// Each sweep's CheckMany is timed into the hub's stats; a sweep with no
+// leases asks nothing and records nothing, and a sweep that answers (even
+// with a denial) closes nothing as unavailable.
+func TestSweepDurationIsObserved(t *testing.T) {
+	authorizer := &batchAuthorizer{allow: true, late: 20 * time.Millisecond}
+	hub, err := NewHub(t.Context(), HubOptions{Limits: protocol.DefaultLimits(), Authorizer: authorizer})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hub.sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if got := hub.Stats().SweepDuration; got.Count != 0 {
+		t.Fatalf("an empty sweep was observed: %+v", got)
+	}
+	familyLease(t, hub, 1)
+	familyLease(t, hub, 2)
+	if err := hub.sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	authorizer.mu.Lock()
+	authorizer.allow, authorizer.late = false, 0
+	authorizer.mu.Unlock()
+	if err := hub.sweep(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	stats := hub.Stats()
+	var bucketed, fast uint64
+	for index, n := range stats.SweepDuration.Buckets {
+		bucketed += n
+		if index <= 4 { // up to 10 ms (bounds as boundaries_ns)
+			fast += n
+		}
+	}
+	if stats.SweepDuration.Count != 2 || bucketed != 2 || stats.SweepDuration.TotalNS < uint64(20*time.Millisecond) {
+		t.Fatalf("sweep durations %+v", stats.SweepDuration)
+	}
+	if fast == 2 {
+		t.Fatalf("the 20 ms sweep was not bucketed by its duration: %+v", stats.SweepDuration)
+	}
+	if stats.SweepClosed != 0 || stats.Leases != 0 {
+		t.Fatalf("denied sweep: closed %d (want 0: a denial is not unavailability), leases %d", stats.SweepClosed, stats.Leases)
+	}
+}
+
+// A sweep that cannot answer (an error, a late answer, a wrong count) closes
+// every lease it covered as "authorization unavailable" and counts each one
+// once; the re-check after dropped invalidations without an authorizer
+// counts its closes too.
+func TestUnavailableSweepCountsItsCloses(t *testing.T) {
+	for name, authorizer := range map[string]LiveAuthorizer{
+		"error":       &batchAuthorizer{err: errors.New("authorization_quarantine")},
+		"late":        &batchAuthorizer{allow: true, late: 100 * time.Millisecond},
+		"wrong count": wrongCountAuthorizer{},
+	} {
+		t.Run(name, func(t *testing.T) {
+			hub, err := NewHub(t.Context(), HubOptions{Limits: protocol.DefaultLimits(), Authorizer: authorizer, SweepTimeout: 30 * time.Millisecond})
+			if err != nil {
+				t.Fatal(err)
+			}
+			connections := []*testConnection{}
+			for index := 1; index <= 3; index++ {
+				connection, _ := familyLease(t, hub, index)
+				connections = append(connections, connection)
+			}
+			if err := hub.sweep(t.Context()); err == nil {
+				t.Fatal("an unavailable sweep succeeded")
+			}
+			for _, connection := range connections {
+				waitCloses(t, connection, ClosePolicyViolation)
+			}
+			if stats := hub.Stats(); stats.SweepClosed != 3 || stats.SweepDuration.Count != 1 || stats.Leases != 0 {
+				t.Fatalf("stats %+v", stats)
+			}
+			familyLease(t, hub, 4)
+			if err := hub.sweep(t.Context()); err == nil {
+				t.Fatal("an unavailable sweep succeeded")
+			}
+			if stats := hub.Stats(); stats.SweepClosed != 4 || stats.SweepDuration.Count != 2 {
+				t.Fatalf("stats after a one-lease failure %+v", stats)
+			}
+		})
+	}
+	t.Run("dropped invalidations without an authorizer", func(t *testing.T) {
+		hub, err := NewHub(t.Context(), HubOptions{Limits: protocol.DefaultLimits()})
+		if err != nil {
+			t.Fatal(err)
+		}
+		first, _ := familyLease(t, hub, 1)
+		second, _ := familyLease(t, hub, 2)
+		hub.InvalidationsDropped(t.Context())
+		waitCloses(t, first, ClosePolicyViolation)
+		waitCloses(t, second, ClosePolicyViolation)
+		deadline := time.Now().Add(time.Second)
+		for hub.Stats().SweepClosed != 2 && time.Now().Before(deadline) {
+			time.Sleep(time.Millisecond)
+		}
+		if stats := hub.Stats(); stats.SweepClosed != 2 || stats.SweepDuration.Count != 0 {
+			t.Fatalf("stats %+v", stats)
+		}
+	})
+}
+
+// wrongCountAuthorizer answers one result fewer than it was asked.
+type wrongCountAuthorizer struct{}
+
+func (wrongCountAuthorizer) CheckMany(_ context.Context, leases []AuthorizationLease) ([]bool, error) {
+	allowed := make([]bool, len(leases)-1)
+	for index := range allowed {
+		allowed[index] = true
+	}
+	return allowed, nil
 }

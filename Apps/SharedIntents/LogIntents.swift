@@ -53,7 +53,7 @@ struct LogDiaperIntent: AppIntent {
 /// a second code path.
 ///
 /// A running bottle needs an amount, and this tap cannot ask for one: it must
-/// work on a locked phone. So the bottle is saved at the baby's usual amount
+/// work on a locked phone. So the bottle is saved at the previous bottle's amount
 /// now, and the app offers "Set amount" for that feed the next time it is on
 /// screen (`PendingQuickLogStore`, `.bottleAmount`).
 struct StopFeedIntent: LiveActivityIntent {

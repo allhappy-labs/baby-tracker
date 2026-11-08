@@ -1,4 +1,5 @@
 import Foundation
+import BabyCore
 import BabyStore
 
 /// Something a tap outside the app left for the app to finish, parked until
@@ -7,7 +8,7 @@ import BabyStore
 /// Mostly that is one thing: the amount of a timed bottle ended outside the
 /// app — Stop on the Lock Screen, or L/R stopping it there. That tap never
 /// opens the app (it must work on a locked phone), so the feed is saved at
-/// the usual amount there and then, and this asks the app to offer "Set
+/// the previous bottle's amount there and then, and this asks the app to offer "Set
 /// amount" for that feed the next time it is on screen.
 ///
 /// The other is a Lock Screen action handed to the app because the card
@@ -23,6 +24,8 @@ public struct PendingQuickLogRequest: Equatable {
         /// Offer to correct the amount of a bottle that was saved without
         /// one being asked for.
         case bottleAmount(feedID: UUID)
+        /// A pump stopped from its Lock Screen card needs its amount.
+        case pumpAmount(pumpID: UUID)
     }
 
     public let action: Action
@@ -48,10 +51,11 @@ public enum PendingActivation: Equatable {
 public final class PendingQuickLogStore {
     /// Posted after a request is parked, so an app that is already on screen
     /// acts on it immediately rather than at its next activation.
-    public static let didRequest = Notification.Name("com.olhapi.babytracker.pendingQuickLog")
+    public static let didRequest = Notification.Name(AppIdentity.identifier("pendingQuickLog"))
 
     private static let babyKey = "pendingQuickLogBabyID"
     private static let bottleAmountKey = "pendingQuickLogBottleAmountFeedID"
+    private static let pumpAmountKey = "pendingQuickLogPumpAmountID"
     /// Kept apart from the bottle's keys: a handoff and a "Set amount" are
     /// independent, and parking one never clears the other.
     private static let activityHandoffKey = "pendingQuickLogActivityHandoff"
@@ -69,15 +73,20 @@ public final class PendingQuickLogStore {
         self.center = center
     }
 
-    /// Parks `action`, replacing whatever was parked before.
+    /// Parks `action`, replacing an earlier request of the same kind. A
+    /// bottle's and a pump's are independent: a bottle card and a pump card
+    /// sit side by side, and stopping one must not lose the other's prompt.
     public func request(_ action: PendingQuickLogRequest.Action, babyID: UUID? = nil) {
-        clear()
-        if let babyID {
-            defaults.set(babyID.uuidString, forKey: Self.babyKey)
-        }
         switch action {
         case .bottleAmount(let feedID):
+            clearBottle()
+            if let babyID {
+                defaults.set(babyID.uuidString, forKey: Self.babyKey)
+            }
             defaults.set(feedID.uuidString, forKey: Self.bottleAmountKey)
+        case .pumpAmount(let pumpID):
+            // A pump belongs to the family: no baby to switch to.
+            defaults.set(pumpID.uuidString, forKey: Self.pumpAmountKey)
         }
         center.post(name: Self.didRequest, object: nil)
     }
@@ -87,8 +96,12 @@ public final class PendingQuickLogStore {
     public func consume() -> PendingQuickLogRequest? {
         let feedID = defaults.string(forKey: Self.bottleAmountKey).flatMap(UUID.init(uuidString:))
         let babyID = defaults.string(forKey: Self.babyKey).flatMap(UUID.init(uuidString:))
-        clear()
-        return feedID.map { PendingQuickLogRequest(.bottleAmount(feedID: $0), babyID: babyID) }
+        // One at a time, the bottle's first; the pump's waits for the next read.
+        clearBottle()
+        if let feedID { return PendingQuickLogRequest(.bottleAmount(feedID: feedID), babyID: babyID) }
+        let pumpID = defaults.string(forKey: Self.pumpAmountKey).flatMap(UUID.init(uuidString:))
+        defaults.removeObject(forKey: Self.pumpAmountKey)
+        return pumpID.map { PendingQuickLogRequest(.pumpAmount(pumpID: $0)) }
     }
 
     /// A Lock Screen action that could not be verified against the family's
@@ -126,7 +139,7 @@ public final class PendingQuickLogStore {
         return consumeNextActivation()
     }
 
-    private func clear() {
+    private func clearBottle() {
         for key in [Self.babyKey, Self.bottleAmountKey] + Self.legacyKeys {
             defaults.removeObject(forKey: key)
         }

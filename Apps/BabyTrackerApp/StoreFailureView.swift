@@ -24,9 +24,8 @@ struct StoreFailureView: View {
                 .multilineTextAlignment(.center)
 
             Button(StoreFailureCopy.retry, action: onRetry)
-                .buttonStyle(.borderedProminent)
+                .buttonStyle(.primary)
                 .tint(Palette.feed)
-                .frame(minHeight: 44)
         }
         .padding(28)
         .frame(maxWidth: .infinity, maxHeight: .infinity)

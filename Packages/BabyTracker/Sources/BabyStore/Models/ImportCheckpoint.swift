@@ -15,5 +15,5 @@ public struct LegacyImportSummary: Codable, Sendable, Equatable {
 }
 
 public enum MigratedEntityKind: String, Codable, Sendable, Equatable, CaseIterable {
-    case baby, feed, sleep, diaper, supplement, growthProfile, measurement, activeTimer, changeLog
+    case baby, feed, sleep, diaper, supplement, growthProfile, measurement, immunization, pump, activeTimer, changeLog
 }

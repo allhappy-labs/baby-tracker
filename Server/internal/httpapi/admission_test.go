@@ -48,6 +48,11 @@ func TestAdmissionAllWorkloadRoutesBeforeDependencies(t *testing.T) {
 			}
 			continue
 		}
+		if authLaneRoutes[route] || refreshRoutes[route] {
+			// The auth lane's, not the total's
+			// (TestAuthLaneSeparatesUnidentifiedRequestsFromSync).
+			continue
+		}
 		var body protocol.ErrorResponse
 		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil {
 			t.Fatal(err)
@@ -149,6 +154,106 @@ func TestAdmissionCancellationHoldsUntilHandlerCompletes(t *testing.T) {
 		t.Fatal("completed cancellation leaked")
 	}
 	release()
+}
+
+// With BT_ADMISSION_WAIT a request that finds the node full waits for a
+// slot: one freed within the wait admits it, otherwise (or when its request
+// ends first) it answers 503 server_busy as an immediate refusal does. The
+// capacity snapshot counts each wait; with no wait nothing waits.
+func TestAdmissionWait(t *testing.T) {
+	busy := func(t *testing.T, response *httptest.ResponseRecorder) {
+		t.Helper()
+		var body protocol.ErrorResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != 503 || body.Error.Code != "server_busy" ||
+			response.Header().Get("Retry-After") != "1" {
+			t.Fatalf("%d %s", response.Code, response.Body)
+		}
+	}
+	serve := func(c *admission.Controller, metrics *diagnostics.CapacityCollector, ctx context.Context) (*httptest.ResponseRecorder, time.Duration) {
+		handler := WithAdmission(c, admission.Sync, metrics, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(204) }))
+		response := httptest.NewRecorder()
+		start := time.Now()
+		handler.ServeHTTP(response, httptest.NewRequest("POST", "/work", nil).WithContext(ctx))
+		return response, time.Since(start)
+	}
+
+	t.Run("no wait refuses at once", func(t *testing.T) {
+		c, _ := admission.New(1, 0)
+		held, _ := c.TryAcquire(admission.Sync)
+		defer held()
+		var metrics diagnostics.CapacityCollector
+		response, elapsed := serve(c, &metrics, t.Context())
+		busy(t, response)
+		if elapsed > 50*time.Millisecond {
+			t.Fatalf("refused after %v", elapsed)
+		}
+		if got := metrics.Snapshot().Admission[diagnostics.SyncAdmission]; got != (diagnostics.AdmissionCounts{Rejected: 1}) {
+			t.Fatalf("metrics %+v", got)
+		}
+	})
+	t.Run("a slot freed within the wait admits", func(t *testing.T) {
+		c, _ := admission.NewWaiting(1, 0, admission.MaxWait)
+		held, _ := c.TryAcquire(admission.Sync)
+		var metrics diagnostics.CapacityCollector
+		go func() {
+			time.Sleep(30 * time.Millisecond)
+			held()
+		}()
+		response, elapsed := serve(c, &metrics, t.Context())
+		if response.Code != 204 || elapsed < 30*time.Millisecond || elapsed > admission.MaxWait {
+			t.Fatalf("%d after %v", response.Code, elapsed)
+		}
+		got := metrics.Snapshot().Admission[diagnostics.SyncAdmission]
+		if got.Accepted != 1 || got.Released != 1 || got.Rejected != 0 || got.Waited != 1 || got.Canceled != 0 || got.WaitNS < uint64(30*time.Millisecond) {
+			t.Fatalf("metrics %+v", got)
+		}
+	})
+	t.Run("no slot within the wait is busy", func(t *testing.T) {
+		c, _ := admission.NewWaiting(1, 0, 40*time.Millisecond)
+		held, _ := c.TryAcquire(admission.Sync)
+		defer held()
+		var metrics diagnostics.CapacityCollector
+		response, elapsed := serve(c, &metrics, t.Context())
+		busy(t, response)
+		if elapsed < 40*time.Millisecond || elapsed > admission.MaxWait {
+			t.Fatalf("refused after %v", elapsed)
+		}
+		got := metrics.Snapshot().Admission[diagnostics.SyncAdmission]
+		if got.Rejected != 1 || got.Accepted != 0 || got.Waited != 1 || got.Canceled != 0 || got.WaitNS < uint64(40*time.Millisecond) {
+			t.Fatalf("metrics %+v", got)
+		}
+	})
+	t.Run("the wait ends with the request", func(t *testing.T) {
+		c, _ := admission.NewWaiting(1, 0, admission.MaxWait)
+		held, _ := c.TryAcquire(admission.Sync)
+		var metrics diagnostics.CapacityCollector
+		// The client leaves (net/http cancels the request's context) while it
+		// waits: it is answered as any request whose client has gone, a
+		// retryable 503 service_unavailable, not a server_busy refusal, and
+		// counted canceled, not rejected.
+		ctx, cancel := context.WithCancel(t.Context())
+		time.AfterFunc(30*time.Millisecond, cancel)
+		response, elapsed := serve(c, &metrics, ctx)
+		var body protocol.ErrorResponse
+		if err := json.Unmarshal(response.Body.Bytes(), &body); err != nil || response.Code != 503 || body.Error.Code != "service_unavailable" ||
+			!body.Error.Retryable {
+			t.Fatalf("%d %s", response.Code, response.Body)
+		}
+		if elapsed > admission.MaxWait/2 {
+			t.Fatalf("answered after %v", elapsed)
+		}
+		got := metrics.Snapshot().Admission[diagnostics.SyncAdmission]
+		if got.Rejected != 0 || got.Accepted != 0 || got.Waited != 1 || got.Canceled != 1 {
+			t.Fatalf("metrics %+v", got)
+		}
+		// The canceled request holds no place: the freed slot is free.
+		held()
+		release, ok := c.TryAcquire(admission.Sync)
+		if !ok {
+			t.Fatal("the slot went to a canceled request")
+		}
+		release()
+	})
 }
 
 func TestAdmissionPanicAndQuotaRelease(t *testing.T) {

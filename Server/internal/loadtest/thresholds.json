@@ -1,0 +1,6 @@
+{
+  "sync_p95_ms": 20,
+  "refresh_p95_ms": 20,
+  "max_scheduler_lag_p99_ms": 20,
+  "max_unexpected_ratio": 0.0005
+}

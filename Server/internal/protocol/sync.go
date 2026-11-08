@@ -131,6 +131,10 @@ type Limits struct {
 
 type EffectiveLimits = Limits
 
+// MaxSocketProcessLimit bounds BT_SOCKET_PROCESS_LIMIT: room above the
+// hosted profile's 10,000 so a capacity ramp can find the node's ceiling.
+const MaxSocketProcessLimit = 65536
+
 func DefaultLimits() Limits {
 	return Limits{
 		MaxLiveBabies: 20, MaxCanonicalRecordsPerFamily: 100000,
@@ -142,7 +146,7 @@ func DefaultLimits() Limits {
 		ImportMaxSessionsPerFamily: 1000, ImportMaxSessionsPerAccount: 100,
 		ActiveSnapshotAccountLimit: 2, ActiveSnapshotFamilyLimit: 8,
 		UnfinishedImportAccountLimit: 1, UnfinishedImportFamilyLimit: 4,
-		SocketDeviceLimit: 1, SocketAccountLimit: 3, SocketProcessLimit: 1000,
+		SocketDeviceLimit: 1, SocketAccountLimit: 3, SocketProcessLimit: 1700,
 		SocketAttemptIPPerMinute: 60, SocketAttemptDevicePerMinute: 12,
 		SocketAttemptAccountPerMinute: 36, SocketAttemptFamilyPerMinute: 120,
 		MaxCapabilities: 16, MaxNameScalars: 100, MaxNameBytes: 400, MaxNoteBytes: 4096,
@@ -188,7 +192,7 @@ func (limits Limits) Validate() error {
 		{"unfinished_import_family_limit", limits.UnfinishedImportFamilyLimit, 4, 4},
 		{"socket_device_limit", limits.SocketDeviceLimit, 1, 5},
 		{"socket_account_limit", limits.SocketAccountLimit, 1, 10},
-		{"socket_process_limit", limits.SocketProcessLimit, 10, 10000},
+		{"socket_process_limit", limits.SocketProcessLimit, 10, MaxSocketProcessLimit},
 		{"socket_attempt_ip_per_minute", limits.SocketAttemptIPPerMinute, 1, 10000},
 		{"socket_attempt_device_per_minute", limits.SocketAttemptDevicePerMinute, 1, 10000},
 		{"socket_attempt_account_per_minute", limits.SocketAttemptAccountPerMinute, 1, 10000},
@@ -314,7 +318,15 @@ func (response SyncResponse) MarshalJSON() ([]byte, error) {
 // EncodeChange encodes one journal change around an entity that is already
 // encoded (a stored care wire), byte-identical to json.Marshal of the
 // JournalChange holding that entity decoded. Changes are never optional.
+// The entity is appended verbatim (AppendChange), not re-compacted.
 func EncodeChange(cursor Cursor, kind, entityID string, version uint64, actorAccountID, deviceID, operation, acceptedAt string, entity json.RawMessage) (json.RawMessage, error) {
+	return AppendChange(make([]byte, 0, changeEnvelopeBytes+len(entity)), cursor, kind, entityID, version, actorAccountID, deviceID,
+		operation, acceptedAt, entity)
+}
+
+// marshalChange is EncodeChange through json.Marshal, which compacts the
+// entity: AppendChange's path for an entity that is not an object.
+func marshalChange(cursor Cursor, kind, entityID string, version uint64, actorAccountID, deviceID, operation, acceptedAt string, entity json.RawMessage) (json.RawMessage, error) {
 	return json.Marshal(struct {
 		Cursor              Cursor          `json:"cursor"`
 		EntityKind          string          `json:"entity_kind"`
@@ -476,8 +488,8 @@ func DecodeJournalChanges(raw []byte) ([]JournalChange, []Cursor, error) {
 		if err := header.Cursor.Validate(); err != nil {
 			return nil, nil, errInvalidRequest
 		}
-		knownOuter := slices.Contains([]string{"baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "timer"}, header.EntityKind)
-		knownInner := slices.Contains([]string{"baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "timer"}, header.SnapshotOrTombstone.EntityKind)
+		knownOuter := slices.Contains([]string{"baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "immunization", "pump", "timer"}, header.EntityKind)
+		knownInner := slices.Contains([]string{"baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "immunization", "pump", "timer"}, header.SnapshotOrTombstone.EntityKind)
 		if !knownOuter || !knownInner || header.EntityKind != header.SnapshotOrTombstone.EntityKind {
 			if header.Optional {
 				skipped = append(skipped, header.Cursor)

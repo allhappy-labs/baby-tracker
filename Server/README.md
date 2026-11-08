@@ -137,16 +137,62 @@ Finite workload admission defaults to 32 in-flight requests process-wide.
 `BT_ADMISSION_TOTAL` accepts a canonical integer from 1 through 1024;
 `BT_ADMISSION_MCP_MAX` defaults to 0 (disabled) and accepts 0 through total minus
 one, retaining at least one Sync slot. These configured bounds are not measured
-capacity. All finite non-MCP routes, including server information, authentication,
-export, and live upgrade setup, share the Sync class. Only `/healthz` and `/readyz`
-bypass workload admission; neither does database work per request: `/readyz`, like
-every route, reads the cached state of the background readiness monitor (see
-"Startup and privilege boundaries").
+capacity. All finite non-MCP routes, including server information, export, and
+live upgrade setup, share the Sync class, except the requests that come before a
+caller is identified. Only `/healthz` and `/readyz` bypass workload admission;
+neither does database work per request: `/readyz`, like every route, reads the
+cached state of the background readiness monitor (see "Startup and privilege
+boundaries").
 
-There is no admission waiting queue. Global saturation returns HTTP 503 with
-`server_busy`, `Retry-After: 1` and a retryable error; existing quota refusals
-remain HTTP 429. A token covers body reads (except on the body-first routes
-below, which read their body before taking one) and response writes until the
+The requests not yet tied to a known caller take the auth lane instead, a bound
+of its own alongside `BT_ADMISSION_TOTAL` (not part of it):
+`BT_ADMISSION_AUTH_MAX`, a canonical integer from 1 through 1024, default 8. They
+are `POST /v1/auth/challenge`, `POST /v1/auth/apple`, `POST
+/v1/auth/apple/notifications`, and a `POST /v1/auth/refresh` or `POST
+/v1/auth/refresh-recoverable` whose refresh token this node does not know. A
+refresh presenting a token the node knows takes a Sync slot; so does every other
+route. The node knows the tokens it issued (a sign-in's or a refresh's, kept in
+memory by their keyed digest for 12 to 24 hours, at most 65,536 a generation; a
+rotation forgets its parent) and the tokens of the sessions live when it
+started: before the listener opens, beside the first readiness refresh, the
+process reads the keyed refresh digests of the sessions whose refresh token can
+still be used (active, this recovery epoch, not expired; the latest 65,536,
+through the request authority on the runtime credential, one partial-index
+scan) and knows them for 12 hours, so a restart or a first start does not send
+every device's next refresh to the lane. The load is bounded to 2 seconds; a
+failed or cut load is logged (`known refresh tokens not loaded`) and the node
+serves with only the tokens it issues, as without it. `known refresh tokens
+loaded` reports how many it holds and how long it took. A digest reveals no
+token and authorizes nothing: it only picks the admission class. A flood of
+sign-in or made-up refresh requests, from more addresses than the per-IP limits
+can bound, therefore fills only the lane and leaves the Sync slots to known
+callers, and a full Sync class refuses no sign-in. A full lane refuses its
+requests 503 `server_busy` with `Retry-After: 1`, as a full total does. The lane
+never waits, whatever `BT_ADMISSION_WAIT`, and never takes a place in the waiting
+queue. A refresh that lands in the lane only because the node does not know its
+token (after refreshing on another node since this one started, after more
+than 12 to 24 hours, or after a restart whose load failed) is otherwise
+unaffected. To tell the
+token apart, a refresh's body (at most 32 KiB) is read before admission, under
+its own bound on reads in flight (8 per client address, 64 in all) and the
+`BT_BODY_READ_TIMEOUT` deadline; a refresh beyond that bound is not read first
+and takes the lane. Every answer, and its order, is as before. The capacity
+diagnostics count the lane as admission class `auth`. The lane's requests use the
+same runtime database pool as the rest: like the total, the lane bounds requests in
+flight, not connections, so at most `BT_ADMISSION_AUTH_MAX` of them compete with
+the Sync class for that pool.
+
+A request that finds no admission slot waits up to `BT_ADMISSION_WAIT` (a Go
+duration from `0` through `1s`, default `250ms`; a value outside the range or
+malformed refuses to start) for one, first come first served. If none frees,
+global saturation returns HTTP 503 with `server_busy`, `Retry-After: 1` and a
+retryable error; existing quota refusals remain HTTP 429. `0` turns the
+waiting queue off: saturation is refused at once.
+A request whose client goes while it waits is answered as any abandoned
+request (503 `service_unavailable`, its fault line `client_gone` at INFO),
+not as a `server_busy` refusal. At most `BT_ADMISSION_TOTAL` requests wait at once
+(each may hold a buffered body); one more is refused at once. The `/mcp` handler's own slot never waits, nor does the auth lane. A token covers body reads (except on the body-first routes
+below and the refresh routes, which read their body before taking one) and response writes until the
 handler finishes, including canceled work until it stops. The existing transport
 deadlines remain necessary to unblock slow network reads. Successful WebSocket
 Accept hands capacity back after the real upgrade; the Hub separately bounds
@@ -155,26 +201,44 @@ socket lifetimes and device/account/process reservations.
 The body-first routes read their whole request body before the credential is
 checked, so no transaction waits on the network: `POST /v1/sync`, `POST
 /v1/family/import/resolve`, `POST /v1/family/import/{id}/resolve-conflict` and
-`PUT`/`DELETE /v1/devices/push-token`. Any well-formed bearer reaches that read,
-so these routes take their admission slot only after the body is buffered. The
+`PUT`/`DELETE /v1/devices/push-token` and the two Live Activity registration
+`PUT`s. A bearer the node has not seen authenticate is checked before its body
+is read: one `app.request_authority` lookup by digest, outside any transaction,
+under a Sync admission slot that is released before the body is read. A bearer
+that fails is refused as its request would have been, with its body unread and
+the connection closed. That is a 401, or a retryable 503 when its account's
+audit chain failed (`scope_failed`) or the database is unavailable; on a node at
+its admission limit, the check itself is refused 503 `server_busy`. A bearer that passes is remembered in memory, at most
+65,536 a generation and two generations of 10 minutes, so a phone pays that
+statement about once per access token. Its request is still authenticated in
+full by the request transaction, and is forgotten when that refuses it. A
+remembered bearer can still reach the body read, so these routes take their
+admission slot only after the body is buffered. The
 read itself is bounded on its own: at most 8 bodies in flight per client address
-(an IPv6 address counts as its /64) and 64 in all, each cut after 5 seconds. A
+(an IPv6 address counts as its /64) and 64 in all, each cut after
+`BT_BODY_READ_TIMEOUT` (a Go duration from `1s` through `60s`, default `5s`; a
+value outside the range or malformed refuses to start). A
 request beyond either bound answers 503 `server_busy` before any byte of its
-body is read. A body cut short (the 5-second deadline, or a connection closed
-mid-body) ends the request before its credential is checked: it answers 503
+body is read. A body cut short (the read deadline, or a connection closed
+mid-body) ends the request before its request transaction: it answers 503
 `service_unavailable`, as a stalled body did under the 15-second read timeout,
-with no statement run. Each request on these routes whose bearer matches no live
+with no transaction run. Each request on these routes whose bearer matches no live
 session (401 `session_revoked`), and each body cut short, counts against its
 client address: after 60 in 10 minutes
 (`BT_RATE_LIMIT_BEARER_FAILURE_IP_COUNT`/`_WINDOW`) the address is refused with
 429 `rate_limited` before its body is read or any statement runs, until the
-window ends. An oversized body is not counted. Slow or forged bodies from one
-address therefore hold no admission slot and cost at most that budget of body
-reads and decodes, so an address keeps on average under one of the 64 body-read
-slots busy.
+window ends. An oversized body is not counted. A forged bearer therefore costs
+one indexed lookup and no body read (about 6 µs of app CPU for a 1 MiB sync body
+against about 11 ms read and decoded, `BenchmarkRefusedFakeBearerSyncBody` on an
+Apple M4), at most that budget of them an address. Slow bodies from one address
+hold no admission slot, so an address keeps on average under one of the 64
+body-read slots busy.
 
 With `BT_SYNC_DIAGNOSTICS=1`, capacity snapshots include accepted, rejected,
-released and active counts for fixed `sync` and `mcp` classes. The `/mcp`
+released and active counts for fixed `sync` and `mcp` classes, and with a
+wait the requests that waited, their total wait (`wait_ns`) and those whose
+request ended while waiting (`canceled`, counted neither accepted nor
+rejected; `rejected` is the `server_busy` refusals). The `/mcp`
 handler takes its one MCP slot itself from the same controller and is never
 wrapped in Sync admission. `BT_ADMISSION_MCP_MAX` must be 0 unless private MCP
 is enabled (see "Private MCP endpoint").
@@ -186,7 +250,7 @@ Live WebSocket admission uses the fixed one-minute count overrides
 `BT_RATE_LIMIT_LIVE_ATTEMPT_FAMILY_COUNT` (defaults 60, 12, 36, and 120;
 each range 1 through 10,000). Socket concurrency uses
 `BT_SOCKET_DEVICE_LIMIT`, `BT_SOCKET_ACCOUNT_LIMIT`, and
-`BT_SOCKET_PROCESS_LIMIT` (defaults 1, 3, and 1,000).
+`BT_SOCKET_PROCESS_LIMIT` (defaults 1, 3, and 1,700; the hosted load profile sets 10,000).
 Family admission defaults to 10 active caregivers (including the owner), 10
 outstanding invitations, and a seven-day invitation lifetime. Operators may
 override these with `BT_MAX_CAREGIVERS` (1 through 100),
@@ -205,6 +269,16 @@ charge; the effective values are returned by `GET /v1/server`. Tombstoned record
 using record-count slots, but retained tombstones and receipts remain charged
 bytes. `docs/protocol/v1.md` gives the exact charges.
 
+Security audit rows are kept for at least 13 months (owner decision D1,
+2026-10-16): an hourly maintenance loop drops each whole audit partition once
+its range ended more than 13 months ago (2026 is one yearly partition, kept
+until about February 2028; the default partition is never dropped), after
+checking that every chain in it holds together and recording a per-chain
+retention anchor the verifiers walk from. A routine refresh rotation writes no audit row; its
+session rows and refresh receipt are its record, and reuse detection is still
+audited. `docs/operations/security-state.md` ("Audit retention") has the
+details.
+
 A family its owner deleted is purged by the retention worker once its
 30-day recovery window ends, in bounded, resumable steps every 30 s. The
 purge deletes the family's care records and babies, import staging,
@@ -218,7 +292,8 @@ digests, so a retried redemption still finds its receipt), the security
 audit chains of the family and of its former members' accounts (opaque IDs,
 roles, digests and times: no audit row carries a member's or the family's
 display name; an operator's MCP integration grant records the integration's
-name; the chains still verify), and command receipts (a hash and a result
+name; the chains still verify; like every audit row, they are kept for 13
+months), and command receipts (a hash and a result
 code). Its members' sessions were revoked when the deletion was scheduled,
 and the session sweep prunes them. A family whose purge
 keeps failing (for example a failed audit chain, or a statement that times
@@ -552,7 +627,17 @@ startup.
   logged one line each: a `requests refused summary` line per route and status
   (with `count` and `window_seconds`) is written at most every 10 seconds while
   they continue. Admitted and authenticated outcomes, and every 401/403, keep
-  their own `request completed` line and request ID.
+  their own `request completed` line and request ID. Every 503 no shared
+  error writer sends (`server_busy`, `not_ready`, and the challenge route's
+  `rate_limit_unavailable` and `identity_unavailable`) also counts toward a
+  `request refused` WARN line, written at most once a second per code, with
+  `refusal`, `route`, `suppressed` (the refusals of that code since its last
+  line, approximate at the boundary) and the cause fields when there is a
+  cause. Every other 5xx leaves exactly one `request failed` ERROR line,
+  except a lost race (`security_busy`, `credential_rotation_busy`: a
+  retryable 503, not a server fault), which leaves a `request lost a race`
+  WARN line instead, with `code`, `suppressed` and the cause fields, at most
+  once a second per code.
 - **Quotas** (fixed one-minute windows, existing limiter, runtime pool):
   `mcp-integration` 30, `mcp-account` 60, `mcp-family` 120. They can only be
   lowered, with `BT_RATE_LIMIT_MCP_INTEGRATION_COUNT`,
@@ -628,6 +713,18 @@ projector pool) and refused. Whitespace is invalid. For a laboratory profile:
 | `BT_DB_SERVER_MAX_CONNECTIONS` | 64 |
 | `BT_DB_RESERVED_CONNECTIONS` | 8 |
 
+Hosted profile (measured, Phase 5): on the reference node ("Apple M4, Docker
+CPU caps": app and PostgreSQL each 4 CPU / 8 GiB) at 2x the 10,000-family
+model, `BT_DB_RUNTIME_MAX_CONNS=48` with `BT_ADMISSION_TOTAL=96`. The runtime
+pool is the queue there (connections wait on WAL flush and sit idle in a
+transaction between round trips, not only on CPU): 32/64 refused 13.3% of
+requests, 48/96 6.3%, 64/128 6.8% with a longer database phase, 24/48 38%.
+PostgreSQL in that profile: `shared_buffers=5GB` (on this VM shared buffers are
+the only cache; below 5GB the care pulls hit under 99%) and
+`wal_compression=lz4` (full-page images were most of the WAL). The full table
+is in `docs/verification/` (Phase 5 load report); `deploy/load/compose.yaml`
+carries the values.
+
 Runtime needs at least two connections: with one, the live hub's periodic
 authorization check and the authority's own reads would queue behind every
 request transaction, and the check's 5 s deadline would then close every live
@@ -659,6 +756,10 @@ other applications and administrative workers in their server reservations.
 Both URL and keyword/value pgx DSNs retain their other connection/pool controls.
 A supplied `pool_max_conns` must agree with the explicit maximum; parser and
 conflict errors omit credentials. Legacy DSN ceilings remain unchanged.
+Every pool keeps pgx's 1 h connection lifetime (or the DSN's
+`pool_max_conn_lifetime`) and, unless the DSN sets
+`pool_max_conn_lifetime_jitter`, spreads each connection's expiry over a quarter
+of it, so connections opened together are not all replaced together.
 
 The private capacity runner defaults to legacy mode. Select the complete fixed
 laboratory profile with `--database-profile explicit`; use
@@ -747,12 +848,32 @@ identity, restarts with the same actor-ID pepper, proves a replacement closes
 readiness and makes `authority verify` fail with `actor_id_key_mismatch`, and
 restores the original value.
 
+At startup, before any pool opens, the server sets the Go soft memory limit to
+85% of the container's cgroup v2 `memory.max`, so garbage collection tightens
+before the container is OOM-killed. An explicit `GOMEMLIMIT` wins; an unlimited
+(`max`), missing or unreadable `memory.max` leaves the runtime default. The
+`memory limit` log line states the limit and its source. Under a memory limit
+(the cgroup's or `GOMEMLIMIT`) and without `GOGC`, the server collects at
+`GOGC=400`: at the default 100 the heap is small against the limit and the
+collector took 15–17% of the app's CPU at 2x the model. The `gc percent` log
+line states the value and its source.
+
 ### Migrations
 
-`Server/migrations` holds one baseline, `000032_baseline.sql`: the schema of
+`Server/migrations` holds the baseline, `000032_baseline.sql` — the schema of
 000001–000032 squashed before the homelab cutover, whose catalog
-`internal/migrate/testdata/catalog-32.golden` pins; the next migration is
-`000033_<name>.sql`, with its row appended to `internal/migrate/compatibility.json`.
+`internal/migrate/testdata/catalog-32.golden` pins — and the migrations after
+it: `000033_immunizations.sql` (care kind 9), `000034_pumping.sql` (care
+kind 10, a pumping session with no baby), `000035_audit_retention.sql` (audit
+partitions dropped after 13 months behind a retention anchor; routine refresh
+rotation writes no audit row), `000036_request_authority_family_key.sql`
+(`request_authority` finds the family by key) and
+`000037_family_delete_cascade.sql` (family-owned import mappings cascade,
+inlinable RLS context helpers, a paged Live Activity work sweep). The current
+catalog is pinned by `internal/migrate/testdata/catalog-37.golden`, and a
+binary runs only on schema 37 (`compatibility.json` min = max = 37). The next
+migration is `000038_<name>.sql`, with its row appended to
+`internal/migrate/compatibility.json` and a new catalog golden beside the others.
 
 ## Network, state and backups
 
@@ -861,6 +982,9 @@ the project-owned paths, and enroll with a one-use tagged Tailscale auth key:
 ```sh
 export BT_DEPLOY_ROOT=/mnt/user/appdata/baby-tracker-sync
 export BT_SOURCE_SHA=<reviewed-40-character-git-sha>
+# Written once into deployment.env, which stays on the host:
+export BT_PUBLIC_HOST=baby-sync.<your-tailnet>.ts.net
+export BT_APPLE_AUDIENCE=<the app's BT_BUNDLE_ID_PREFIX>
 Server/scripts/verify-unraid-deployment.sh capture
 Server/scripts/provision-unraid-secrets.sh
 BT_TAILSCALE_AUTH_KEY_FILE_SOURCE=/root/tailscale-baby-sync.authkey \

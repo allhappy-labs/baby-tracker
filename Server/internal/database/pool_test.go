@@ -178,6 +178,75 @@ func TestPoolsSkipShortIdlePingsAndCacheStatements(t *testing.T) {
 	}
 }
 
+func TestRequestPoolsBoundTheirConnectAttempt(t *testing.T) {
+	const dsn = "postgres://u:p@127.0.0.1:1/db?sslmode=disable"
+	openers := map[string]func(string) (*pgxpool.Pool, error){
+		"with max":  func(url string) (*pgxpool.Pool, error) { return OpenWithMax(t.Context(), url, 4) },
+		"read only": func(url string) (*pgxpool.Pool, error) { return OpenReadOnlyWithMax(t.Context(), url, 4) },
+		"open":      func(url string) (*pgxpool.Pool, error) { return Open(t.Context(), url) },
+	}
+	for name, open := range openers {
+		pool, err := open(dsn)
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		if got := pool.Config().ConnConfig.ConnectTimeout; got != 5*time.Second {
+			t.Fatalf("%s: connect timeout %v", name, got)
+		}
+		pool.Close()
+		// A DSN's own connect_timeout is kept.
+		pool, err = open(dsn + "&connect_timeout=7")
+		if err != nil {
+			t.Fatal(name, err)
+		}
+		if got := pool.Config().ConnConfig.ConnectTimeout; got != 7*time.Second {
+			t.Fatalf("%s: DSN connect timeout replaced: %v", name, got)
+		}
+		pool.Close()
+	}
+}
+
+// Connections created together (a reconnect burst, a pool growing at once)
+// must not expire together: pgxpool's default is a 1 h lifetime with no
+// jitter, so a whole burst is replaced by cold backends in the same second
+// an hour later. Every pool keeps the 1 h lifetime and spreads expiry over a
+// quarter of it; a DSN's own lifetime and jitter are kept.
+func TestPoolsSpreadConnectionExpiry(t *testing.T) {
+	const dsn = "postgres://u:p@127.0.0.1:1/db?sslmode=disable"
+	openers := map[string]func(string) (*pgxpool.Pool, error){
+		"open":       func(url string) (*pgxpool.Pool, error) { return Open(t.Context(), url) },
+		"with max":   func(url string) (*pgxpool.Pool, error) { return OpenWithMax(t.Context(), url, 4) },
+		"read only":  func(url string) (*pgxpool.Pool, error) { return OpenReadOnlyWithMax(t.Context(), url, 4) },
+		"background": func(url string) (*pgxpool.Pool, error) { return OpenBackground(t.Context(), url) },
+		"readiness":  func(url string) (*pgxpool.Pool, error) { return OpenReadiness(t.Context(), url) },
+	}
+	for name, open := range openers {
+		for _, tc := range []struct {
+			suffix           string
+			lifetime, jitter time.Duration
+		}{
+			{"", time.Hour, 15 * time.Minute},
+			{"&pool_max_conn_lifetime=2h", 2 * time.Hour, 30 * time.Minute},
+			{"&pool_max_conn_lifetime_jitter=5m", time.Hour, 5 * time.Minute},
+			{"&pool_max_conn_lifetime=30m&pool_max_conn_lifetime_jitter=1m", 30 * time.Minute, time.Minute},
+		} {
+			pool, err := open(dsn + tc.suffix)
+			if err != nil {
+				t.Fatal(name, tc.suffix, err)
+			}
+			cfg := pool.Config()
+			pool.Close()
+			if cfg.MaxConnLifetime != tc.lifetime || cfg.MaxConnLifetimeJitter != tc.jitter {
+				t.Fatalf("%s%s: lifetime %v jitter %v, want %v and %v", name, tc.suffix,
+					cfg.MaxConnLifetime, cfg.MaxConnLifetimeJitter, tc.lifetime, tc.jitter)
+			}
+			if cfg.MinConns != 0 {
+				t.Fatalf("%s%s: min conns %d", name, tc.suffix, cfg.MinConns)
+			}
+		}
+	}
+}
+
 // Maintenance workers take a slot before a connection, and there is one
 // slot fewer than the pool has connections, so the readiness audit always
 // finds one. A pool with fewer than two connections has no room for both.

@@ -172,10 +172,59 @@ private func feedSessions(_ store: BabyStore, _ baby: UUID) throws -> [FeedingSe
         #expect(model.parts.map(\.canSplitBefore) == [false, false, true])
     }
 
-    /// Solids never join a session, and are not parts of one.
     @Test func addPartOffersOnlyTheSessionsKinds() {
-        #expect(AddPartKind.offered(for: .feed) == [.left, .right, .bottle])
+        #expect(AddPartKind.offered(for: .feed) == [.left, .right, .bottle, .solids])
         #expect(AddPartKind.offered(for: .sleep) == [.sleep])
+    }
+
+    /// Solids open the Solids panel at the feed's end; nothing is written
+    /// until they are named, and saving adds them as the feed's last part.
+    @Test func solidsAreAddedOnceNamedAndListAsAPart() throws {
+        let (store, baby, _, left, _, bottle) = try threeEntrySession()
+        let model = SessionSheetModel(store: store, babyID: baby, kind: .feed, rootID: left.id, unit: .millilitres)
+        #expect(throws: EditModeError.invalid) { try model.addPart(.solids) }
+        let logged = try store.changeLog().count
+
+        let solids = try #require(model.newSolidsModel())
+        #expect(solids.when == bottle.startedAt.addingTimeInterval(1))
+        #expect(!solids.canSave)
+        #expect(try store.changeLog().count == logged)
+
+        solids.foodsText = "pear, oat"
+        solids.amount = .taste
+        try solids.log()
+        model.reload()
+
+        let part = try #require(model.parts.last)
+        #expect(part.label == "Pear, oat · Taste")
+        #expect(part.icon == .solids)
+        #expect(part.detail == clockText(bottle.startedAt.addingTimeInterval(1), zone: bottle.timeZoneID))
+        #expect(part.gapBefore == "0m later")
+        #expect(part.canSplitBefore)
+        guard case let .solids(feedID, _) = part.target else { Issue.record("not a solids part"); return }
+        #expect(try feedSessions(store, baby).map(\.feedIDs).first?.last == feedID)
+        // The totals stay the milk's.
+        #expect(model.totals.hasSuffix("27m breast · 60 ml"))
+
+        try model.deletePart(part.id)
+        #expect(model.parts.count == 3)
+    }
+
+    /// Solids moved before the feed's first part key it, as any part does.
+    @Test func solidsMovedFirstKeyTheFeed() throws {
+        let (store, baby, _, left, _, _) = try threeEntrySession()
+        let solids = try store.addFeedPart(.solids(foods: ["pear"], amount: .some, at: left.startedAt.addingTimeInterval(80 * 60),
+                                                   note: nil),
+                                           toSession: left.id, for: baby)
+        let edit = SolidsEditModel(store: store, babyID: baby, feedID: solids.id)
+
+        edit.when = left.startedAt.addingTimeInterval(-600)
+        try edit.save()
+
+        #expect(solids.feedingSessionID == nil)
+        #expect(left.feedingSessionID == solids.id)
+        let model = SessionSheetModel(store: store, babyID: baby, kind: .feed, rootID: solids.id, unit: .millilitres)
+        #expect(model.parts.map(\.target.entryID).first == solids.id)
     }
 
     @Test func aSleepSessionCountsItsWakes() throws {

@@ -22,120 +22,103 @@ public struct RunningTimerEditSheet: View {
 
     @Environment(\.errorReporter) private var errorReporter
     @State private var isSaving = false
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     private var tint: Color { model.isSleep ? Palette.sleep : Palette.feed }
 
-    /// Presented with `fittedSheet`: the sheet is as tall as this, so Cancel,
-    /// the title and Save are drawn here rather than in a navigation bar.
+    /// Presented with `fittedSheet`: the sheet is as tall as this, so the
+    /// close button, title and Save are drawn here rather than in a
+    /// navigation bar.
     public var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader(cancelTitle: model.cancelLabel, onCancel: onDone) {
-                SheetTitleText(model.title)
-            } trailing: {
-                Button(model.saveLabel, action: save)
-                    .buttonStyle(.glassProminent)
-                    .controlSize(.large)
-                    .disabled(!model.canSave || isSaving)
+        SheetScaffold(
+            model.title,
+            closeTitle: model.cancelLabel,
+            onClose: onDone,
+            primary: SheetAction(model.saveLabel, identifier: "timerEdit.save",
+                                 isEnabled: model.canSave && !isSaving, action: save)
+        ) {
+            if let message = model.validationMessage {
+                InlineError(message)
+                    .accessibilityIdentifier("timerEdit.message")
             }
 
-            ScrollView {
-                VStack(spacing: 12) {
-                    if let message = model.validationMessage {
-                        PanelSection {
-                            Label {
-                                Text(message)
-                            } icon: {
-                                Image(systemName: "exclamationmark.circle.fill")
-                                    .foregroundStyle(Palette.destructive)
-                                    .accessibilityHidden(true)
-                            }
-                            .frame(minHeight: 44, alignment: .leading)
-                            .accessibilityIdentifier("timerEdit.message")
-                        }
+            startSection
+
+            // The finished parts and the running side in one section,
+            // in the order they happened: what is editable, then the
+            // side still being measured.
+            if !model.parts.isEmpty || model.runningPart != nil {
+                CardSection(model.parts.isEmpty ? RunningTimerEditCopy.nowHeader : RunningTimerEditCopy.soFarHeader) {
+                    ForEach($model.parts) { $part in
+                        partRows($part)
                     }
-
-                    startSection
-
-                    // The finished parts and the running side in one section,
-                    // in the order they happened: what is editable, then the
-                    // side still being measured.
-                    if !model.parts.isEmpty || model.runningPart != nil {
-                        VStack(alignment: .leading, spacing: 6) {
-                            Text(model.parts.isEmpty ? RunningTimerEditCopy.nowHeader : RunningTimerEditCopy.soFarHeader)
-                                .font(.footnote)
-                                .foregroundStyle(Palette.secondaryText)
-                                .padding(.horizontal, 16)
-                            PanelSection {
-                                ForEach($model.parts) { $part in
-                                    partRows($part)
-                                }
-                                if let running = model.runningPart {
-                                    Text(running.title).font(.body.weight(.semibold))
-                                    LabeledContent(RunningTimerEditCopy.partStart, value: model.runningStartText ?? "")
-                                        .monospacedDigit()
-                                    LabeledContent(RunningTimerEditCopy.partEnd, value: RunningTimerEditCopy.running)
-                                        .accessibilityIdentifier("timerEdit.runningSide")
-                                }
-                            } footer: {
-                                if model.runningPart != nil {
-                                    Text(RunningTimerEditCopy.nowFooter)
-                                }
-                            }
-                        }
+                    if let running = model.runningPart {
+                        Text(running.title).font(.body.weight(.semibold))
+                        ListRow(RunningTimerEditCopy.partStart, value: model.runningStartText ?? "")
+                            .monospacedDigit()
+                        ListRow(RunningTimerEditCopy.partEnd, value: RunningTimerEditCopy.running)
+                            .accessibilityIdentifier("timerEdit.runningSide")
+                    }
+                } footer: {
+                    if model.runningPart != nil {
+                        Text(RunningTimerEditCopy.nowFooter)
                     }
                 }
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
             }
-            .scrollBounceBehavior(.basedOnSize)
         }
         .tint(tint)
     }
 
     private var startSection: some View {
-        PanelSection {
+        CardSection {
             // Date as well as time: a feed started before midnight and
             // corrected after it is on the other day.
-            DatePicker(
-                RunningTimerEditCopy.startLabel,
-                selection: $model.startedAt,
-                in: model.startRange,
-                displayedComponents: [.date, .hourAndMinute]
-            )
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("timerEdit.start")
-
-            HStack(spacing: 12) {
-                nudge(
-                    RunningTimerEditCopy.startEarlierShort,
-                    label: RunningTimerEditCopy.startEarlier,
-                    identifier: "timerEdit.earlier",
-                    by: -300
+            LabeledRow(RunningTimerEditCopy.startLabel) {
+                DatePicker(
+                    RunningTimerEditCopy.startLabel,
+                    selection: $model.startedAt,
+                    in: model.startRange,
+                    displayedComponents: [.date, .hourAndMinute]
                 )
-                nudge(
-                    RunningTimerEditCopy.startLaterShort,
-                    label: RunningTimerEditCopy.startLater,
-                    identifier: "timerEdit.later",
-                    by: 300
-                )
+                .labelsHidden()
+                .accessibilityLabel(RunningTimerEditCopy.startLabel)
+                .accessibilityIdentifier("timerEdit.start")
             }
+
+            nudges
         }
     }
 
-    /// Two equal buttons side by side in one row. `.borderless` so a tap on
-    /// one does not fire the whole Form row, which is what a bordered button
-    /// in a List row does.
+    /// Side by side; stacked at the accessibility sizes, where the labels
+    /// would wrap in half a row.
+    private var nudges: some View {
+        let layout = typeSize.isAccessibilitySize ? AnyLayout(VStackLayout(spacing: Spacing.s)) : AnyLayout(HStackLayout(spacing: Spacing.m))
+        return layout {
+            nudge(
+                RunningTimerEditCopy.startEarlierShort,
+                label: RunningTimerEditCopy.startEarlier,
+                identifier: "timerEdit.earlier",
+                by: -300
+            )
+            nudge(
+                RunningTimerEditCopy.startLaterShort,
+                label: RunningTimerEditCopy.startLater,
+                identifier: "timerEdit.later",
+                by: 300
+            )
+        }
+    }
+
+    /// Two equal buttons side by side in one row.
     private func nudge(_ title: String, label: String, identifier: String, by seconds: TimeInterval) -> some View {
         Button {
             model.shiftStart(by: seconds)
         } label: {
             Text(title)
-                .font(.body.weight(.semibold))
                 .monospacedDigit()
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .background(tint.opacity(0.14), in: .rect(cornerRadius: 10))
+                .frame(maxWidth: .infinity)
         }
-        .buttonStyle(.borderless)
+        .buttonStyle(.selectableChip(tint, isSelected: false))
         .accessibilityLabel(label)
         .accessibilityIdentifier(identifier)
     }
@@ -161,7 +144,7 @@ public struct RunningTimerEditSheet: View {
                accessibilityLabel: RunningTimerEditCopy.partEndAccessibilityLabel(value.title))
         }
         if let length = model.lengthText(for: value) {
-            LabeledContent(RunningTimerEditCopy.length, value: length)
+            ListRow(RunningTimerEditCopy.length, value: length)
                 .monospacedDigit()
         }
         if case .bottle = value.kind {
@@ -174,15 +157,17 @@ public struct RunningTimerEditSheet: View {
     /// say, with a message. Named for VoiceOver with the part it belongs to,
     /// since the visible title alone is just "Start"/"End".
     private func timeRow(_ title: String, date: Binding<Date>, identifier: String, accessibilityLabel: String) -> some View {
-        DatePicker(
-            title,
-            selection: date,
-            in: model.startRange.lowerBound...max(model.startRange.lowerBound, model.latestPartEnd),
-            displayedComponents: [.date, .hourAndMinute]
-        )
-        .frame(minHeight: 44)
-        .accessibilityLabel(accessibilityLabel)
-        .accessibilityIdentifier(identifier)
+        LabeledRow(title) {
+            DatePicker(
+                title,
+                selection: date,
+                in: model.startRange.lowerBound...max(model.startRange.lowerBound, model.latestPartEnd),
+                displayedComponents: [.date, .hourAndMinute]
+            )
+            .labelsHidden()
+            .accessibilityLabel(accessibilityLabel)
+            .accessibilityIdentifier(identifier)
+        }
     }
 
     @ViewBuilder
@@ -206,7 +191,7 @@ public struct RunningTimerEditSheet: View {
         }
 
         // Outside a Form a menu picker shows no label: the row names it.
-        LabeledContent(RunningTimerEditCopy.contentsLabel) {
+        LabeledRow(RunningTimerEditCopy.contentsLabel) {
             Picker(RunningTimerEditCopy.contentsLabel, selection: part.contents) {
                 ForEach(BottleContents.allCases, id: \.self) { contents in
                     Text(contents.displayName).tag(contents)

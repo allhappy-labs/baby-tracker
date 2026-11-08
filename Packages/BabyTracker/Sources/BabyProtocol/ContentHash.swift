@@ -78,6 +78,23 @@ extension ProtocolCanonicalizer {
                 "length_cm": p.optionalNumber("length_cm"), "head_circumference_cm": p.optionalNumber("head_circumference_cm"),
                 "length_position": p.optionalText("length_position"),
             ])
+        case "immunization":
+            return .object([
+                "dose": p.optionalNumber("dose"),
+                "given_at": p.time("given_at"),
+                "note": p.optionalText("note"),
+                "time_zone_id": p.text("time_zone_id"),
+                "vaccine": .string(displayName(p.string("vaccine") ?? "")),
+            ])
+        case "pump":
+            return .object([
+                "ended_at": p.optionalTime("ended_at"),
+                "note": p.optionalText("note"),
+                "side": p.text("side"),
+                "started_at": p.time("started_at"),
+                "time_zone_id": p.text("time_zone_id"),
+                "volume_ml": p.optionalNumber("volume_ml"),
+            ])
         case "supplement":
             return .object([
                 "logged_at": p.time("logged_at"),
@@ -161,7 +178,7 @@ extension ProtocolCanonicalizer {
             // `DeletePayload`: `baby_id` when the payload names one, which
             // every delete but a baby's does.
             return .object(p.string("baby_id").map { ["baby_id": .string($0)] } ?? [:])
-        case (.baby, .create), (.baby, .update):
+        case (.baby, .create), (.baby, .update), (.pump, .create), (.pump, .update):
             return try contentPayload(entityKind: entityKind.rawValue, payload: payload)
         case (_, .create), (_, .update):
             return try withBaby(contentPayload(entityKind: entityKind.rawValue, payload: payload))

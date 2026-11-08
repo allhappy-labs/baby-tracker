@@ -184,7 +184,7 @@ import BabyCore
         clock.advance(by: 120)
         let left = try store.startPart(.breast(.left), for: baby)
         let savedBottle = try #require(try store.lastFeed(for: baby))
-        let usualVolume = try LogDefaults(store: store).mostUsedBottleVolumeML(for: baby)
+        let usualVolume = try LogDefaults(store: store).lastBottleVolumeML(for: baby)
         #expect(savedBottle.totalBottleVolumeML == usualVolume)
         #expect(left.sessionID == savedBottle.effectiveFeedingSessionID)
     }
@@ -209,29 +209,50 @@ import BabyCore
         #expect(entry.bottleComponents.first?.bottleContents == .breastMilk)
     }
 
-    // (4) `setBottleVolume` must refuse a feed that doesn't have exactly one
+    // (4) `setBottle` must refuse a feed that doesn't have exactly one
     // bottle component, and a volume that isn't positive.
-    @Test func setBottleVolumeRewritesTheBottleComponent() throws {
+    @Test func setBottleRewritesTheVolumeAndContentsInOneWrite() throws {
         let (store, baby, _) = try fixture()
         let feed = try store.logBottle(volumeML: 60, contents: .formula, for: baby)
-        try store.setBottleVolume(90, onFeed: feed.id)
+        let before = store.revision
+        try store.setBottle(volumeML: 90, contents: .breastMilk, onFeed: feed.id)
         #expect(feed.bottleComponents.map(\.volumeML) == [90])
+        #expect(feed.bottleComponents.map(\.bottleContents) == [.breastMilk])
+        #expect(store.revision == before + 1)
     }
 
-    @Test func setBottleVolumeRefusesAFeedWithNoBottleComponent() throws {
+    @Test func aChosenContentsBeatsTheTimersWhenABottleStops() throws {
+        let (store, baby, clock) = try fixture()
+        let timer = try store.startPart(.bottle(.formula), for: baby)
+        clock.advance(by: 120)
+        let entry = try #require(try store.stopBottle(timer, volumeML: 90, contents: .mixed))
+        #expect(entry.bottleComponents.first?.bottleContents == .mixed)
+    }
+
+    @Test func bottlePartReadsTheSingleBottleOfAFeed() throws {
+        let (store, baby, _) = try fixture()
+        let bottle = try store.logBottle(volumeML: 60, contents: .breastMilk, for: baby)
+        let solids = try store.logSolids(foods: ["pear"], amount: .some, for: baby)
+        let part = try #require(try store.bottlePart(onFeed: bottle.id))
+        #expect(part.volumeML == 60)
+        #expect(part.contents == .breastMilk)
+        #expect(try store.bottlePart(onFeed: solids.id) == nil)
+    }
+
+    @Test func setBottleRefusesAFeedWithNoBottleComponent() throws {
         let (store, baby, _) = try fixture()
         let feed = try store.logSolids(foods: ["pear"], amount: .some, for: baby)
         #expect(throws: PartError.notASingleBottle) {
-            try store.setBottleVolume(80, onFeed: feed.id)
+            try store.setBottle(volumeML: 80, contents: .formula, onFeed: feed.id)
         }
     }
 
-    @Test func setBottleVolumeRefusesAFeedWithTwoBottleComponents() throws {
+    @Test func setBottleRefusesAFeedWithTwoBottleComponents() throws {
         let (store, baby, _) = try fixture()
         // Two bottle components on one entry can no longer be built by a
         // live timer — one-part timers give each bottle its own timer, and
         // `combineFeeds` links entries rather than merging their components.
-        // Built directly, as `setBottleVolume` only cares what is saved.
+        // Built directly, as `setBottle` only cares what is saved.
         let feed = FeedEntry(babyID: baby, kind: .bottle, startedAt: store.now, timeZoneID: "UTC")
         feed.components = [
             .bottle(id: UUID(), volumeML: 40, contents: .formula),
@@ -241,15 +262,15 @@ import BabyCore
         store.context.insert(feed)
         try store.record(.create, on: feed)
         #expect(throws: PartError.notASingleBottle) {
-            try store.setBottleVolume(80, onFeed: feed.id)
+            try store.setBottle(volumeML: 80, contents: .formula, onFeed: feed.id)
         }
     }
 
-    @Test func setBottleVolumeRefusesANonPositiveVolume() throws {
+    @Test func setBottleRefusesANonPositiveVolume() throws {
         let (store, baby, _) = try fixture()
         let feed = try store.logBottle(volumeML: 60, contents: .formula, for: baby)
         #expect(throws: PartError.invalidVolume) {
-            try store.setBottleVolume(0, onFeed: feed.id)
+            try store.setBottle(volumeML: 0, contents: .formula, onFeed: feed.id)
         }
     }
 

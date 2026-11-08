@@ -127,7 +127,7 @@ struct SiriStopFeedIntent: AppIntent {
                 return .result(dialog: IntentDialog("No feeding is running for \(baby.name). Nothing was saved."))
             }
             // Same path as the Live Activity's Stop and the Quick Log
-            // widget: a running timed bottle is saved at the usual amount
+            // widget: a running timed bottle is saved at the previous bottle's amount
             // and the app offers "Set amount" for it next time it is open.
             try await OutOfAppFeedActions.stopFeed(timer, in: store)
             WidgetCenter.shared.reloadAllTimelines()

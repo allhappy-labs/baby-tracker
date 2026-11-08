@@ -53,8 +53,8 @@
 - Supplements is shown as **Meds**. The diaper "Both" is shown as **Mixed**.
 
 **Simulator**
-- Every simulator build and test uses the single shared device `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853` (iPhone 17 Pro).
-- Override the Makefile with `SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`.
+- Every simulator build and test uses the single shared device `platform=iOS Simulator,id=<simulator-udid>` (iPhone 17 Pro).
+- Override the Makefile with `SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`.
 - Never create, clone or select another simulator, including the iPhone 17e. If the device is missing or incompatible, stop and report.
 
 **Accessibility**
@@ -2194,7 +2194,7 @@ Keys that already exist in another catalog, such as "Awake", "Left breast", "Rig
 
 - [ ] **Step 5: Run the checks**
 
-Run: `make test && python3 scripts/verify-localizations.py && make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`
+Run: `make test && python3 scripts/verify-localizations.py && make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`
 Expected: PASS, `OK`, and `BUILD SUCCEEDED`. If `swift test` cannot compile the asset catalog on the command line (an `actool` error), keep the catalog. Change the first test to `#expect(UIImage(named: icon.assetName, in: .module, with: nil) != nil)` inside `#if canImport(UIKit)`, and run it through `xcodebuild test -scheme BabyTracker-Package -destination 'platform=iOS Simulator,name=iPhone 17 Pro' -only-testing:BabyUITests`. Record the command you used in `HANDOFF.md` §5.
 
 - [ ] **Step 6: Commit**
@@ -2477,7 +2477,7 @@ Update `HomeView.init`'s closures to:
 
 - [ ] **Step 5: Run the tests and build**
 
-Run: `make test && make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`
+Run: `make test && make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`
 Expected: PASS and `BUILD SUCCEEDED`. Update `EXPECTED_TESTS`.
 
 - [ ] **Step 6: Commit**
@@ -2641,7 +2641,7 @@ Every sheet keeps the `sheetHeight(_:)` and `NavigationStack` pattern of the cur
 
 - [ ] **Step 4: Run the tests and build**
 
-Run: `make test && python3 scripts/verify-localizations.py && make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`
+Run: `make test && python3 scripts/verify-localizations.py && make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`
 Expected: PASS, `OK`, and `BUILD SUCCEEDED`. Update `EXPECTED_TESTS`.
 
 - [ ] **Step 5: Commit**
@@ -2776,7 +2776,7 @@ Expected: FAIL.
 
 - [ ] **Step 4: Run the tests and build**
 
-Run: `make test && make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`
+Run: `make test && make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`
 Expected: PASS and `BUILD SUCCEEDED`. Update `EXPECTED_TESTS`.
 
 - [ ] **Step 5: Commit**
@@ -2846,7 +2846,7 @@ Update the files listed above.
 
 - [ ] **Step 4: Build and verify the localizations**
 
-Run: `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' && python3 scripts/verify-localizations.py`
+Run: `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>' && python3 scripts/verify-localizations.py`
 Expected: `BUILD SUCCEEDED` and `OK`.
 
 - [ ] **Step 5: Commit**
@@ -2959,7 +2959,7 @@ Expected: PASS. Update `EXPECTED_TESTS`.
 
 - [ ] **Step 3: Update the UI tests and run them**
 
-Run: `make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`
+Run: `make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`
 Expected: `** TEST SUCCEEDED **`, including every `AccessibilityAuditTests` case. Fix the layout or identifiers rather than adding new expected-failure wrappers.
 
 - [ ] **Step 4: Commit**
@@ -2986,13 +2986,13 @@ make server-test
 make server-smoke
 make server-protocol-e2e
 python3 scripts/verify-localizations.py
-make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'
-make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'
+make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'
+make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'
 ```
 
 Expected: every command passes. Record each command and its result line in the verification doc.
 
-- [ ] **Step 2: Simulator walkthrough (shared iPhone 17 Pro `D17101C9-01EB-488D-AFE1-58E6C089B853`, English)**
+- [ ] **Step 2: Simulator walkthrough (shared iPhone 17 Pro `<simulator-udid>`, English)**
 
 Use a fresh simulator install with `-uiTestResetStore -uiTestSeedBaby`, and save screenshots with `xcrun simctl io <udid> screenshot`. Walk through each scenario and check:
 

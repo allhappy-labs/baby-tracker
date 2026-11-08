@@ -304,7 +304,7 @@ public struct EntityMetadata: Codable, Sendable, Equatable {
 /// The entity kinds supported by this client. The server owns these spellings;
 /// the raw values are the wire contract.
 public enum WireEntityKind: String, Codable, Sendable, Hashable, CaseIterable {
-    case baby, feed, sleep, diaper, supplement, measurement, timer
+    case baby, feed, sleep, diaper, supplement, measurement, immunization, timer, pump
     case growthProfile = "growth_profile"
 
     /// The payload version of the kind's one wire shape: feed 4, timer 5,
@@ -317,7 +317,7 @@ public enum WireEntityKind: String, Codable, Sendable, Hashable, CaseIterable {
         case .feed: 4
         case .timer: 5
         case .sleep: 2
-        case .baby, .diaper, .supplement, .growthProfile, .measurement: 1
+        case .baby, .diaper, .supplement, .growthProfile, .measurement, .immunization, .pump: 1
         }
     }
 }

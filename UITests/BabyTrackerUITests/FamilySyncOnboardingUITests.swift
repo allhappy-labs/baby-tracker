@@ -73,7 +73,7 @@ final class JoinFromFirstLaunchUITests: XCTestCase {
         let app = Harness.launch(Harness.Launch(reset: true, seedBaby: false))
         defer { app.terminate() }
 
-        XCTAssertTrue(app.navigationBars["Add baby"].waitForExistence(timeout: 20), "first launch is not the add-baby screen")
+        XCTAssertTrue(app.buttons["addBaby.save"].waitForExistence(timeout: 20), "first launch is not the add-baby screen")
         let join = app.buttons["addBaby.joinFamily"]
         XCTAssertTrue(join.waitForExistence(timeout: 5), "no way to join a family from the first-launch screen")
         XCTAssertTrue(join.isHittable, "the join action has no hit region")
@@ -90,7 +90,7 @@ final class JoinFromFirstLaunchUITests: XCTestCase {
 
         app.buttons["joinFamily.close"].tap()
         XCTAssertTrue(
-            app.navigationBars["Add baby"].waitForExistence(timeout: 5),
+            app.buttons["addBaby.save"].waitForExistence(timeout: 5),
             "closing the join flow did not return to adding a baby"
         )
     }

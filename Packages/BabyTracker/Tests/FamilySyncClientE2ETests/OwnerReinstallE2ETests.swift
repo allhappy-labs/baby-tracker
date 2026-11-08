@@ -159,6 +159,7 @@ struct OwnerReinstallE2ETests {
         clock.advance(by: 10 * 60)
         let solids = try caregiver.store.logSolids(foods: [], amount: .taste, for: baby.id)
         let vitamin = try owner.store.logSupplement(name: "Vitamin D", for: baby.id)
+        _ = try owner.store.logImmunization(vaccine: "Prevenar 13", dose: 1, for: baby.id, note: "left thigh")
         let ownerDiaper = try owner.store.logDiaper(.wet, for: baby.id)
         try await owner.sync(.localWrite)
         clock.advance(by: 60)
@@ -329,6 +330,8 @@ struct FamilyLedger: Equatable {
         let sleeps = try store.context.fetch(FetchDescriptor<SleepEntry>()).filter { $0.realmKey == realm && !$0.isTombstoned }
         let diapers = try store.context.fetch(FetchDescriptor<DiaperEntry>()).filter { $0.realmKey == realm && !$0.isTombstoned }
         let supplements = try store.context.fetch(FetchDescriptor<SupplementEntry>()).filter { $0.realmKey == realm && !$0.isTombstoned }
+        let immunizations = try store.context.fetch(FetchDescriptor<ImmunizationEntry>()).filter { $0.realmKey == realm && !$0.isTombstoned }
+        let pumps = try store.context.fetch(FetchDescriptor<PumpEntry>()).filter { $0.realmKey == realm && !$0.isTombstoned }
         let timers = try store.context.fetch(FetchDescriptor<ActiveTimer>()).filter { $0.realmKey == realm }
         rows = [
             "babies": babies.map { "\($0.id) \($0.name) born=\($0.birthDateISO ?? "-") order=\($0.sortOrder)" }.sorted(),
@@ -348,6 +351,12 @@ struct FamilyLedger: Equatable {
             "supplements": supplements.map {
                 "\($0.id) baby=\($0.babyID) \($0.name) at=\(ms($0.startedAt)) logged=\(ms($0.loggedAt)) tz=\($0.timeZoneID) note=\($0.note ?? "-")"
             }.sorted(),
+            "immunizations": immunizations.map {
+                "\($0.id) baby=\($0.babyID) \($0.vaccine) dose=\($0.dose.map(String.init) ?? "-") at=\(ms($0.givenAt)) tz=\($0.timeZoneID) note=\($0.note ?? "-")"
+            }.sorted(),
+            "pumps": pumps.map {
+                "\($0.id) \($0.sideRaw) \(ms($0.startedAt))–\(ms($0.endedAt)) ml=\(String(describing: $0.volumeML)) tz=\($0.timeZoneID) note=\($0.note ?? "-")"
+            }.sorted(),
             "timers": timers.map { "\($0.id) baby=\($0.babyID) \($0.kindRaw) at=\(ms($0.startedAt))" }.sorted(),
         ]
         feedLinks = Dictionary(uniqueKeysWithValues: feeds.compactMap { feed in feed.feedingSessionID.map { (feed.id, $0) } })
@@ -355,11 +364,11 @@ struct FamilyLedger: Equatable {
         feedPairs = feeds.map { ($0.id, $0.feedingSessionID) }
         sleepPairs = sleeps.map { ($0.id, $0.sleepSessionID) }
         liveIDs = Set(babies.map(\.id) + profiles.map(\.id) + measurements.map(\.id) + feeds.map(\.id) + sleeps.map(\.id)
-            + diapers.map(\.id) + supplements.map(\.id) + timers.map(\.id))
+            + diapers.map(\.id) + supplements.map(\.id) + immunizations.map(\.id) + pumps.map(\.id) + timers.map(\.id))
     }
 
     /// The kinds in the order the script's SQL lists them.
-    static let kinds = ["babies", "growth_profiles", "measurements", "feeds", "sleeps", "diapers", "supplements", "timers"]
+    static let kinds = ["babies", "growth_profiles", "measurements", "feeds", "sleeps", "diapers", "supplements", "immunizations", "pumps", "timers"]
 
     var summary: String { Self.kinds.map { "\($0)=\(rows[$0]?.count ?? 0)" }.joined(separator: " ") }
 

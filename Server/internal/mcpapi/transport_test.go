@@ -628,7 +628,10 @@ func TestDisconnectCancelsTheReadAndReleasesSlotsForBothProtocols(t *testing.T) 
 }
 
 func TestDeadlineReachesToolReadsForBothProtocols(t *testing.T) {
-	const budget = 500 * time.Millisecond
+	// 2.5 s leaves the production reply reserve (maxResponseReserve, 250 ms);
+	// at 500 ms the reserve was 50 ms, and under -race on a loaded machine the
+	// timeout reply missed its write deadline and the client saw EOF.
+	const budget = 2500 * time.Millisecond
 	for _, version := range []string{ProtocolLegacy, ProtocolCurrent} {
 		t.Run(version, func(t *testing.T) {
 			e := newEnv(t, func(o *Options) { o.Timeout = budget })
@@ -802,20 +805,12 @@ func TestNotReadyNodeRefusesBeforeAdmissionAndAuthentication(t *testing.T) {
 	notReady := errors.New("server_identity_mismatch")
 	ready.err.Store(&notReady)
 	authBefore := e.auth.calls.Load()
-	held := make([]func(), 0, 4)
-	for range 4 {
-		release, ok := e.controller.TryAcquire(admission.MCP)
-		if !ok {
-			t.Fatal("setup: MCP admission unavailable")
-		}
-		held = append(held, release)
-	}
-	// Every MCP slot is held: a refusal that reached admission would be
-	// server_busy; the readiness refusal comes first.
+	// Every MCP slot is held (once the ready request returned its own): a
+	// refusal that reached admission would be server_busy; the readiness
+	// refusal comes first.
+	releaseSlots := holdAllMCPSlots(t, e)
 	status, header, body := post()
-	for _, release := range held {
-		release()
-	}
+	releaseSlots()
 	if status != http.StatusServiceUnavailable || header.Get("Cache-Control") != "no-store" ||
 		!strings.Contains(body, `"code":"unavailable"`) || !strings.Contains(body, `"jsonrpc":"2.0"`) || strings.Contains(body, "server_identity_mismatch") {
 		t.Fatalf("not-ready node: %d %v %s", status, header, body)

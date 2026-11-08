@@ -38,8 +38,8 @@ struct FeedActivityWidget: Widget {
     var body: some WidgetConfiguration {
         ActivityConfiguration(for: TimerActivityAttributes.self) { context in
             let live = isLive(context)
-            VStack(alignment: .leading, spacing: 12) {
-                HStack(spacing: 14) {
+            VStack(alignment: .leading, spacing: Spacing.m) {
+                HStack(spacing: Spacing.m) {
                     icon(for: context.state)
                         .font(.title2)
 
@@ -59,7 +59,7 @@ struct FeedActivityWidget: Widget {
 
                 // Its own line, under the clock: beside it, three parts left
                 // each time a thumb's width and wrapped "4:28" as "4:2 / 8".
-                PartsRow(state: context.state)
+                partsRow(context.state)
 
                 if offersControls(context) {
                     controls(context)
@@ -93,7 +93,7 @@ struct FeedActivityWidget: Widget {
                 }
                 DynamicIslandExpandedRegion(.bottom) {
                     VStack(spacing: 8) {
-                        PartsRow(state: context.state)
+                        partsRow(context.state)
                         if offersControls(context) {
                             controls(context)
                         }
@@ -184,9 +184,9 @@ struct FeedActivityWidget: Widget {
     /// cannot meet in one `any AppIntent` — each control is written as a
     /// two-way choice (`control`).
     ///
-    /// `.plain` with the shape drawn in the label rather than a custom
-    /// `ButtonStyle` or `.glass`: a Live Activity renders a label it is given
-    /// and nothing it has to animate.
+    /// Stop and Wake up are `.plain` with the shape drawn in the label: with
+    /// no style, iOS 26 draws its own capsule behind the label, and the card
+    /// showed a button inside a button. The break's tiles use `.tile`.
     @ViewBuilder
     private func controls(
         _ context: ActivityViewContext<TimerActivityAttributes>
@@ -205,6 +205,7 @@ struct FeedActivityWidget: Widget {
                 ) {
                     PrimaryLabel(title: ActivityCopy.wakeUp)
                 }
+                .buttonStyle(.plain)
             } else {
                 control(
                     card: target.map { StopFeedCardIntent(babyID: babyID, activityTarget: $0) },
@@ -212,15 +213,17 @@ struct FeedActivityWidget: Widget {
                 ) {
                     PrimaryLabel(title: ActivityCopy.stop)
                 }
+                .buttonStyle(.plain)
             }
         case .feedBreak:
-            HStack(spacing: 10) {
+            HStack(spacing: Spacing.s) {
                 control(
                     card: target.map { StartBreastCardIntent(babyID: babyID, side: .left, activityTarget: $0) },
                     plain: StartBreastIntent(babyID: babyID, side: .left)
                 ) {
-                    SideLabel(side: .left, suggested: context.state.suggestedSide == BreastSide.left.rawValue)
+                    SideLabel(side: .left)
                 }
+                .buttonStyle(.tile(Palette.feed, size: .widget, isActive: context.state.suggestedSide == BreastSide.left.rawValue))
                 .accessibilityLabel(ActivityCopy.startBreast(.left))
                 .accessibilityValue(context.state.suggestedSide == BreastSide.left.rawValue ? ActivityCopy.suggested : "")
 
@@ -228,8 +231,9 @@ struct FeedActivityWidget: Widget {
                     card: target.map { StartBreastCardIntent(babyID: babyID, side: .right, activityTarget: $0) },
                     plain: StartBreastIntent(babyID: babyID, side: .right)
                 ) {
-                    SideLabel(side: .right, suggested: context.state.suggestedSide == BreastSide.right.rawValue)
+                    SideLabel(side: .right)
                 }
+                .buttonStyle(.tile(Palette.feed, size: .widget, isActive: context.state.suggestedSide == BreastSide.right.rawValue))
                 .accessibilityLabel(ActivityCopy.startBreast(.right))
                 .accessibilityValue(context.state.suggestedSide == BreastSide.right.rawValue ? ActivityCopy.suggested : "")
 
@@ -239,6 +243,7 @@ struct FeedActivityWidget: Widget {
                 ) {
                     BottleLabel()
                 }
+                .buttonStyle(.tile(Palette.feed, size: .widget))
                 .accessibilityLabel(ActivityCopy.startBottle)
             }
         case .sleepBreak:
@@ -253,9 +258,39 @@ struct FeedActivityWidget: Widget {
         card: Card?, plain: Plain, @ViewBuilder label: () -> some View
     ) -> some View {
         if let card {
-            Button(intent: card, label: label).buttonStyle(.plain)
+            Button(intent: card, label: label)
         } else {
-            Button(intent: plain, label: label).buttonStyle(.plain)
+            Button(intent: plain, label: label)
+        }
+    }
+
+    /// The finished parts of the feed in its break — "L 9:02 · R 4:10" — as on
+    /// Home's hero, in the kit's row: every time on one line, the oldest
+    /// dropped first for width, and a "+N" for every earlier part left out
+    /// (those the payload omitted and those dropped).
+    @ViewBuilder
+    private func partsRow(_ state: TimerActivityContentState) -> some View {
+        PartsRow(
+            state.parts.map { part in
+                PartsRow.Item(
+                    icon: Self.partIcon(part),
+                    tint: Palette.feed,
+                    text: ActivityCopy.duration(part.seconds),
+                    accessibilityLabel: ActivityCopy.part(part)
+                )
+            },
+            size: .widget,
+            earlierCount: state.omittedParts,
+            earlierBadge: TimerActivityContentState.earlierPartsBadge,
+            earlierLabel: TimerActivityContentState.earlierPartsAccessibilityLabel
+        )
+    }
+
+    private static func partIcon(_ part: PartLabel) -> BabyIcon {
+        switch part.side {
+        case BreastSide.left.rawValue: .breastLeft
+        case BreastSide.right.rawValue: .breastRight
+        default: .bottle
         }
     }
 
@@ -277,118 +312,32 @@ struct FeedActivityWidget: Widget {
     }
 }
 
-/// Stop and Wake up: a light fill with dark text, the one primary action —
-/// the same treatment as the dock's (`PrimaryFillButtonStyle`).
-private struct PrimaryLabel: View {
-    let title: String
-
-    var body: some View {
-        Text(title)
-            .font(.headline)
-            .lineLimit(1)
-            .minimumScaleFactor(0.7)
-            .foregroundStyle(Palette.ground)
-            .frame(maxWidth: .infinity, minHeight: 44)
-            .background(Capsule().fill(Palette.primaryText))
-            .contentShape(Capsule())
-    }
-}
-
-/// L or R on the feed break card: the dock's side tile, with the suggested
-/// side outlined.
+/// L or R on the feed break card: glyph and letter, inside a `.tile` button
+/// (the suggested side is the active, stronger tile).
 private struct SideLabel: View {
     let side: BreastSide
-    let suggested: Bool
 
     var body: some View {
         let icon: BabyIcon = side == .left ? .breastLeft : .breastRight
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-        HStack(spacing: 8) {
+        HStack(spacing: Spacing.s) {
             BabyIconView(icon, size: 22)
             Text(icon.letter ?? "")
                 .font(.headline.weight(.bold))
                 .foregroundStyle(Palette.primaryText)
         }
-        .foregroundStyle(Palette.feed)
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .background(shape.fill(Palette.feed.opacity(0.14)))
-        .overlay {
-            if suggested { shape.strokeBorder(Palette.feed, lineWidth: 2) }
-        }
-        .contentShape(shape)
     }
 }
 
 /// Bottle on the feed break card: the side tiles' shape, with the bottle glyph.
 private struct BottleLabel: View {
     var body: some View {
-        let shape = RoundedRectangle(cornerRadius: 16, style: .continuous)
-        HStack(spacing: 6) {
+        HStack(spacing: Spacing.s) {
             BabyIconView(.bottle, size: 22)
             Text(ActivityCopy.bottle)
                 .font(.headline.weight(.bold))
                 .foregroundStyle(Palette.primaryText)
                 .lineLimit(1)
                 .minimumScaleFactor(0.6)
-        }
-        .foregroundStyle(Palette.feed)
-        .padding(.horizontal, 6)
-        .frame(maxWidth: .infinity, minHeight: 44)
-        .background(shape.fill(Palette.feed.opacity(0.14)))
-        .contentShape(shape)
-    }
-}
-
-/// The finished parts of the feed in its break — "L 9:02 · R 4:10" — as on
-/// Home's hero. Every time stays on one line; when the parts are too many for
-/// the width, the oldest go first. A count — "+3" — stands for every earlier
-/// part left out: those the payload omitted (it carries the last eight) and
-/// those dropped for width.
-private struct PartsRow: View {
-    let state: TimerActivityContentState
-
-    var body: some View {
-        let parts = state.parts
-        if !parts.isEmpty {
-            ViewThatFits(in: .horizontal) {
-                ForEach(0..<parts.count, id: \.self) { dropped in
-                    row(Array(parts.dropFirst(dropped)), earlier: state.earlierParts(droppingForWidth: dropped))
-                }
-            }
-        }
-    }
-
-    private func row(_ shown: [PartLabel], earlier: Int) -> some View {
-        HStack(spacing: 10) {
-            if let badge = TimerActivityContentState.earlierPartsBadge(earlier) {
-                Text(verbatim: badge)
-                    .font(.caption.weight(.semibold).monospacedDigit())
-                    .foregroundStyle(Palette.secondaryText)
-                    .lineLimit(1)
-                    .fixedSize()
-                    .accessibilityLabel(TimerActivityContentState.earlierPartsAccessibilityLabel(earlier))
-            }
-            ForEach(Array(shown.enumerated()), id: \.offset) { _, part in
-                HStack(spacing: 3) {
-                    BabyIconView(Self.icon(for: part), size: 16)
-                        .foregroundStyle(Palette.feed)
-                    Text(ActivityCopy.duration(part.seconds))
-                        .font(.caption.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(Palette.secondaryText)
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-                .accessibilityElement(children: .ignore)
-                .accessibilityLabel(ActivityCopy.part(part))
-            }
-        }
-    }
-
-    static func icon(for part: PartLabel) -> BabyIcon {
-        switch part.side {
-        case BreastSide.left.rawValue: .breastLeft
-        case BreastSide.right.rawValue: .breastRight
-        default: .bottle
         }
     }
 }

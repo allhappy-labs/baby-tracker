@@ -17,7 +17,7 @@ import (
 // gone with the projection (29), the legacy care helpers with the legacy
 // care storage (30), and the rate-limit definer with the database rate
 // limits (31; limits live in process memory). 32 adds the five Live
-// Activity registration definers.
+// Activity registration definers; 37 the pull's high water (an invoker).
 var runtimeAppFunctions = []string{
 	"app.fence_live_activity_installation(uuid,bigint,uuid,uuid,uuid,uuid,bigint,timestamp with time zone,boolean)",
 	"app.live_activity_authorized(uuid,bigint,boolean)",
@@ -29,6 +29,7 @@ var runtimeAppFunctions = []string{
 	"app.current_account_id()",
 	"app.current_family_id()",
 	"app.family_actor_labels_high_water()",
+	"app.family_high_water(uuid)",
 	"app.import_unfinished_session_count(uuid,timestamp with time zone)",
 	"app.integration_authority(uuid,bigint)",
 	"app.list_family_actor_labels(uuid,bigint,uuid,integer)",
@@ -59,7 +60,7 @@ var identityTableColumns = map[string][]string{
 // effective privilege set must fail the exact schema-29 readiness contract.
 func TestIdentitySchemaHasExactApplicationPrivileges(t *testing.T) {
 	fixture := testpg.New(t)
-	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), fixture.Runtime, 37); err != nil {
 		t.Fatalf("schema-30 exact privilege snapshot rejected: %v", err)
 	}
 	present := tableSet(t, fixture, identityTables)
@@ -109,10 +110,10 @@ func TestIdentitySchemaHasExactApplicationPrivileges(t *testing.T) {
 		assertPublicCannotExecute(t, fixture, signature)
 	}
 	assertExactAppExecutables(t, fixture, "baby_tracker_runtime", runtimeAppFunctions)
-	// The maintenance group's five definers (000031): request_path_schema_test.go;
-	// its nine Live Activity worker definers (000032): live_activity_schema_test.go.
+	// The maintenance group's five definers (000031) and the audit retention drop (000035): request_path_schema_test.go;
+	// its ten Live Activity worker definers (000032, the work sweep's page 000037): live_activity_schema_test.go.
 	assertExactAppExecutables(t, fixture, "baby_tracker_maintenance", append([]string{
-		"app.ensure_audit_partitions(timestamp with time zone)", "app.forget_push_token(uuid,bytea)", "app.prune_push_tokens(integer)",
+		"app.drop_expired_audit_partition(timestamp with time zone)", "app.ensure_audit_partitions(timestamp with time zone)", "app.forget_push_token(uuid,bytea)", "app.prune_push_tokens(integer)",
 		"app.purge_family_step(uuid,integer)", "app.push_targets(uuid[],uuid[])",
 	}, liveActivityWorkerFunctions...))
 }

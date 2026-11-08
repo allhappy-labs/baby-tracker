@@ -42,7 +42,7 @@ public enum LiveActivityActionOutcome: Equatable, Sendable {
 ///
 /// What an authorized action writes is exactly what the app's own controls
 /// write: the same store calls, through `OutOfAppFeedActions` for a feed — a
-/// timed bottle is saved at the usual amount with one "Set amount" request
+/// timed bottle is saved at the previous bottle's amount with one "Set amount" request
 /// for later — and the card shows it at once as this phone's own change.
 @MainActor
 public enum LiveActivityCardActions {

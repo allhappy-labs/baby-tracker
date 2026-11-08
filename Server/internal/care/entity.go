@@ -11,8 +11,8 @@ import (
 )
 
 // Care kind codes (care_entities.kind, sync_page_bindings.resume_kind) and
-// timer kind codes (care_entities.timer_kind), fixed by migration 000030
-// section 1. The care kinds follow the legacy snapshot order, so ORDER BY
+// timer kind codes (care_entities.timer_kind), fixed by the baseline (000030
+// section 1); 000033 added immunization as 9, 000034 pump as 10. The care kinds follow the legacy snapshot order, so ORDER BY
 // kind, id pages a snapshot in the order the staged snapshot used.
 const (
 	KindBaby          int16 = 1
@@ -23,6 +23,8 @@ const (
 	KindSupplement    int16 = 6
 	KindGrowthProfile int16 = 7
 	KindMeasurement   int16 = 8
+	KindImmunization  int16 = 9
+	KindPump          int16 = 10
 
 	TimerKindFeed  int16 = 1
 	TimerKindSleep int16 = 2
@@ -38,7 +40,7 @@ const (
 )
 
 var (
-	kindNames      = [...]string{KindBaby: "baby", KindFeed: "feed", KindSleep: "sleep", KindDiaper: "diaper", KindTimer: "timer", KindSupplement: "supplement", KindGrowthProfile: "growth_profile", KindMeasurement: "measurement"}
+	kindNames      = [...]string{KindBaby: "baby", KindFeed: "feed", KindSleep: "sleep", KindDiaper: "diaper", KindTimer: "timer", KindSupplement: "supplement", KindGrowthProfile: "growth_profile", KindMeasurement: "measurement", KindImmunization: "immunization", KindPump: "pump"}
 	timerKindNames = [...]string{TimerKindFeed: "feed", TimerKindSleep: "sleep"}
 	feedKindNames  = [...]string{FeedKindBreast: "breast", FeedKindBottle: "bottle", FeedKindSolids: "solids"}
 )
@@ -292,6 +294,13 @@ func typedColumns(r *Row, payload protocol.Payload) error {
 	case protocol.MeasurementPayload:
 		kind = "measurement"
 		r.BabyID, r.StartedAt = baby(value.BabyID), timestamp(value.MeasuredAt)
+	case protocol.ImmunizationPayload:
+		kind = "immunization"
+		r.BabyID, r.StartedAt = baby(value.BabyID), timestamp(value.GivenAt)
+	case protocol.PumpPayload:
+		kind = "pump"
+		// Family-owned: no baby. The side, the amount and the note live in wire.
+		r.StartedAt, r.EndedAt = timestamp(value.StartedAt), optionalTimestamp(value.EndedAt)
 	case nil:
 		return fmt.Errorf("%w: live entity without a payload", protocol.ErrInvalidMutation)
 	default:

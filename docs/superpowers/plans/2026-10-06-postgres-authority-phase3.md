@@ -81,7 +81,7 @@ The request pool carries requests and authority commands only, the purge command
   - The app syncs its one active realm whatever a push says (`SyncCoordinator.syncOnce` reads `store.activeRealm`), so a hint would change nothing on the phone.
   - Any identifier, even an opaque one, is per-family metadata handed to Apple and stored in its push queue. Leaving it out is free.
   - No care data, names or counts ever leave the server in a push.
-- **Headers:** `apns-push-type: background`, `apns-priority: 5` (Apple requires 5 for background pushes), `apns-topic` = the app bundle ID (`com.olhapi.babytracker` in production, from `BT_APNS_BUNDLE_ID`), `apns-expiration` = send time + 1 hour, a random `apns-id`. A wake older than an hour is replaced by the next lag check, so storing it longer only spends the budget.
+- **Headers:** `apns-push-type: background`, `apns-priority: 5` (Apple requires 5 for background pushes), `apns-topic` = the app bundle ID (`com.example.babytracker` in production, from `BT_APNS_BUNDLE_ID`), `apns-expiration` = send time + 1 hour, a random `apns-id`. A wake older than an hour is replaced by the next lag check, so storing it longer only spends the budget.
 - **Interval: at most one push per device per 20 minutes (3 an hour).**
   - Apple throttles background pushes and documents that more than two or three an hour can be dropped. A 20-minute floor keeps every device inside that.
   - The cost is latency for a phone in the background: up to 20 minutes behind after its first wake, while it stays backgrounded. A foreground phone has the live connection or the 20 s poll, and a phone that pulls to the high water is not pushed again until the family moves past it.
@@ -123,8 +123,8 @@ The request pool carries requests and authority commands only, the purge command
 - **D4 Wake delivery: build Apple push (APNs) now, in Phase 3** (Tasks 13–15, 17–18). Push stays optional for self-hosters: without APNs configuration, wakes go through the live hub only.
 
 **Blocked on owner (none of these blocks writing or testing code; each blocks a device or production use):**
-- **Apple Developer portal (team TEAM123456):** enable the Push Notifications capability on the App ID `com.olhapi.babytracker`, regenerate the `BabyTracker Development - TEAM123456` profile so it carries `aps-environment`, and install it. `main`'s runbook (`docs/runbooks/family-live-activity-push.md:172`) records that the installed profiles lack `aps-environment` (checked 2026-10-04). Until then device builds keep `Apps/BabyTracker.entitlements` and only simulator builds carry `aps-environment` (Task 17); the switch for device builds is one build-setting change, carried to Phase 6.
-- **APNs key at deploy:** the production key (key ID `KEY1234567`, team `TEAM123456`, file in the owner's credentials folder) is mounted by the operator as `BT_APNS_KEY_FILE` (mode 0600) with `BT_APNS_TEAM_ID`, `BT_APNS_KEY_ID`, `BT_APNS_BUNDLE_ID=com.olhapi.babytracker` and `BT_APNS_WAKES_ENABLED=true`. It is never committed, printed or used by a test; tests generate a throwaway P-256 key. Unraid wiring is Phase 6.
+- **Apple Developer portal (team TEAM123456):** enable the Push Notifications capability on the App ID `com.example.babytracker`, regenerate the `BabyTracker Development - TEAM123456` profile so it carries `aps-environment`, and install it. `main`'s runbook (`docs/runbooks/family-live-activity-push.md:172`) records that the installed profiles lack `aps-environment` (checked 2026-10-04). Until then device builds keep `Apps/BabyTracker.entitlements` and only simulator builds carry `aps-environment` (Task 17); the switch for device builds is one build-setting change, carried to Phase 6.
+- **APNs key at deploy:** the production key (key ID `KEY1234567`, team `TEAM123456`, file in the owner's credentials folder) is mounted by the operator as `BT_APNS_KEY_FILE` (mode 0600) with `BT_APNS_TEAM_ID`, `BT_APNS_KEY_ID`, `BT_APNS_BUNDLE_ID=com.example.babytracker` and `BT_APNS_WAKES_ENABLED=true`. It is never committed, printed or used by a test; tests generate a throwaway P-256 key. Unraid wiring is Phase 6.
 - **Production APNs environment:** TestFlight and App Store builds register production tokens; this tree has no distribution signing, so only the sandbox path is exercised (as on `main`). Carried to Phase 6.
 
 ## Global Constraints
@@ -160,7 +160,7 @@ The request pool carries requests and authority commands only, the purge command
 - Phase 1 carry: "handlers take family and role from the Grant, never from Principal.Scope".
 - Migrations 000029 and 000030 are FROZEN (compatibility digests `00b48588…205d` and `c52ffb37…549b`).
 - Owner's credentials rule (D4): "Production credentials (team TEAM123456, key ID KEY1234567, key file in the owner's credentials folder) are operator-provided at deploy. They must never be committed, printed or used by tests." Every test and harness generates a throwaway P-256 key; `TestNoProductionAPNsKeyInTheServerTree` (Task 13) guards the tree.
-- iOS: SwiftPM host tests wherever possible. The only `xcodebuild` steps are the simulator builds in Tasks 17 and 19. Any `xcodebuild` step must use only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`, must run only after `pgrep -fl xcodebuild` prints nothing, runs one at a time, and never creates, resets or erases a simulator. `xcrun simctl push D17101C9-01EB-488D-AFE1-58E6C089B853 …` may deliver a test push to it.
+- iOS: SwiftPM host tests wherever possible. The only `xcodebuild` steps are the simulator builds in Tasks 17 and 19. Any `xcodebuild` step must use only `platform=iOS Simulator,id=<simulator-udid>`, must run only after `pgrep -fl xcodebuild` prints nothing, runs one at a time, and never creates, resets or erases a simulator. `xcrun simctl push <simulator-udid> …` may deliver a test push to it.
 
 ## Review Focus
 1. **A retention worker deleting a receipt that a retry still needs.** A phone retries a mutation 29 days 23 hours after it was accepted, while the retention sweep is running and a writer holds the family row. The retry must still get `already_applied`. Only receipts at least 30 days old by the clock that stamped them may be deleted, and the sweep must never wait on a family a request holds. Pinned in Task 10 (`TestReceiptRetentionKeepsTheRetryWindow`).
@@ -3859,7 +3859,7 @@ import UIKit
 final class PushAppDelegate: NSObject, UIApplicationDelegate {
     static var registrar: PushTokenRegistrar?
     static var wake: BackgroundWakeHandler?
-    private let log = Logger(subsystem: "com.olhapi.babytracker", category: "push")
+    private let log = Logger(subsystem: "com.example.babytracker", category: "push")
 
     func application(_ application: UIApplication, didRegisterForRemoteNotificationsWithDeviceToken deviceToken: Data) {
         Task { await Self.registrar?.deviceTokenReceived(deviceToken) }
@@ -3886,16 +3886,16 @@ final class PushAppDelegate: NSObject, UIApplicationDelegate {
   - `rtk make test` reports exactly 1268 tests.
   - Then, one run at a time:
     1. `pgrep -fl xcodebuild` must print nothing.
-    2. `xcrun simctl bootstatus D17101C9-01EB-488D-AFE1-58E6C089B853 -b` (boots the shared simulator if needed; never create, reset or erase).
-    3. `rtk proxy xcodebuild -project BabyTracker.xcodeproj -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' -derivedDataPath /tmp/bt-p3-push-dd build`.
+    2. `xcrun simctl bootstatus <simulator-udid> -b` (boots the shared simulator if needed; never create, reset or erase).
+    3. `rtk proxy xcodebuild -project BabyTracker.xcodeproj -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' -derivedDataPath /tmp/bt-p3-push-dd build`.
     4. `codesign -d --entitlements :- /tmp/bt-p3-push-dd/Build/Products/Debug-iphonesimulator/BabyTracker.app | grep -A1 aps-environment` shows `development`.
     5. `plutil -extract UIBackgroundModes json -o - /tmp/bt-p3-push-dd/Build/Products/Debug-iphonesimulator/BabyTracker.app/Info.plist` prints `["remote-notification"]`.
   - Delivery check:
-    1. `xcrun simctl install D17101C9-01EB-488D-AFE1-58E6C089B853 /tmp/bt-p3-push-dd/Build/Products/Debug-iphonesimulator/BabyTracker.app`;
-    2. `xcrun simctl launch D17101C9-01EB-488D-AFE1-58E6C089B853 com.olhapi.babytracker`;
+    1. `xcrun simctl install <simulator-udid> /tmp/bt-p3-push-dd/Build/Products/Debug-iphonesimulator/BabyTracker.app`;
+    2. `xcrun simctl launch <simulator-udid> com.example.babytracker`;
     3. `printf '%s' '{"aps":{"content-available":1}}' > /tmp/bt-p3-wake.apns`;
-    4. `xcrun simctl push D17101C9-01EB-488D-AFE1-58E6C089B853 com.olhapi.babytracker /tmp/bt-p3-wake.apns`;
-    5. `xcrun simctl spawn D17101C9-01EB-488D-AFE1-58E6C089B853 log show --last 1m --predicate 'subsystem == "com.olhapi.babytracker" AND category == "push"'` shows `background push received`.
+    4. `xcrun simctl push <simulator-udid> com.example.babytracker /tmp/bt-p3-wake.apns`;
+    5. `xcrun simctl spawn <simulator-udid> log show --last 1m --predicate 'subsystem == "com.example.babytracker" AND category == "push"'` shows `background push received`.
   - Remove `/tmp/bt-p3-push-dd` afterwards.
 - [ ] **Step 5: Commit:** `rtk git add Packages/BabyTracker Apps BabyTracker.xcodeproj/project.pbxproj Makefile && rtk git commit -m "feat(ios): register for background pushes, upload the APNs token, pull on a push"`
 
@@ -3976,7 +3976,7 @@ struct BackgroundWakePushE2ETests {
 - [ ] **Step 2: Server gates.** `rtk make server-build`; `rtk make server-test`; `(cd Server && rtk go vet ./... && rtk go vet -tags identitytest ./...)`. Then rerun the round-trip pins verbosely and copy their output into the report: `rtk proxy env BT_TEST_PACKAGES='-v ./internal/httpapi' BT_TEST_RUN='TestSyncHTTPRoundTrips|TestPagedHTTPRoundTrips|TestLiveHandshakeIsOneStatement' bash Server/scripts/test-db.sh`.
 - [ ] **Step 3: iOS host tests and the simulator build.**
   - Check that `pgrep -fl xcodebuild` prints nothing, then run `rtk make test`: exactly 1269 tests.
-  - Then, one run at a time on the shared simulator only: `pgrep -fl xcodebuild` prints nothing, then `rtk proxy xcodebuild -project BabyTracker.xcodeproj -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' -derivedDataPath /tmp/bt-p3-gates-dd build` succeeds, and the built app carries `aps-environment` and `UIBackgroundModes` = `["remote-notification"]` (the Task 17 Step 4 checks). Never create, reset or erase a simulator. Remove `/tmp/bt-p3-gates-dd` afterwards.
+  - Then, one run at a time on the shared simulator only: `pgrep -fl xcodebuild` prints nothing, then `rtk proxy xcodebuild -project BabyTracker.xcodeproj -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' -derivedDataPath /tmp/bt-p3-gates-dd build` succeeds, and the built app carries `aps-environment` and `UIBackgroundModes` = `["remote-notification"]` (the Task 17 Step 4 checks). Never create, reset or erase a simulator. Remove `/tmp/bt-p3-gates-dd` afterwards.
   - The device configuration still signs with `Apps/BabyTracker.entitlements` (`rtk proxy grep -n 'CODE_SIGN_ENTITLEMENTS' BabyTracker.xcodeproj/project.pbxproj` shows the simulator-only override and the plain device setting), until the owner's profile regeneration.
 - [ ] **Step 4: Protocol E2E (hosted), with the iOS suite.** Run `rtk make server-protocol-e2e`. Expected:
   - exit 0;

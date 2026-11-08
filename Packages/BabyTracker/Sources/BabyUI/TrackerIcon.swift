@@ -11,7 +11,7 @@ public struct TrackerIcon: View {
     }
 
     /// Colour-neutral, like the SF Symbol it replaces: callers set the tint,
-    /// whether that is `tracker.color` (`TrackerButtonStyle`) or something
+    /// whether that is `tracker.color` or something
     /// else (`HistoryFeature`'s filter chips, dimmed when off).
     public var body: some View {
         BabyIconView(tracker.icon, size: iconSize)

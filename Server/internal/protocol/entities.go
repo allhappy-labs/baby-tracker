@@ -131,6 +131,30 @@ type SupplementPayload struct {
 
 func (SupplementPayload) protocolPayload() {}
 
+type ImmunizationPayload struct {
+	BabyID     string  `json:"baby_id"`
+	GivenAt    string  `json:"given_at"`
+	TimeZoneID string  `json:"time_zone_id"`
+	Vaccine    string  `json:"vaccine"`
+	Dose       *int    `json:"dose"`
+	Note       *string `json:"note"`
+}
+
+func (ImmunizationPayload) protocolPayload() {}
+
+// PumpPayload is a pumping session. It belongs to the family, not a baby,
+// so it has no baby_id. A session still running has no end.
+type PumpPayload struct {
+	StartedAt  string   `json:"started_at"`
+	EndedAt    *string  `json:"ended_at"`
+	TimeZoneID string   `json:"time_zone_id"`
+	Side       string   `json:"side"`
+	VolumeML   *Decimal `json:"volume_ml"`
+	Note       *string  `json:"note"`
+}
+
+func (PumpPayload) protocolPayload() {}
+
 type DiaperPayload struct {
 	BabyID      string  `json:"baby_id"`
 	StartedAt   string  `json:"started_at"`
@@ -290,7 +314,7 @@ func (entity *CanonicalEntity) UnmarshalJSON(raw []byte) error {
 
 func knownEntityKind(kind string) bool {
 	switch kind {
-	case "baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "timer":
+	case "baby", "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "immunization", "pump", "timer":
 		return true
 	default:
 		return false
@@ -317,6 +341,10 @@ func decodeEntityPayload(kind string, raw []byte) (Payload, error) {
 		target = MeasurementPayload{}
 	case "supplement":
 		target = SupplementPayload{}
+	case "immunization":
+		target = ImmunizationPayload{}
+	case "pump":
+		target = PumpPayload{}
 	case "diaper":
 		target = DiaperPayload{}
 	case "timer":

@@ -181,3 +181,38 @@ func emptyQuickLogDefaults() -> UserDefaults {
 
     #expect(posts.count == 1)
 }
+
+@MainActor
+@Test func aPumpStopRequestMarksTheAmountForLater() {
+    let defaults = emptyQuickLogDefaults()
+    let pumpID = UUID()
+    PendingQuickLogStore(defaults: defaults, center: NotificationCenter()).request(.pumpAmount(pumpID: pumpID))
+    let reader = PendingQuickLogStore(defaults: defaults, center: NotificationCenter())
+    #expect(reader.consume() == PendingQuickLogRequest(.pumpAmount(pumpID: pumpID)))
+    #expect(reader.consume() == nil)
+}
+
+/// A bottle and a pump stopped from the Lock Screen one after the other: both
+/// amounts are asked for, one at a time, whichever was stopped last.
+@MainActor
+@Test func aBottlePromptAndAPumpPromptBothSurvive() {
+    let defaults = emptyQuickLogDefaults()
+    let (feedID, pumpID, babyID) = (UUID(), UUID(), UUID())
+    let writer = PendingQuickLogStore(defaults: defaults, center: NotificationCenter())
+    writer.request(.bottleAmount(feedID: feedID), babyID: babyID)
+    writer.request(.pumpAmount(pumpID: pumpID))
+    let reader = PendingQuickLogStore(defaults: defaults, center: NotificationCenter())
+    #expect(reader.consume() == PendingQuickLogRequest(.bottleAmount(feedID: feedID), babyID: babyID))
+    #expect(reader.consume() == PendingQuickLogRequest(.pumpAmount(pumpID: pumpID)))
+    #expect(reader.consume() == nil)
+
+    // The other order, and a second bottle replacing the first without
+    // touching the pump's.
+    let later = UUID()
+    writer.request(.pumpAmount(pumpID: pumpID))
+    writer.request(.bottleAmount(feedID: feedID), babyID: babyID)
+    writer.request(.bottleAmount(feedID: later))
+    #expect(reader.consume() == PendingQuickLogRequest(.bottleAmount(feedID: later)))
+    #expect(reader.consume() == PendingQuickLogRequest(.pumpAmount(pumpID: pumpID)))
+    #expect(reader.consume() == nil)
+}

@@ -189,24 +189,23 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 		if uint64(v.count)+uint64(len(r.Records)) > uint64(v.total) || r.Finalize && v.count+uint32(len(r.Records)) != v.total {
 			return code("import_manifest_incomplete")
 		}
-		for _, b := range r.Babies {
-			n, _ := protocol.NormalizeBabyName(b.Name)
-			size := int64(192 + len(b.Name) + len(n))
-			_, e = tx.Exec(ctx, `INSERT INTO import_baby_candidates(family_id,import_id,local_baby_id,name,normalized_name,birth_date,sort_order,storage_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,$8)`, family, v.id, b.LocalBabyID, b.Name, n, b.BirthDate, b.SortOrder, size)
-			if e != nil {
-				return e
-			}
-			if e = care.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
-				return e
-			}
+		if e = s.stageBabies(ctx, tx, family, v.id, r.Babies); e != nil {
+			return e
 		}
-		for _, m := range r.Records {
-			var exists, local bool
-			e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM import_record_manifests WHERE family_id=$1 AND import_id=$2 AND record_id=$3),EXISTS(SELECT 1 FROM import_baby_candidates WHERE family_id=$1 AND import_id=$2 AND local_baby_id=$4)`, family, v.id, m.RecordID, m.LocalBabyID).Scan(&exists, &local)
+		// A record is refused if this import already holds its id or names a
+		// local baby the import has no candidate for: one statement for the
+		// chunk's records.
+		if len(r.Records) > 0 {
+			ids, babies := make([]string, len(r.Records)), make([]string, len(r.Records))
+			for i, m := range r.Records {
+				ids[i], babies[i] = m.RecordID, m.LocalBabyID
+			}
+			var refused bool
+			e = tx.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM unnest($3::text[],$4::text[]) AS r(record_id,local_baby_id) WHERE EXISTS(SELECT 1 FROM import_record_manifests m WHERE m.family_id=$1 AND m.import_id=$2 AND m.record_id=r.record_id::uuid) OR NOT EXISTS(SELECT 1 FROM import_baby_candidates b WHERE b.family_id=$1 AND b.import_id=$2 AND b.local_baby_id=r.local_baby_id::uuid))`, family, v.id, ids, babies).Scan(&refused)
 			if e != nil {
 				return e
 			}
-			if exists || !local {
+			if refused {
 				return code("invalid_request")
 			}
 		}
@@ -222,11 +221,15 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 				return e
 			}
 		}
-		pending, e := s.recordConflicts(ctx, tx, family, v, r.Records)
+		mappings, e := s.mappings(ctx, tx, family, v)
 		if e != nil {
 			return e
 		}
-		out, e = s.response(ctx, tx, p, family, v, nil, pending)
+		pending, e := s.recordConflicts(ctx, tx, family, v, mappings, r.Records)
+		if e != nil {
+			return e
+		}
+		out, e = s.response(ctx, tx, p, family, v, nil, pending, mappings)
 		if e != nil {
 			return e
 		}
@@ -239,18 +242,14 @@ func (s *Service) Resolve(ctx context.Context, p access.Principal, r protocol.Im
 		if e != nil {
 			return e
 		}
-		if e = care.ChargeImport(ctx, tx, family, size, s.limits); e != nil {
+		if e = s.stageManifests(ctx, tx, family, v.id, r.ChunkIndex, r.Records); e != nil {
 			return e
 		}
-		for _, m := range r.Records {
-			hash, _ := hex.DecodeString(m.ContentSHA256)
-			_, e = tx.Exec(ctx, `INSERT INTO import_record_manifests(family_id,import_id,record_id,entity_kind,local_baby_id,chunk_index,content_sha256,storage_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,192)`, family, v.id, m.RecordID, m.EntityKind, m.LocalBabyID, r.ChunkIndex, hash)
-			if e != nil {
-				return e
-			}
-			if e = care.ChargeImport(ctx, tx, family, 192, s.limits); e != nil {
-				return e
-			}
+		// The chunk and its manifests are charged together: every charge is
+		// positive, so the sum is refused exactly when one of the charges
+		// one by one would have been, and the transaction rolls back either way.
+		if e = care.ChargeImport(ctx, tx, family, size+192*int64(len(r.Records)), s.limits); e != nil {
+			return e
 		}
 		for _, c := range pending {
 			if e = s.saveConflict(ctx, tx, family, v, c); e != nil {
@@ -274,6 +273,44 @@ func (s *Service) publish(ctx context.Context, family string, highWater uint64) 
 	}
 	_ = s.publisher.Publish(ctx, family, protocol.Cursor{ServerInstanceID: s.info.InstanceID, RecoveryEpoch: s.info.RecoveryEpoch,
 		FamilyID: family, Sequence: highWater})
+}
+
+// stageBabies stores a chunk's baby candidates in one statement and charges
+// them in one: every charge is positive, so the sum is refused exactly when
+// one of the charges one by one would have been.
+func (s *Service) stageBabies(ctx context.Context, tx pgx.Tx, family, id string, babies []protocol.ImportBaby) error {
+	if len(babies) == 0 {
+		return nil
+	}
+	local, names, normalized, dates := make([]string, len(babies)), make([]string, len(babies)), make([]string, len(babies)), make([]string, len(babies))
+	orders, sizes := make([]int64, len(babies)), make([]int64, len(babies))
+	var total int64
+	for i, b := range babies {
+		n, _ := protocol.NormalizeBabyName(b.Name)
+		local[i], names[i], normalized[i], dates[i], orders[i] = b.LocalBabyID, b.Name, n, b.BirthDate, int64(b.SortOrder)
+		sizes[i] = int64(192 + len(b.Name) + len(n))
+		total += sizes[i]
+	}
+	_, e := tx.Exec(ctx, `INSERT INTO import_baby_candidates(family_id,import_id,local_baby_id,name,normalized_name,birth_date,sort_order,storage_bytes) SELECT $1,$2,b.local_baby_id::uuid,b.name,b.normalized_name,b.birth_date::date,b.sort_order,b.storage_bytes FROM unnest($3::text[],$4::text[],$5::text[],$6::text[],$7::bigint[],$8::bigint[]) WITH ORDINALITY AS b(local_baby_id,name,normalized_name,birth_date,sort_order,storage_bytes,ordinal) ORDER BY b.ordinal`, family, id, local, names, normalized, dates, orders, sizes)
+	if e != nil {
+		return e
+	}
+	return care.ChargeImport(ctx, tx, family, total, s.limits)
+}
+
+// stageManifests stores a chunk's record manifests in one statement; the
+// caller charges them (192 bytes each).
+func (s *Service) stageManifests(ctx context.Context, tx pgx.Tx, family, id string, chunk uint32, records []protocol.RecordManifest) error {
+	if len(records) == 0 {
+		return nil
+	}
+	ids, kinds, babies, hashes := make([]string, len(records)), make([]string, len(records)), make([]string, len(records)), make([][]byte, len(records))
+	for i, m := range records {
+		hashes[i], _ = hex.DecodeString(m.ContentSHA256)
+		ids[i], kinds[i], babies[i] = m.RecordID, m.EntityKind, m.LocalBabyID
+	}
+	_, e := tx.Exec(ctx, `INSERT INTO import_record_manifests(family_id,import_id,record_id,entity_kind,local_baby_id,chunk_index,content_sha256,storage_bytes) SELECT $1,$2,m.record_id::uuid,m.entity_kind,m.local_baby_id::uuid,$3,m.content_sha256,192 FROM unnest($4::text[],$5::text[],$6::text[],$7::bytea[]) WITH ORDINALITY AS m(record_id,entity_kind,local_baby_id,content_sha256,ordinal) ORDER BY m.ordinal`, family, id, chunk, ids, kinds, babies, hashes)
+	return e
 }
 
 func (s *Service) Status(ctx context.Context, p access.Principal, id string) (protocol.ImportResolveResponse, error) {
@@ -311,7 +348,7 @@ func (s *Service) StatusPage(ctx context.Context, p access.Principal, id string,
 			unmarked = true
 			return nil
 		}
-		out, e = s.response(ctx, tx, p, family, v, token, nil)
+		out, e = s.response(ctx, tx, p, family, v, token, nil, nil)
 		return e
 	})
 	if e != nil || !unmarked {
@@ -336,7 +373,7 @@ func (s *Service) StatusPage(ctx context.Context, p access.Principal, id string,
 			resultErr = code("import_expired")
 			return nil
 		}
-		out, e = s.response(ctx, tx, p, family, v, token, nil)
+		out, e = s.response(ctx, tx, p, family, v, token, nil, nil)
 		return e
 	})
 	if e != nil {
@@ -385,7 +422,7 @@ func (s *Service) validate(r *protocol.ImportResolveRequest) error {
 	seen = map[string]bool{}
 	for _, m := range r.Records {
 		hash, e := hex.DecodeString(m.ContentSHA256)
-		if !protocol.ValidUUID(m.RecordID) || !protocol.ValidUUID(m.LocalBabyID) || seen[m.RecordID] || e != nil || len(hash) != 32 || hex.EncodeToString(hash) != m.ContentSHA256 || (m.EntityKind != "feed" && m.EntityKind != "sleep" && m.EntityKind != "diaper" && m.EntityKind != "supplement" && m.EntityKind != "growth_profile" && m.EntityKind != "measurement" && m.EntityKind != "timer") {
+		if !protocol.ValidUUID(m.RecordID) || !protocol.ValidUUID(m.LocalBabyID) || seen[m.RecordID] || e != nil || len(hash) != 32 || hex.EncodeToString(hash) != m.ContentSHA256 || (m.EntityKind != "feed" && m.EntityKind != "sleep" && m.EntityKind != "diaper" && m.EntityKind != "supplement" && m.EntityKind != "growth_profile" && m.EntityKind != "measurement" && m.EntityKind != "immunization" && m.EntityKind != "timer") {
 			return code("invalid_request")
 		}
 		if m.EntityKind == "growth_profile" && m.RecordID != protocol.GrowthProfileID(m.LocalBabyID) {

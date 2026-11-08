@@ -64,6 +64,10 @@ enum UITestSupport {
         try? context.delete(model: FeedEntry.self)
         try? context.delete(model: SleepEntry.self)
         try? context.delete(model: DiaperEntry.self)
+        // Vaccine names are the whole realm's: a shot left behind would show in
+        // the next test's picker.
+        try? context.delete(model: ImmunizationEntry.self)
+        try? context.delete(model: PumpEntry.self)
         try? context.delete(model: Baby.self)
         try? context.delete(model: SyncOutboxEntry.self)
         try? context.delete(model: CanonicalEntityBase.self)
@@ -243,6 +247,16 @@ enum UITestSupport {
         if ProcessInfo.processInfo.arguments.contains("-uiTestRunningBottle") {
             try? store.startPart(.bottle(.formula), for: babyID)
         }
+        // Two finished sessions earlier today: one measured, one skipped.
+        if ProcessInfo.processInfo.arguments.contains("-uiTestSeedPumps") {
+            _ = try? store.logPump(side: .left, from: now.addingTimeInterval(-3 * 3600), to: now.addingTimeInterval(-3 * 3600 + 900),
+                                   volumeML: nil, note: nil)
+            _ = try? store.logPump(side: .both, from: now.addingTimeInterval(-3600), to: now.addingTimeInterval(-2400),
+                                   volumeML: 90, note: nil)
+        }
+        if ProcessInfo.processInfo.arguments.contains("-uiTestRunningPump") {
+            _ = try? store.startPump(side: .both)
+        }
         // Three saved meds, so the More sheet's row has enough chips to
         // scroll — screenshot fixture only, no app behaviour depends on it.
         if ProcessInfo.processInfo.arguments.contains("-uiTestSeedMeds") {
@@ -264,6 +278,24 @@ enum UITestSupport {
     }
 
     static let historySessionsArgument = "-uiTestHistorySessions"
+
+    /// A booklet of four shots for a baby five months old: two vaccines, two
+    /// doses each, one with a note (`-uiTestSeedVaccines`).
+    static func seedVaccines(_ store: BabyStore, babyID: UUID) {
+        let now = store.now
+        let day = 86_400.0
+        if let baby = try? store.babies().first(where: { $0.id == babyID }) {
+            try? store.updateBabyAndGrowthProfile(
+                baby, name: baby.name, birthDate: now.addingTimeInterval(-150 * day),
+                referenceSex: .girls, expectedDueDate: nil
+            )
+        }
+        try? store.logImmunization(vaccine: "Infanrix hexa", dose: 1, for: babyID, at: now.addingTimeInterval(-90 * day))
+        try? store.logImmunization(vaccine: "Prevenar 13", dose: 1, for: babyID, at: now.addingTimeInterval(-90 * day + 300))
+        try? store.logImmunization(vaccine: "Infanrix hexa", dose: 2, for: babyID, at: now.addingTimeInterval(-30 * day))
+        try? store.logImmunization(vaccine: "Prevenar 13", dose: 2, for: babyID, at: now.addingTimeInterval(-30 * day + 300),
+                                   note: "Fussy that evening")
+    }
 
     /// History's redesign fixture (`-uiTestHistorySessions`): every kind of
     /// row and both kinds of session, at fixed clock times on the two days

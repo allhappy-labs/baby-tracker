@@ -213,9 +213,59 @@ def aggregate(log, destination, phase, build, evidence=None, checkpoints=None):
                     except (OSError, ValueError): pass
                 row["resources"] = resource
                 row["resource_unavailable_reasons"] = {k:v for k,v in reasons.items() if resource.get(k) is None}
+                row["incoherence"] = incoherence(row)
+                row["coherent"] = not row["incoherence"]
                 result.append(row)
     atomic(destination, result)
     return result
+
+def incoherence(row):
+    """Why a cell is not a coherent measurement; empty when it is one.
+
+    Coherent: the supervised final row completed its measurement interval
+    with every requested family ready, at least the requested history, at
+    least one peer pair, no refusal, error or timeout, and exact accounting
+    (each attempted operation has one outcome; each success its sample)."""
+    reasons = []
+    if row.get("completion") != "measurement_complete" or not row.get("measurement_interval_complete") or not (finite(row.get("measurement_seconds")) and row["measurement_seconds"] > 0):
+        reasons.append("not_measured")
+    if row.get("actual_families") != row.get("families"): reasons.append("families_below_requested")
+    if not (finite(row.get("actual_events")) and row["actual_events"] >= row.get("requested_events", 0)): reasons.append("events_below_requested")
+    if not row.get("pairs"): reasons.append("no_pairs")
+    if row.get("rate_limits") != 0: reasons.append("rate_limited")
+    if row.get("errors") != 0 or row.get("timeouts") != 0: reasons.append("errors_or_timeouts")
+    attempted = row.get("attempted") or {}; successful = row.get("successful") or {}
+    kinds = ["empty_pull", "caught_up_read", "save_apply"]
+    try:
+        failures = sum(row.get(k) or 0 for k in ["rate_limits", "errors", "timeouts"])
+        exact = (all(0 <= successful.get(k, 0) <= attempted.get(k, 0) for k in kinds)
+            and sum(attempted.get(k, 0) for k in kinds) == sum(successful.get(k, 0) for k in kinds) + failures
+            and len(row.get("pairs") or []) == successful.get("save_apply", 0)
+            and len(row.get("request_seconds") or []) == successful.get("empty_pull", 0) + successful.get("caught_up_read", 0))
+    except TypeError: exact = False
+    if not exact: reasons.append("accounting_mismatch")
+    return reasons
+
+def matrix_verdict(rows):
+    """The run passes only when all 27 cells are coherent. The history axis
+    (248/512/2048 events) is compared at equal families and concurrency: the
+    2048 cell's p95 against the 248 cell's, reported, not gated."""
+    by_cell = {r["cell"]: r for r in rows}
+    axis = []
+    for o in range(9):
+        low, high = by_cell.get(o + 1), by_cell.get(o + 19)
+        for name in ["request", "durable_peer", "observable_peer"]:
+            a = (low or {}).get(name) or {}; b = (high or {}).get(name) or {}
+            p248, p2048 = a.get("p95_seconds"), b.get("p95_seconds")
+            p512 = ((by_cell.get(o + 10) or {}).get(name) or {}).get("p95_seconds")
+            both = bool(low and high and low.get("coherent") and high.get("coherent")) and finite(p248) and finite(p2048) and p248 > 0
+            axis.append(dict(families=[1,32,128][o//3], concurrency=[1,16,64][o%3], distribution=name,
+                p95_248_seconds=p248, p95_512_seconds=p512, p95_2048_seconds=p2048,
+                ratio_2048_to_248=(p2048/p248) if both else None,
+                within_20_percent=(p2048 <= 1.2*p248) if both else None))
+    coherent = sum(1 for r in rows if r.get("coherent"))
+    return dict(cells=len(rows), coherent_cells=coherent, passed=len(rows) == 27 and coherent == 27,
+        incoherent={str(r["cell"]): r.get("incoherence") for r in rows if not r.get("coherent")}, events_axis=axis)
 
 def supervise(cwd, args):
     child = subprocess.Popen(args, cwd=cwd, start_new_session=True)
@@ -285,10 +335,13 @@ def quantity(text):
     scale={"B":1,"kB":1000,"KB":1000,"MB":10**6,"GB":10**9,"KiB":1024,"MiB":1024**2,"GiB":1024**3}[match[2]]
     return float(match[1])*scale
 
-def sample_loop(app, db, destination):
+def sample_loop(app, db, destination, until=None):
+    # Bounded by the run's own deadline (a matrix run lasts up to an hour),
+    # not by an iteration count that a slow `docker stats` would exhaust.
+    until = time.time() + 3600 if until is None else until
     def stop(sig,frame): raise SystemExit(0)
     signal.signal(signal.SIGTERM,stop); signal.signal(signal.SIGINT,stop)
-    for _ in range(1200):
+    while time.time() < until:
         row=dict(time=time.time(),resources={},unavailable={})
         try:
             value=json.loads(command(["docker","stats","--no-stream","--format","{{json .}}",app],2))
@@ -337,7 +390,13 @@ def cleanup_worker(config, output, allowance):
         state.update(containers=len(containers),volumes=len(volumes))
         if containers or volumes: raise CommandFailure("owned_resources_remaining")
         # A failed image removal preserves the recovery manifest and secrets.
-        run(["docker","image","rm",config["image"]],5)
+        # An image that was never built or tagged (a start that failed early)
+        # is not a cleanup failure; stop_disposable_sync skips it the same way.
+        try: run(["docker","image","inspect",config["image"]],5); image_present=True
+        except CommandFailure as error:
+            if error.code!="command_failed": raise
+            image_present=False
+        if image_present: run(["docker","image","rm",config["image"]],5)
         defaults=secrets/"matrix/defaults.jsonl"
         if defaults.exists():
             for suite in defaults.read_text().splitlines():
@@ -407,13 +466,16 @@ if __name__ == "__main__":
     if sys.argv[1] == "aggregate":
         try: build=read_json(sys.argv[5])
         except (OSError,ValueError): build={}
-        aggregate(sys.argv[2],sys.argv[3],sys.argv[4],build,sys.argv[6],sys.argv[7])
+        verdict=matrix_verdict(aggregate(sys.argv[2],sys.argv[3],sys.argv[4],build,sys.argv[6],sys.argv[7]))
+        atomic(Path(sys.argv[3]).parent/"matrix-verdict.json",verdict)
+        # Reporting all 27 rows is not a pass: an unmeasured matrix fails.
+        if not verdict["passed"]: sys.exit(3)
 
     if sys.argv[1] == "cleanup-worker": sys.exit(cleanup_worker(sys.argv[2],sys.argv[3],float(sys.argv[4])))
     if sys.argv[1] == "cleanup": sys.exit(bounded_cleanup(sys.argv[2],sys.argv[3],max(0,float(sys.argv[4])-time.time()-2)))
 
     if sys.argv[1] == "preserve": preserve_evidence(sys.argv[2],sys.argv[3])
-    if sys.argv[1] == "sample-loop": sample_loop(sys.argv[2],sys.argv[3],sys.argv[4])
+    if sys.argv[1] == "sample-loop": sample_loop(sys.argv[2],sys.argv[3],sys.argv[4],float(sys.argv[5]) if len(sys.argv)>5 else None)
 
     if sys.argv[1] == "smoke-summary": smoke_summary(sys.stdin)
 

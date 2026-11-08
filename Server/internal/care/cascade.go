@@ -15,7 +15,7 @@ import (
 
 // cascadeKindOrder is the legacy cascade order of a baby's children: feed,
 // sleep, diaper, supplement, growth_profile, measurement, timer.
-var cascadeKindOrder = map[string]int{"feed": 0, "sleep": 1, "diaper": 2, "supplement": 3, "growth_profile": 4, "measurement": 5, "timer": 6}
+var cascadeKindOrder = map[string]int{"feed": 0, "sleep": 1, "diaper": 2, "supplement": 3, "growth_profile": 4, "measurement": 5, "immunization": 6, "timer": 7}
 
 // deleteBaby tombstones the baby, then every live child in cascade order
 // (by kind, then id), each at the next sequence: version+1, creator kept,

@@ -229,7 +229,7 @@ public extension FrozenImportManifest {
     func records() throws -> [RecordManifest] {
         var manifests: [RecordManifest] = []
         for (key, payload) in sourceBases
-            .filter({ $0.key.kind != WireEntityKind.baby.rawValue })
+            .filter({ $0.key.kind != WireEntityKind.baby.rawValue && $0.key.kind != WireEntityKind.pump.rawValue })
             .sorted(by: { ($0.key.kind, $0.key.id.uuidString) < ($1.key.kind, $1.key.id.uuidString) }) {
             let fields = (try? JSONSerialization.jsonObject(with: payload)) as? [String: Any] ?? [:]
             guard let babyID = (fields["baby_id"] as? String).flatMap(UUID.init(uuidString:)) else { continue }

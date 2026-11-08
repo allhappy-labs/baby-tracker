@@ -128,7 +128,7 @@ func newRouteStack(t *testing.T, h *testkit.Harness, config routeConfig) *routeS
 	logs := &syncBuffer{}
 	options := Options{Logger: slog.New(slog.NewJSONHandler(logs, nil)), Readiness: config.readiness, InstanceID: h.Info.InstanceID, RecoveryEpoch: h.Info.RecoveryEpoch,
 		CanonicalOrigin: h.Info.CanonicalOrigin, SyncLimits: &h.Limits, SessionService: h.Auth,
-		ImportService: importService, ExportService: exportService, RequestAuthorizer: guard, LiveHub: hub,
+		ImportService: importService, ExportService: exportService, RequestAuthorizer: guard, BearerAuthenticator: guard, LiveHub: hub,
 		Limiter: routeLimiter, ClientIPResolver: resolver,
 		SyncMutationDevicePolicy: policies[limits.ScopeSyncMutationDevice], SyncMutationAccountPolicy: policies[limits.ScopeSyncMutationAccount],
 		SyncMutationFamilyPolicy: policies[limits.ScopeSyncMutationFamily], SyncPullDevicePolicy: pick(config.importPull, limits.ScopeSyncPullDevice),
@@ -308,8 +308,9 @@ func precedenceGoldenRows(t *testing.T) map[string]observed {
 // TestFaultLoggingNeverChangesTheResponse reruns the import, export and
 // live precedence table (TestImportExportLiveErrorPrecedenceIsUnchanged)
 // on stacks that log: every response is the golden's byte for byte, every
-// 5xx leaves exactly one ERROR line (the fault line, with the row's route
-// and code) and every 4xx none, and no line carries a bearer, refresh or
+// 5xx leaves exactly one fault line with the row's route and code (ERROR,
+// or for a lost race WARN and no ERROR line: faultLevel) and every 4xx no
+// ERROR line, and no line carries a bearer, refresh or
 // device credential, an access token's digest, or the request body.
 func TestFaultLoggingNeverChangesTheResponse(t *testing.T) {
 	rows := importExportLiveRows(t)
@@ -328,26 +329,19 @@ func TestFaultLoggingNeverChangesTheResponse(t *testing.T) {
 				t.Errorf("response changed:\n got %s\nwant %s", gotRaw, wantRaw)
 			}
 			logged := row.on.logs.String()
-			var errorLines []map[string]any
-			for _, raw := range strings.Split(strings.TrimSpace(logged), "\n") {
-				if raw == "" {
-					continue
-				}
-				var line map[string]any
-				if err := json.Unmarshal([]byte(raw), &line); err != nil {
-					t.Fatalf("log line %q: %v", raw, err)
-				}
-				if line["level"] == "ERROR" {
-					errorLines = append(errorLines, line)
-				}
-			}
+			errorLines := errorLines(t, logged)
 			if rec.Code >= http.StatusInternalServerError {
 				faults++
-				if len(errorLines) != 1 {
-					t.Fatalf("a %d left %d ERROR lines: %s", rec.Code, len(errorLines), logged)
+				level, msg := faultLevel(row.code)
+				if level != "ERROR" && len(errorLines) != 0 {
+					t.Fatalf("a %s left ERROR lines: %v", row.code, errorLines)
 				}
-				line := errorLines[0]
-				if line["msg"] != "request failed" || line["code"] != row.code || line["status"] != float64(rec.Code) ||
+				lines := linesAt(t, logged, level, msg)
+				if len(lines) != 1 {
+					t.Fatalf("a %d left %d %s lines: %s", rec.Code, len(lines), level, logged)
+				}
+				line := lines[0]
+				if line["code"] != row.code || line["status"] != float64(rec.Code) ||
 					line["route"] == "" || line["route"] == "unmatched" || line["request_id"] != rec.Header().Get("X-Request-ID") {
 					t.Fatalf("fault line=%v", line)
 				}

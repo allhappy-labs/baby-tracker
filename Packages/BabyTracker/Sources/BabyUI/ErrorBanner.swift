@@ -30,6 +30,8 @@ public enum ErrorSubject {
     public static let baby = String(localized: "baby", bundle: .module)
     public static let entry = String(localized: "entry", bundle: .module)
     public static let supplement = String(localized: "med", bundle: .module)
+    public static let vaccination = String(localized: "vaccination", bundle: .module)
+    public static let pump = String(localized: "pumping session", bundle: .module)
 }
 
 /// Non-blocking. Sits above content, below the navigation bar, and leaves

@@ -100,6 +100,90 @@ final class SettingsFlowTests: XCTestCase {
         XCTAssertTrue(app.goToTab("History"))
         XCTAssertFalse(app.staticTexts["Nothing logged yet"].exists)
     }
+
+    /// Settings → Tracking → Home buttons lists the baby's order, and Reset
+    /// puts Home back to Left and Right. The drag itself is SwiftUI's; what
+    /// is pinned here is that the screen reads and writes the order Home
+    /// draws.
+    func testResettingTheHomeButtonsRestoresLeftAndRight() {
+        let app = Harness.launch(
+            Harness.Launch(reset: true, seedBaby: true, homeOrder: "bottle,breast,sleep,diaper")
+        )
+        defer { app.terminate() }
+        app.waitingForHome()
+        XCTAssertFalse(app.buttons["home.start.left"].exists, "the launch order did not reach Home")
+
+        openSettings(app)
+        let row = app.buttons["settings.homeButtons"]
+        for _ in 0..<6 where !row.isHittable { app.swipeUp() }
+        let reset = app.buttons["homeButtons.reset"]
+        XCTAssertTrue(openHomeButtons(app, row: row, first: "bottle"), "the Home buttons row did not open its screen")
+        XCTAssertTrue(reveal(reset, in: app), "Reset is not on the Home buttons screen")
+        XCTAssertTrue(reset.isEnabled, "Reset is off although the order is not the default")
+
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "home-buttons-settings"
+        shot.lifetime = .keepAlways
+        add(shot)
+
+        reset.tap()
+        settle()
+        XCTAssertFalse(reset.isEnabled, "Reset stayed on after resetting")
+        // Breast leads again, and its row says how the big button draws it.
+        let breast = app.descendants(matching: .any)["homeButtons.row.breast"].firstMatch
+        XCTAssertTrue(breast.label.contains("Left and Right"), "the Breast row reads: \(breast.label)")
+        XCTAssertTrue(app.goToTab("Home"))
+        XCTAssertTrue(app.buttons["home.start.left"].waitForExistence(timeout: 8), "Home did not go back to Left and Right")
+    }
+
+    /// Vaccine is one of the Home buttons: Settings lists it, last by
+    /// default, and an order that puts it first makes it Home's big button,
+    /// which opens the vaccine panel.
+    func testVaccineIsAHomeButtonThatCanLeadHome() {
+        var app = Harness.launch(Harness.Launch(reset: true, seedBaby: true))
+        app.waitingForHome()
+        XCTAssertFalse(app.buttons["home.vaccine"].exists, "Vaccine is on the dock by default")
+        openSettings(app)
+        let row = app.buttons["settings.homeButtons"]
+        for _ in 0..<6 where !row.isHittable { app.swipeUp() }
+        XCTAssertTrue(openHomeButtons(app, row: row, first: "breast"), "the Home buttons row did not open its screen")
+        let vaccine = app.descendants(matching: .any)["homeButtons.row.vaccine"].firstMatch
+        for _ in 0..<4 where !vaccine.exists { app.swipeUp() }
+        XCTAssertTrue(vaccine.exists, "the Home buttons list has no Vaccine row")
+        XCTAssertTrue(vaccine.label.contains("Vaccine"), "the Vaccine row reads: \(vaccine.label)")
+        XCTAssertTrue(reveal(app.buttons["homeButtons.reset"], in: app), "Reset is not on the Home buttons screen")
+        XCTAssertFalse(app.buttons["homeButtons.reset"].isEnabled, "the default order reads as changed")
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = "home-buttons-vaccine"
+        shot.lifetime = .keepAlways
+        add(shot)
+        app.terminate()
+
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true, homeOrder: "vaccine,breast,bottle,sleep"))
+        defer { app.terminate() }
+        let big = app.buttons["home.vaccine"]
+        XCTAssertTrue(big.waitForExistence(timeout: 15), "Vaccine first in the order is not on Home's dock")
+        XCTAssertTrue(app.tap(big, until: app.textFields["immunization.name"]), "the Vaccine button did not open the vaccine panel")
+        app.buttons["Cancel"].firstMatch.tap()
+        openSettings(app)
+        for _ in 0..<6 where !row.isHittable { app.swipeUp() }
+        let reset = app.buttons["homeButtons.reset"]
+        XCTAssertTrue(openHomeButtons(app, row: row, first: "vaccine"))
+        XCTAssertTrue(reveal(reset, in: app), "Reset is not on the Home buttons screen")
+        XCTAssertTrue(reset.isEnabled, "Reset is off although Vaccine leads")
+    }
+
+    /// Opens Settings › Home buttons. The screen is open once its first row
+    /// is there: Reset sits under nine rows now and may be below the fold.
+    private func openHomeButtons(_ app: XCUIApplication, row: XCUIElement, first: String) -> Bool {
+        app.tap(row, until: app.descendants(matching: .any)["homeButtons.row.\(first)"].firstMatch)
+    }
+
+    /// Scrolls until `element` is on screen.
+    private func reveal(_ element: XCUIElement, in app: XCUIApplication) -> Bool {
+        for _ in 0..<6 where !(element.exists && element.isHittable) { app.swipeUp() }
+        return element.exists
+    }
 }
 
 extension XCUIApplication {

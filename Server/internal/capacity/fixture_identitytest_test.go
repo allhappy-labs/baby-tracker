@@ -27,8 +27,8 @@ func TestFixtureNaturalHeadExceedsRequest(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Two sign-ins, a family creation and two refreshes append more audit
-	// rows than the one requested.
+	// Two sign-ins and a family creation append more audit rows than the one
+	// requested (the refreshes append none: owner decision D1).
 	if manifest.ActualAuthorityEvents <= uint64(spec.AuthorityEvents) || manifest.Families != 1 || manifest.Devices != 2 {
 		t.Fatalf("natural head/counts not recorded: %+v", manifest)
 	}
@@ -55,8 +55,9 @@ func TestFixtureNaturalHeadExceedsRequest(t *testing.T) {
 				t.Fatal("restored JSON summary leaks secret")
 			}
 		}
-		if restored.RestoredAuthorityEvents != manifest.ActualAuthorityEvents+2 {
-			t.Fatal("restore did not record its real refresh transitions")
+		// The restore's real refreshes append no audit row (D1).
+		if restored.RestoredAuthorityEvents != manifest.ActualAuthorityEvents {
+			t.Fatalf("restored head %d, want the sealed %d", restored.RestoredAuthorityEvents, manifest.ActualAuthorityEvents)
 		}
 		for _, device := range restored.Devices {
 			principal, err := restored.Auth.Authenticate(t.Context(), device.Session.AccessToken)
@@ -188,7 +189,7 @@ func TestFixtureCommandDoesNotPrintSecrets(t *testing.T) {
 		}
 	}
 	var manifest FixtureManifest
-	// The natural audit history (sign-ins, family, refreshes) exceeds the one
+	// The natural audit history (sign-ins and the family) exceeds the one
 	// requested authority event.
 	if json.Unmarshal(output, &manifest) != nil || manifest.ActualAuthorityEvents < 2 {
 		t.Fatal("stdout missing valid safe manifest")

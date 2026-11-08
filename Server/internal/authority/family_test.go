@@ -206,7 +206,7 @@ func TestCreateInviteRedeemReplay(t *testing.T) {
 	if row := lastAudit(t, f, authority.ScopeFamily, family); row.Kind != "family_created" || row.CommandID != create.CommandID || row.ActorID != owner.account {
 		t.Fatalf("family audit %+v", row)
 	}
-	if row := lastAudit(t, f, authority.ScopeAccount, owner.account); row.Kind != "family_created" || row.Seq != 1 {
+	if row := lastAudit(t, f, authority.ScopeAccount, owner.account); row.Kind != "family_created" || row.Seq != 2 { // after the sign-in's row (authoritytest.Session)
 		t.Fatalf("account audit %+v", row)
 	}
 

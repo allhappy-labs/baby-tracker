@@ -141,6 +141,13 @@ func canonicalPayloadValue(payload Payload, includeBabyID bool) (map[string]any,
 		return withBaby(map[string]any{"measured_at": normalizeTimestampForHash(value.MeasuredAt), "logged_at": normalizeTimestampForHash(value.LoggedAt), "time_zone_id": normalizeString(value.TimeZoneID), "weight_kg": nullableDecimal(value.WeightKG), "length_cm": nullableDecimal(value.LengthCM), "head_circumference_cm": nullableDecimal(value.HeadCircumferenceCM), "length_position": nullableString(value.LengthPosition)}, value.BabyID), nil
 	case SupplementPayload:
 		return withBaby(map[string]any{"logged_at": normalizeTimestampForHash(value.LoggedAt), "name": normalizeString(value.Name), "note": nullableNormalizedString(value.Note), "started_at": normalizeTimestampForHash(value.StartedAt), "time_zone_id": normalizeString(value.TimeZoneID)}, value.BabyID), nil
+	case ImmunizationPayload:
+		return withBaby(map[string]any{"dose": nullableInt(value.Dose), "given_at": normalizeTimestampForHash(value.GivenAt), "note": nullableNormalizedString(value.Note), "time_zone_id": normalizeString(value.TimeZoneID), "vaccine": normalizeString(value.Vaccine)}, value.BabyID), nil
+	case PumpPayload:
+		// Family-owned: no baby_id in the mutation hash or the content hash.
+		return map[string]any{"ended_at": nullableNormalizedTimestamp(value.EndedAt), "note": nullableNormalizedString(value.Note),
+			"side": normalizeString(value.Side), "started_at": normalizeTimestampForHash(value.StartedAt),
+			"time_zone_id": normalizeString(value.TimeZoneID), "volume_ml": nullableDecimal(value.VolumeML)}, nil
 	case DiaperPayload:
 		return withBaby(map[string]any{
 			"color": nullableNormalizedString(value.Color), "consistency": nullableNormalizedString(value.Consistency),
@@ -188,6 +195,13 @@ func canonicalPayloadValue(payload Payload, includeBabyID bool) (map[string]any,
 	default:
 		return nil, fmt.Errorf("%w: payload %T", ErrInvalidMutation, payload)
 	}
+}
+
+func nullableInt(value *int) any {
+	if value == nil {
+		return nil
+	}
+	return *value
 }
 
 func nullableString(value *string) any {

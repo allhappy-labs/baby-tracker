@@ -18,7 +18,7 @@
 - Warm-up 30 seconds; steady measurement at least 60 seconds; at least 200 successful observations for published latency percentiles; selected envelope soak 15 minutes.
 - Healthy connected peer durable-apply p95 <1 second; observable apply reported separately. Unexpected errors <0.1%; zero in-quota admission refusals; zero lost/duplicate acknowledged effects or cross-family data.
 - No production load or configuration changes in this plan's authorized local execution. A later Unraid experiment needs its own concrete resource/duration/stop/cleanup approval.
-- Every shell command uses `rtk`. All iOS builds/tests use `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`; do not create a simulator.
+- Every shell command uses `rtk`. All iOS builds/tests use `platform=iOS Simulator,id=<simulator-udid>`; do not create a simulator.
 - Commands below run from repository root unless stated otherwise. New commands/flags described below are deliverables, not commands assumed to exist today.
 
 ## Review Focus

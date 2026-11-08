@@ -47,15 +47,6 @@ final class UkrainianLayoutSmokeTests: XCTestCase {
         capture(iPhoneSettings, "05 iPhone app Settings")
     }
 
-    /// Scrolls the frontmost list until `element` is hittable.
-    private func reveal(_ element: XCUIElement, in app: XCUIApplication) -> XCUIElement {
-        for _ in 0..<6 {
-            if element.exists, element.isHittable { return element }
-            app.collectionViews.firstMatch.swipeUp()
-        }
-        return element
-    }
-
     private func openTab(_ label: String, in app: XCUIApplication) {
         let button = app.tabBars.buttons[label].exists ? app.tabBars.buttons[label] : app.buttons[label]
         XCTAssertTrue(button.waitForExistence(timeout: 10), "Missing tab: \(label)")

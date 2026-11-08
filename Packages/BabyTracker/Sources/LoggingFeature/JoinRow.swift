@@ -156,6 +156,7 @@ public final class JoinRowModel {
 public struct JoinRow: View {
     private let model: JoinRowModel
     @Environment(\.errorReporter) private var errorReporter
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     public init(model: JoinRowModel) {
         self.model = model
@@ -164,19 +165,20 @@ public struct JoinRow: View {
     public var body: some View {
         if model.previous != nil {
             Button(action: join) {
-                HStack(spacing: 10) {
+                // At the accessibility sizes the gap goes under the label: beside it, both wrapped by the word.
+                ListRow(model.label, subtitle: typeSize.isAccessibilitySize ? model.gapText : nil,
+                        accessory: .none, leading: {
                     Image(systemName: "link")
                         .foregroundStyle(model.kind == .feed ? Palette.feed : Palette.sleep)
                         .accessibilityHidden(true)
-                    Text(model.label)
-                        .foregroundStyle(Palette.primaryText)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                    Text(model.gapText)
-                        .font(.subheadline)
-                        .foregroundStyle(Palette.secondaryText)
-                }
+                }, trailing: {
+                    if !typeSize.isAccessibilitySize {
+                        Text(model.gapText)
+                            .font(.subheadline)
+                            .foregroundStyle(Palette.secondaryText)
+                    }
+                })
                 .frame(minHeight: 44)
-                .contentShape(.rect)
             }
             .buttonStyle(.plain)
             .accessibilityElement(children: .combine)

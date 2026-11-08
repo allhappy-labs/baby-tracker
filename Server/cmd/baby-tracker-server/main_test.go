@@ -456,6 +456,71 @@ func TestReadinessCompositionRequiresEveryPool(t *testing.T) {
 	}
 }
 
+// The composed controller waits BT_ADMISSION_WAIT for a slot, and with the
+// default 0 not at all.
+func TestApplicationOptionsComposeTheAdmissionWait(t *testing.T) {
+	for _, wait := range []time.Duration{0, 30 * time.Millisecond} {
+		cfg := testApplicationConfig(config.ModeSelfHosted)
+		cfg.Admission.Wait = wait
+		pool := &pgxpool.Pool{}
+		authorityService, familyService, readiness := testComposition(t, cfg, pool)
+		options, err := applicationOptions(cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), readiness, authorityService, familyService, pool, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var held []func()
+		for {
+			release, ok := options.Admission.TryAcquire(admission.Sync)
+			if !ok {
+				break
+			}
+			held = append(held, release)
+		}
+		ticket, err := options.Admission.Acquire(t.Context(), admission.Sync)
+		if !errors.Is(err, admission.ErrBusy) || ticket.Queued != (wait > 0) || (wait > 0 && ticket.Waited < wait) {
+			t.Fatalf("wait %v: ticket %+v err %v", wait, ticket, err)
+		}
+		for _, release := range held {
+			release()
+		}
+	}
+}
+
+// The composed controller's auth lane is BT_ADMISSION_AUTH_MAX, and a
+// direct composition that sets none has the default lane.
+func TestApplicationOptionsComposeTheAuthLane(t *testing.T) {
+	for _, tt := range []struct{ configured, want int }{{0, admission.DefaultAuth}, {3, 3}} {
+		cfg := testApplicationConfig(config.ModeSelfHosted)
+		cfg.Admission.AuthMax = tt.configured
+		pool := &pgxpool.Pool{}
+		authorityService, familyService, readiness := testComposition(t, cfg, pool)
+		options, err := applicationOptions(cfg, slog.New(slog.NewJSONHandler(io.Discard, nil)), readiness, authorityService, familyService, pool, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var held []func()
+		for {
+			release, ok := options.Admission.TryAcquire(admission.Auth)
+			if !ok {
+				break
+			}
+			held = append(held, release)
+		}
+		if len(held) != tt.want {
+			t.Fatalf("configured %d: a lane of %d", tt.configured, len(held))
+		}
+		// A full lane leaves the total's slots.
+		release, ok := options.Admission.TryAcquire(admission.Sync)
+		if !ok {
+			t.Fatal("a full auth lane refused sync")
+		}
+		release()
+		for _, release := range held {
+			release()
+		}
+	}
+}
+
 func TestApplicationOptionsAdvertiseAuthorizationModeAndDependencies(t *testing.T) {
 	cfg := testApplicationConfig(config.ModeSelfHosted)
 	pool := &pgxpool.Pool{}
@@ -467,7 +532,8 @@ func TestApplicationOptionsAdvertiseAuthorizationModeAndDependencies(t *testing.
 	if options.AppleAuthorizationMode != "identity_token_only" || options.ChallengeService == nil || options.Limiter == nil || options.ClientIPResolver == nil ||
 		options.SessionService == nil || options.RecoveryService == nil || options.AppleNotifications != nil || options.FamilyService != familyService ||
 		options.Readiness != readiness || options.Gate != readiness || options.ServerState != readiness || options.RecoveryReadiness != (nodeReadinessCovered{}) ||
-		options.RequestAuthorizer != authorityService || options.AccountService == nil || options.LiveHub == nil {
+		options.RequestAuthorizer != authorityService || options.AccountService == nil || options.LiveHub == nil ||
+		options.BearerAuthenticator != authorityService || options.KnownRefreshes == nil {
 		t.Fatalf("options=%+v", options)
 	}
 	if options.Admission == nil {
@@ -511,6 +577,21 @@ func TestApplicationOptionsAdvertiseAuthorizationModeAndDependencies(t *testing.
 	}
 	if _, err := applicationOptions(cfg, nil, nil, authorityService, familyService, pool, nil, nil); err == nil {
 		t.Fatal("composition accepted a missing readiness gate")
+	}
+}
+
+// BT_BODY_READ_TIMEOUT reaches the unauthenticated body gate.
+func TestApplicationOptionsCarryTheBodyReadTimeout(t *testing.T) {
+	cfg := testApplicationConfig(config.ModeSelfHosted)
+	cfg.Sync.BodyReadTimeout = 12 * time.Second
+	pool := &pgxpool.Pool{}
+	authorityService, familyService, readiness := testComposition(t, cfg, pool)
+	options, err := applicationOptions(cfg, nil, readiness, authorityService, familyService, pool, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.BodyReadTimeout != 12*time.Second {
+		t.Fatalf("body read timeout %v", options.BodyReadTimeout)
 	}
 }
 

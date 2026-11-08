@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -184,5 +185,123 @@ func TestLagScanSkipsInactiveFamilies(t *testing.T) {
 	tracker.Changed(h.FamilyID, h.FamilySequence(t))
 	if stats := tick(t, w); stats.Woken != 0 || sender.callCount() != 0 {
 		t.Fatalf("a deletion-pending family's device was woken: %+v %+v", stats, sender.calls)
+	}
+}
+
+// Progress the tracker recorded after the last tick is flushed when Run
+// stops, before it returns (C42): a graceful restart loses none. The stop
+// logs one line with the devices it wrote.
+func TestRunFlushesTrackerProgressOnStop(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	tracker := wake.NewTracker(0)
+	logs := &logRecorder{}
+	w := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: &recordingSender{}, Now: func() time.Time { return h.Now },
+		Logger: slog.New(logs), Interval: time.Hour}
+	seq := uint64(h.FamilySequence(t))
+	tracker.Synced(h.FamilyID, device(1), seq, seq, h.Now)
+	tick(t, w) // the last tick: device 1's row
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx, nil) }()
+	for n := 2; n <= 4; n++ {
+		tracker.Synced(h.FamilyID, device(n), seq, seq, h.Now)
+	}
+	if rows := cursorRows(t, h); len(rows) != 1 {
+		t.Fatalf("rows before the stop %+v, want only the last tick's", rows)
+	}
+	cancel()
+	<-done
+	rows := cursorRows(t, h)
+	for n := 2; n <= 4; n++ {
+		if row, ok := rows[h.FamilyID+"/"+device(n)]; !ok || row.Acked != int64(seq) || row.Delivered != int64(seq) {
+			t.Fatalf("device %d after the stop: %+v (%v), want its progress written before Run returned", n, row, ok)
+		}
+	}
+	if tracker.Len() != 0 {
+		t.Fatalf("the tracker still holds %d entries after the stop flush", tracker.Len())
+	}
+	if lines := logs.with("wake progress flushed at stop"); len(lines) != 1 || lines[0].attrs["devices"] != "3" {
+		t.Fatalf("stop logs %+v, want one line naming 3 devices", lines)
+	}
+}
+
+// The server's final flush (X-1): progress the draining requests record
+// after Run's own stop flush is written by FlushTracker once Run returned,
+// as main's deferred stop does after the HTTP drain. Nothing to write
+// writes and logs nothing; a nil worker is a no-op.
+func TestFlushTrackerWritesProgressRecordedAfterRunStopped(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	tracker := wake.NewTracker(0)
+	logs := &logRecorder{}
+	w := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: &recordingSender{}, Now: func() time.Time { return h.Now },
+		Logger: slog.New(logs), Interval: time.Hour}
+	seq := uint64(h.FamilySequence(t))
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx, nil) }()
+	tracker.Synced(h.FamilyID, device(1), seq, seq, h.Now)
+	cancel()
+	<-done
+	if rows := cursorRows(t, h); len(rows) != 1 {
+		t.Fatalf("rows after Run's stop %+v, want device 1's", rows)
+	}
+	// The drain: requests still record progress after the worker stopped.
+	tracker.Synced(h.FamilyID, device(2), seq, seq, h.Now)
+	tracker.Synced(h.FamilyID, device(3), seq, seq, h.Now)
+	if rows := cursorRows(t, h); len(rows) != 1 {
+		t.Fatalf("rows before the final flush %+v", rows)
+	}
+	w.FlushTracker(context.Background())
+	rows := cursorRows(t, h)
+	for n := 1; n <= 3; n++ {
+		if row, ok := rows[h.FamilyID+"/"+device(n)]; !ok || row.Acked != int64(seq) {
+			t.Fatalf("device %d after the final flush: %+v (%v)", n, row, ok)
+		}
+	}
+	lines := logs.with("wake progress flushed at stop")
+	if len(lines) != 2 || lines[0].attrs["devices"] != "1" || lines[1].attrs["devices"] != "2" {
+		t.Fatalf("flush logs %+v, want Run's (1 device) and the final one (2)", lines)
+	}
+	w.FlushTracker(context.Background())
+	if got := len(logs.with("wake progress flushed at stop")); got != 2 {
+		t.Fatalf("an empty flush logged (%d lines)", got)
+	}
+	var none *wake.Worker
+	none.FlushTracker(context.Background())
+}
+
+// Run's stop applies the kept settles first and flushes the tracker after
+// (the plan's order): on the wire the settle's release precedes the flush.
+func TestRunAppliesKeptSettlesBeforeItsStopFlush(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	pool, wire := testkit.CountedPool(t, h.Maintenance)
+	tracker := wake.NewTracker(0)
+	w := &wake.Worker{Pool: pool, Tracker: tracker, Sender: &recordingSender{}, Now: func() time.Time { return h.Now }, Interval: time.Hour}
+	seq := uint64(h.FamilySequence(t))
+	w.KeepReleaseForTest(h.FamilyID, []string{device(9)}, seq, h.Now)
+	tracker.Synced(h.FamilyID, device(1), seq, seq, h.Now)
+	wire.Reset()
+	ctx, cancel := context.WithCancel(t.Context())
+	done := make(chan struct{})
+	go func() { defer close(done); w.Run(ctx, nil) }()
+	cancel()
+	<-done
+	release, flush := -1, -1
+	for i, statement := range wire.Statements() {
+		switch {
+		case release < 0 && strings.Contains(statement, "SET pushed_sequence = v.ps, pushed_at = v.pa"):
+			release = i
+		case flush < 0 && strings.Contains(statement, "INSERT INTO device_sync_cursors"):
+			flush = i
+		}
+	}
+	if release < 0 || flush < 0 || release > flush {
+		t.Fatalf("release at %d, flush at %d in %q: want the kept settle applied before the stop flush", release, flush, wire.Statements())
+	}
+	if totals := w.Totals(); totals.SettlesPending != 0 {
+		t.Fatalf("totals %+v, want the settle applied", totals)
 	}
 }

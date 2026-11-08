@@ -19,7 +19,7 @@ import (
 type recoveryServiceStub struct {
 	resolve func(context.Context, auth.RecoverableRefreshInput) (auth.RefreshSubject, error)
 	refresh func(context.Context, auth.RecoverableRefreshInput) (auth.RecoveredSessionBundle, error)
-	ack     func(context.Context, access.Principal, string, identity.DeviceContinuityClaim) error
+	ack     func(context.Context, string, string, identity.DeviceContinuityClaim) error
 }
 
 func (s recoveryServiceStub) ResolveRecoverableRefreshSubject(ctx context.Context, i auth.RecoverableRefreshInput) (auth.RefreshSubject, error) {
@@ -28,8 +28,8 @@ func (s recoveryServiceStub) ResolveRecoverableRefreshSubject(ctx context.Contex
 func (s recoveryServiceStub) RefreshRecoverable(ctx context.Context, i auth.RecoverableRefreshInput) (auth.RecoveredSessionBundle, error) {
 	return s.refresh(ctx, i)
 }
-func (s recoveryServiceStub) AcknowledgeRefresh(ctx context.Context, p access.Principal, a string, c identity.DeviceContinuityClaim) error {
-	return s.ack(ctx, p, a, c)
+func (s recoveryServiceStub) AcknowledgeRefreshToken(ctx context.Context, token, a string, c identity.DeviceContinuityClaim) error {
+	return s.ack(ctx, token, a, c)
 }
 
 const recoveryBody = `{"protocol_version":"v1","capabilities":["identity-v1","refresh-recovery-v1"],"refresh_token":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB","refresh_attempt_id":"11111111-1111-4111-8111-111111111111","device_continuity":{"device_id":"22222222-2222-4222-8222-222222222222","credential":"CCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCCC"}}`
@@ -307,21 +307,22 @@ func TestRecoveryMaintenanceReadinessDoesNotBlockLegacyRefresh(t *testing.T) {
 	}
 }
 
+// The acknowledgement authenticates its bearer itself (in its one
+// transaction): the handler hands it the raw token and never calls the
+// session service's Authenticate.
 func TestRecoveryAckHTTP(t *testing.T) {
 	acknowledged := 0
-	service := sessionServiceStub{authenticate: func(_ context.Context, token string) (access.Principal, error) {
-		if token != "active" {
-			t.Fatalf("token=%q", token)
-		}
-		return access.Principal{AccountID: "account", DeviceID: "device"}, nil
+	service := sessionServiceStub{authenticate: func(context.Context, string) (access.Principal, error) {
+		t.Fatal("the handler authenticated the bearer outside the acknowledgement")
+		return access.Principal{}, nil
 	}}
 	options := sessionHandlerOptions(t, service, "identity_token_only")
 	options.RecoveryEnabled = true
 	options.RecoveryReadiness = accountGateFunc(func(context.Context) error { return nil })
-	options.RecoveryService = recoveryServiceStub{ack: func(_ context.Context, p access.Principal, attempt string, claim identity.DeviceContinuityClaim) error {
+	options.RecoveryService = recoveryServiceStub{ack: func(_ context.Context, token, attempt string, claim identity.DeviceContinuityClaim) error {
 		acknowledged++
-		if p.AccountID != "account" || attempt != "11111111-1111-4111-8111-111111111111" || claim.DeviceID != "22222222-2222-4222-8222-222222222222" {
-			t.Fatalf("ack=%+v %s %+v", p, attempt, claim)
+		if token != "active" || attempt != "11111111-1111-4111-8111-111111111111" || claim.DeviceID != "22222222-2222-4222-8222-222222222222" {
+			t.Fatalf("ack=%q %s %+v", token, attempt, claim)
 		}
 		return nil
 	}}
@@ -342,35 +343,83 @@ func TestRecoveryAckHTTP(t *testing.T) {
 	}
 }
 
-func TestRecoveryAckRejectsInvalidAndExpiredBearerBeforeProof(t *testing.T) {
+// The service's refusals reach the client as they are.
+func TestRecoveryAckHTTPReportsServiceRefusals(t *testing.T) {
 	for _, test := range []struct {
-		name      string
-		authError error
-		status    int
-		code      string
+		err    error
+		status int
+		code   string
 	}{
-		{"revoked", auth.ErrSessionRevoked, 401, "session_revoked"},
-		{"expired", auth.ErrAccessExpired, 401, "access_expired"},
+		{auth.ErrSessionRevoked, 401, "session_revoked"},
+		{auth.ErrAccessExpired, 401, "access_expired"},
+		{auth.ErrDeviceContinuityInvalid, 400, "device_continuity_invalid"},
 	} {
-		t.Run(test.name, func(t *testing.T) {
-			proofCalls := 0
-			service := sessionServiceStub{authenticate: func(context.Context, string) (access.Principal, error) { return access.Principal{}, test.authError }}
-			options := sessionHandlerOptions(t, service, "identity_token_only")
-			options.RecoveryEnabled = true
-			options.RecoveryReadiness = accountGateFunc(func(context.Context) error { return nil })
-			options.RecoveryService = recoveryServiceStub{ack: func(context.Context, access.Principal, string, identity.DeviceContinuityClaim) error {
-				proofCalls++
-				return nil
-			}}
-			body := strings.Replace(recoveryBody, `"refresh_token":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",`, "", 1)
-			r := httptest.NewRecorder()
-			request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh-ack", strings.NewReader(body))
-			request.Header.Set("Authorization", "Bearer authority")
-			New(options).ServeHTTP(r, request)
-			if r.Code != test.status || !strings.Contains(r.Body.String(), `"code":"`+test.code+`"`) || proofCalls != 0 {
-				t.Fatalf("status=%d calls=%d body=%s", r.Code, proofCalls, r.Body.String())
-			}
-		})
+		options := sessionHandlerOptions(t, sessionServiceStub{}, "identity_token_only")
+		options.RecoveryEnabled = true
+		options.RecoveryReadiness = accountGateFunc(func(context.Context) error { return nil })
+		options.RecoveryService = recoveryServiceStub{ack: func(context.Context, string, string, identity.DeviceContinuityClaim) error { return test.err }}
+		body := strings.Replace(recoveryBody, `"refresh_token":"BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB",`, "", 1)
+		r := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh-ack", strings.NewReader(body))
+		request.Header.Set("Authorization", "Bearer authority")
+		New(options).ServeHTTP(r, request)
+		if r.Code != test.status || !strings.Contains(r.Body.String(), `"code":"`+test.code+`"`) {
+			t.Fatalf("%s: status=%d body=%s", test.code, r.Code, r.Body.String())
+		}
+	}
+}
+
+// An unknown or expired bearer is refused with Authenticate's code before
+// the device proof is looked at: a wrong proof under such a bearer is never
+// device_continuity_invalid, and the receipt survives every refusal.
+func TestRecoveryAckRejectsInvalidAndExpiredBearerBeforeProof(t *testing.T) {
+	h := testkit.New(t)
+	const attempt = "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee"
+	input := auth.RecoverableRefreshInput{RefreshToken: h.RefreshToken("owner"), AttemptID: attempt,
+		DeviceContinuity: identity.DeviceContinuityClaim{DeviceID: h.Owner.DeviceID, Credential: h.DeviceCredential("owner")}}
+	child, err := h.Auth.RefreshRecoverable(t.Context(), input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	options := sessionHandlerOptions(t, h.Auth, "identity_token_only")
+	options.RecoveryEnabled = true
+	options.RecoveryReadiness = accountGateFunc(func(context.Context) error { return nil })
+	options.RecoveryService = h.Auth
+	ack := func(token, credential string) *httptest.ResponseRecorder {
+		body, err := json.Marshal(map[string]any{"protocol_version": "v1", "capabilities": []string{"identity-v1", "refresh-recovery-v1"}, "refresh_attempt_id": attempt,
+			"device_continuity": map[string]string{"device_id": h.Owner.DeviceID, "credential": credential}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRecorder()
+		request := httptest.NewRequest(http.MethodPost, "/v1/auth/refresh-ack", strings.NewReader(string(body)))
+		request.Header.Set("Authorization", "Bearer "+token)
+		New(options).ServeHTTP(r, request)
+		return r
+	}
+	wrong := strings.Repeat("D", 43)
+	if r := ack(strings.Repeat("A", 43), wrong); r.Code != 401 || !strings.Contains(r.Body.String(), `"code":"session_revoked"`) {
+		t.Fatalf("unknown bearer: status=%d body=%s", r.Code, r.Body.String())
+	}
+	now := h.Now
+	h.Now = child.ExpiresAt.Add(time.Second)
+	if r := ack(child.AccessToken, wrong); r.Code != 401 || !strings.Contains(r.Body.String(), `"code":"access_expired"`) {
+		t.Fatalf("expired bearer: status=%d body=%s", r.Code, r.Body.String())
+	}
+	h.Now = now
+	if r := ack(child.AccessToken, wrong); r.Code != 400 || !strings.Contains(r.Body.String(), `"code":"device_continuity_invalid"`) {
+		t.Fatalf("wrong proof: status=%d body=%s", r.Code, r.Body.String())
+	}
+	// The receipt was still there: the exact retry recovers the child, and
+	// once acknowledged it no longer can.
+	if again, err := h.Auth.RefreshRecoverable(t.Context(), input); err != nil || again.AccessToken != child.AccessToken {
+		t.Fatalf("retry after the refusals: %v", err)
+	}
+	if r := ack(child.AccessToken, input.DeviceContinuity.Credential); r.Code != 204 {
+		t.Fatalf("ack: status=%d body=%s", r.Code, r.Body.String())
+	}
+	if _, err := h.Auth.RefreshRecoverable(t.Context(), input); auth.Code(err) != "refresh_receipt_unavailable" {
+		t.Fatalf("retry after the ack: %v", err)
 	}
 }
 

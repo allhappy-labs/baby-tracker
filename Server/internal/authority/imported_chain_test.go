@@ -28,6 +28,9 @@ func TestTheHomelabsImportedChainsVerify(t *testing.T) {
 	v, sink := newChainVerifier(f)
 	owner := newMember(t, f)
 	family := f.Family(t, owner.account)
+	// The importer wrote the owner's whole chain: drop the sign-in row the
+	// fixture gave the account with its session.
+	f.Exec(t, `DELETE FROM security_audit_events WHERE scope='account' AND scope_id=$1`, owner.account)
 
 	type head struct {
 		seq  uint64

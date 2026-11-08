@@ -115,7 +115,8 @@ public final class SolidsEditModel {
         if let ended = feed.endedAt { feed.endedAt = ended.addingTimeInterval(shift) }
         feed.note = EditModel.trimmedToNil(note)
         do {
-            try store.update(feed)
+            // A moved time can make these solids a feed's first part.
+            try store.updateFeedPart(feed, for: babyID)
         } catch {
             (feed.components, feed.startedAt, feed.endedAt, feed.note, feed.lastModifiedAt) = before
             throw error
@@ -168,11 +169,14 @@ public final class SolidsEditModel {
 }
 
 /// New mode's state and its one write: the foods, amount, time and note a
-/// solids entry is logged with.
+/// solids entry is logged with — on their own, or as a part of a feed from
+/// its session sheet's Add part.
 @MainActor @Observable
-public final class SolidsLogModel {
+public final class SolidsLogModel: Identifiable {
     private let store: BabyStore
     private let babyID: UUID
+    /// The feed session Add part adds to; nil for solids on their own.
+    private let session: UUID?
 
     public var foodsText = ""
     public var amount: SolidsAmount = .some
@@ -181,21 +185,29 @@ public final class SolidsLogModel {
     /// yesterday included — is open and the future is not.
     public var when: Date
 
-    public init(store: BabyStore, babyID: UUID) {
+    public init(store: BabyStore, babyID: UUID, session: UUID? = nil, at when: Date? = nil) {
         self.store = store
         self.babyID = babyID
-        when = store.now
+        self.session = session
+        self.when = when ?? store.now
     }
 
     public var latestAllowedDate: Date { store.now }
 
     public var canSave: Bool { SolidsSheetCopy.canSave(foodsText: foodsText) && when <= latestAllowedDate }
 
-    /// One `.create`, note included.
+    /// One `.create`, note included; linked to the feed session when added
+    /// to one.
     public func log() throws {
         guard canSave else { throw EditModeError.invalid }
-        _ = try store.logSolids(foods: SolidsSheetCopy.foods(from: foodsText), amount: amount, for: babyID,
-                                at: when, note: EditModel.trimmedToNil(note))
+        let foods = SolidsSheetCopy.foods(from: foodsText)
+        guard let session else {
+            _ = try store.logSolids(foods: foods, amount: amount, for: babyID, at: when,
+                                    note: EditModel.trimmedToNil(note))
+            return
+        }
+        try store.addFeedPart(.solids(foods: foods, amount: amount, at: when, note: EditModel.trimmedToNil(note)),
+                              toSession: session, for: babyID)
     }
 }
 
@@ -207,6 +219,8 @@ public struct SolidsSheet: View {
     let store: BabyStore
     let babyID: UUID
     let onDone: () -> Void
+    /// From Past entry: Back returns to its list.
+    private let onBack: (() -> Void)?
 
     @State private var logModel: SolidsLogModel
     /// Present in edit mode only.
@@ -217,12 +231,14 @@ public struct SolidsSheet: View {
     @State private var isFinished = false
     @Environment(\.errorReporter) private var errorReporter
 
-    public init(store: BabyStore, babyID: UUID, editing feedID: UUID? = nil, onDone: @escaping () -> Void) {
+    public init(store: BabyStore, babyID: UUID, editing feedID: UUID? = nil, adding logModel: SolidsLogModel? = nil,
+                onBack: (() -> Void)? = nil, onDone: @escaping () -> Void) {
         self.store = store
         self.babyID = babyID
         self.onDone = onDone
+        self.onBack = onBack
         let editModel = feedID.map { SolidsEditModel(store: store, babyID: babyID, feedID: $0) }
-        _logModel = State(wrappedValue: SolidsLogModel(store: store, babyID: babyID))
+        _logModel = State(wrappedValue: logModel ?? SolidsLogModel(store: store, babyID: babyID))
         _editModel = State(wrappedValue: editModel)
         _isShowingDetails = State(wrappedValue: !(editModel?.note.isEmpty ?? true))
     }
@@ -231,9 +247,10 @@ public struct SolidsSheet: View {
 
     public var body: some View {
         EntryPanel(title: SolidsSheetCopy.title, icon: .solids, tint: Palette.solids, canSave: canSave,
-                       identifierPrefix: "solids", onCancel: onDone,
+                       identifierPrefix: "solids", onCancel: onBack ?? onDone,
+                       cancelTitle: onBack == nil ? EditChromeCopy.cancel : EditChromeCopy.back,
                        onSave: save, onDelete: deleteAction) {
-                PanelSection {
+                CardSection {
                     TextField(SolidsSheetCopy.foodsLabel, text: foodsText, prompt: Text(SolidsSheetCopy.foodsPrompt))
                         .accessibilityLabel(SolidsSheetCopy.foodsLabel)
                         .accessibilityIdentifier("solids.foods")
@@ -245,16 +262,15 @@ public struct SolidsSheet: View {
                     )
                 }
 
-                PanelSection {
-                    Picker(SolidsSheetCopy.amountLabel, selection: amount) {
-                        ForEach(SolidsAmount.allCases, id: \.self) { candidate in
-                            Text(candidate.displayName).tag(candidate)
-                        }
+                // No card behind a segmented control: it is a container already.
+                Picker(SolidsSheetCopy.amountLabel, selection: amount) {
+                    ForEach(SolidsAmount.allCases, id: \.self) { candidate in
+                        Text(candidate.displayName).tag(candidate)
                     }
-                    .pickerStyle(.segmented)
                 }
+                .pickerStyle(.segmented)
 
-                PanelSection {
+                CardSection {
                     EditTimeRow(SolidsSheetCopy.dateTimeLabel, date: when,
                                 latest: editModel?.latestAllowedDate ?? logModel.latestAllowedDate,
                                 identifier: "solids.time")

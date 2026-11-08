@@ -18,50 +18,57 @@ public struct BabySwitcherSheet: View {
     }
 
     public var body: some View {
-        NavigationStack {
-            List {
+        SheetScaffold(
+            L10n.tr("Babies"),
+            closeTitle: L10n.tr("Done"),
+            onClose: onDone
+        ) {
+            CardSection {
                 ForEach(babies, id: \.id) { baby in
                     Button {
                         selection.select(baby.id)
                         onDone()
                     } label: {
-                        HStack {
+                        HStack(spacing: Spacing.m) {
                             BabyAvatarView(BabyAvatar(iconID: baby.iconID), size: 28)
                             Text(baby.name)
-                            Spacer()
+                                .foregroundStyle(Palette.primaryText)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Spacer(minLength: Spacing.s)
                             if baby.id == selection.selectedID {
                                 Image(systemName: "checkmark")
                                     .foregroundStyle(Palette.feed)
+                                    .accessibilityHidden(true)
                             }
                         }
-                        .frame(minHeight: 44)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                     }
+                    .buttonStyle(.plain)
+                    .accessibilityAddTraits(baby.id == selection.selectedID ? .isSelected : [])
                 }
 
-                Button(L10n.tr("Add baby")) { isAdding = true }
-                    .frame(minHeight: 44)
-            }
-            .navigationTitle(L10n.tr("Babies"))
-            #if os(iOS)
-            // Inline title display mode is a UIKit navigation-bar concept.
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(L10n.tr("Done"), action: onDone)
+                Button { isAdding = true } label: {
+                    Text(L10n.tr("Add baby"))
+                        .foregroundStyle(Palette.feed)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        .contentShape(Rectangle())
                 }
+                .buttonStyle(.plain)
             }
-            .sheet(isPresented: $isAdding) {
-                AddBabySheet(
-                    store: store,
-                    onAdded: { baby in
-                        selection.select(baby.id)
-                        isAdding = false
-                        onDone()
-                    },
-                    onCancel: { isAdding = false }
-                )
-            }
+        }
+        .tint(Palette.feed)
+        .sheet(isPresented: $isAdding) {
+            AddBabySheet(
+                store: store,
+                onAdded: { baby in
+                    selection.select(baby.id)
+                    isAdding = false
+                    onDone()
+                },
+                onCancel: { isAdding = false }
+            )
         }
         .task { babies = (try? store.babies()) ?? [] }
     }

@@ -20,37 +20,38 @@ struct InvitationCodeRows<Model: FamilySyncSettingsModel>: View {
     @State private var joinProblem: String?
 
     var body: some View {
-        TextField(FamilyCopy.invitationCodeField, text: $invitationCode, axis: .vertical)
-            #if os(iOS)
-            .textInputAutocapitalization(.never)
-            #endif
-            .autocorrectionDisabled()
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("family.codeField")
-            // A stale refusal next to a code the user has since changed
-            // reads as if the new code was already tried and rejected.
-            .onChange(of: invitationCode) { _, _ in joinProblem = nil }
+        CardListSection(FamilyCopy.orPasteCode) {
+            TextField(FamilyCopy.invitationCodeField, text: $invitationCode, axis: .vertical)
+                #if os(iOS)
+                .textInputAutocapitalization(.never)
+                #endif
+                .autocorrectionDisabled()
+                .frame(minHeight: 44)
+                .accessibilityIdentifier("family.codeField")
+                // A stale refusal next to a code the user has since changed
+                // reads as if the new code was already tried and rejected.
+                .onChange(of: invitationCode) { _, _ in joinProblem = nil }
 
-        Button(FamilyCopy.pasteCode) {
-            #if canImport(UIKit)
-            if let pasted = UIPasteboard.general.string { invitationCode = pasted }
-            #endif
+            ActionRow(FamilyCopy.pasteCode, identifier: "family.pasteCode") {
+                #if canImport(UIKit)
+                if let pasted = UIPasteboard.general.string { invitationCode = pasted }
+                #endif
+            }
         }
-        .frame(minHeight: 44)
-        .accessibilityIdentifier("family.pasteCode")
 
-        Button(FamilyCopy.joinFamily) { join() }
-            .frame(minHeight: 44)
-            .disabled(
-                invitationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
-                    || !model.displayNameConfirmed
-            )
-            .accessibilityIdentifier("family.join")
+        CardListButtonSection {
+            Button(FamilyCopy.joinFamily) { join() }
+                .buttonStyle(.primary)
+                .disabled(
+                    invitationCode.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                        || !model.displayNameConfirmed
+                )
+                .accessibilityIdentifier("family.join")
 
-        if let joinProblem {
-            Text(joinProblem)
-                .foregroundStyle(Palette.destructive)
-                .accessibilityIdentifier("family.joinProblem")
+            if let joinProblem {
+                InlineError(joinProblem)
+                    .accessibilityIdentifier("family.joinProblem")
+            }
         }
     }
 

@@ -149,7 +149,7 @@ func TestServeRefusesBeforeAnyStatement(t *testing.T) {
 }
 
 // The principal methods serve the principal's session family without
-// reading the family first: a pull is the one transaction's 3 round trips,
+// reading the family first: a pull is the one transaction's 2 round trips,
 // and a principal that is not a refreshed family session is refused in Go,
 // before any statement. The guard's grant decides the rest: a session
 // family that is not the session row's is refused.
@@ -166,8 +166,8 @@ func TestPrincipalMethodsServeTheSessionFamilyWithoutReadingIt(t *testing.T) {
 	if response, err := service.ApplyAndPull(t.Context(), h.Owner, pull); err != nil || len(testkit.Decoded(t, response).Changes) != 1 {
 		t.Fatalf("pull: %+v %v", response, err)
 	}
-	if trips := wire.Trips(); trips != 3 {
-		t.Fatalf("a principal pull made %d round trips, want 3: %q", trips, wire.Statements())
+	if trips := wire.Trips(); trips != 2 {
+		t.Fatalf("a principal pull made %d round trips, want 2: %q", trips, wire.Statements())
 	}
 	if _, err := service.FullSnapshot(t.Context(), h.Owner, protocol.SnapshotRequest{}); err != nil {
 		t.Fatal(err)

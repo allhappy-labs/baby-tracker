@@ -60,6 +60,7 @@ func collectArchive(ctx context.Context, tx pgx.Tx, grant access.Grant, identity
 		FamilyID: grant.FamilyID, CapturedAt: now.UTC().Truncate(time.Microsecond).Format("2006-01-02T15:04:05.000000Z"),
 		SecurityRevision: grant.Revision, Members: []ArchiveMember{}, Babies: []protocol.CanonicalEntity{}, Feeds: []protocol.CanonicalEntity{},
 		Sleeps: []protocol.CanonicalEntity{}, Diapers: []protocol.CanonicalEntity{}, Supplements: []protocol.CanonicalEntity{}, GrowthProfiles: []protocol.CanonicalEntity{}, Measurements: []protocol.CanonicalEntity{},
+		Immunizations: []protocol.CanonicalEntity{}, Pumps: []protocol.CanonicalEntity{},
 		ActiveTimers: []protocol.CanonicalEntity{}, Journal: []protocol.JournalChange{}, Audit: []ArchiveAudit{},
 		Attachments: AttachmentManifest{Version: "v1", Attachments: []protocol.AttachmentMetadata{}}}
 	var high uint64
@@ -109,12 +110,16 @@ func collectArchive(ctx context.Context, tx pgx.Tx, grant access.Grant, identity
 			a.GrowthProfiles = append(a.GrowthProfiles, e)
 		case "measurement":
 			a.Measurements = append(a.Measurements, e)
+		case "immunization":
+			a.Immunizations = append(a.Immunizations, e)
+		case "pump":
+			a.Pumps = append(a.Pumps, e)
 		case "timer":
 			a.ActiveTimers = append(a.ActiveTimers, e)
 		default:
 			return fmt.Errorf("unknown export entity kind %q", e.EntityKind)
 		}
-		if len(a.Babies)+len(a.Feeds)+len(a.Sleeps)+len(a.Diapers)+len(a.Supplements)+len(a.GrowthProfiles)+len(a.Measurements)+len(a.ActiveTimers) > 250000 {
+		if len(a.Babies)+len(a.Feeds)+len(a.Sleeps)+len(a.Diapers)+len(a.Supplements)+len(a.GrowthProfiles)+len(a.Measurements)+len(a.Immunizations)+len(a.Pumps)+len(a.ActiveTimers) > 250000 {
 			return ErrTooLarge
 		}
 		return nil

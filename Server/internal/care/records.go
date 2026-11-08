@@ -80,7 +80,7 @@ func (ws *workingSet) applyRecord(m protocol.Mutation) (outcome protocol.Outcome
 		meta.CreatorAccountID = entity.Meta.CreatorAccountID
 	}
 
-	if m.EntityKind != "baby" {
+	if m.EntityKind != "baby" && m.EntityKind != "pump" {
 		babyID := mutationBabyID(m)
 		if existing != nil {
 			existingBabyID := mutationBabyIDFromEntity(*existing)
@@ -107,7 +107,7 @@ func (ws *workingSet) applyRecord(m protocol.Mutation) (outcome protocol.Outcome
 			}
 			return rejection(m, "rejected", "baby_deleted", &entity), nil, nil
 		}
-	} else if m.Operation == "create" && ws.liveBabies >= cmd.Limits.MaxLiveBabies {
+	} else if m.EntityKind == "baby" && m.Operation == "create" && ws.liveBabies >= cmd.Limits.MaxLiveBabies {
 		return protocol.Outcome{}, ErrQuotaExceeded, nil
 	}
 	if existing != nil && existing.Meta.TombstonedAt != nil {
@@ -144,6 +144,47 @@ func (ws *workingSet) applyRecord(m protocol.Mutation) (outcome protocol.Outcome
 		case protocol.SupplementPayload:
 			if existing != nil && m.Operation == "update" && existing.Payload.(protocol.SupplementPayload).LoggedAt != p.LoggedAt {
 				return rejection(m, "rejected", "record_logged_at_mismatch", existing), nil, nil
+			}
+		case protocol.PumpPayload:
+			// A session another phone finished is changed only by a phone that
+			// has seen it finished. One that still shows it running (it has not
+			// synced) would otherwise replace the real end and wipe the amount
+			// the other parent entered: its late Stop is superseded and told
+			// the session as it stands. A phone's own next step after its own
+			// Stop (the amount, sent before the Stop was answered) names the
+			// version before the Stop too, and goes through.
+			if existing != nil && m.ObservedEntityVersion < existing.Meta.EntityVersion && current.DeviceID != cmd.DeviceID {
+				if old, ok := existing.Payload.(protocol.PumpPayload); ok && old.EndedAt != nil {
+					return rejection(m, "superseded", "pump_already_stopped", existing), nil, nil
+				}
+			}
+			// A minute of grace for a phone clock running ahead, as for a timer edit.
+			latest := cmd.AcceptedAt.Add(time.Minute)
+			started, _ := time.Parse(time.RFC3339Nano, p.StartedAt)
+			if started.After(latest) {
+				return rejection(m, "rejected", "invalid_timestamp", existing), nil, nil
+			}
+			if p.EndedAt != nil {
+				ended, _ := time.Parse(time.RFC3339Nano, *p.EndedAt)
+				if ended.After(latest) {
+					return rejection(m, "rejected", "invalid_timestamp", existing), nil, nil
+				}
+				break
+			}
+			// Still running. A finished session stays finished.
+			if existing != nil {
+				if old, ok := existing.Payload.(protocol.PumpPayload); ok && old.EndedAt != nil {
+					return rejection(m, "rejected", "pump_reopened", existing), nil, nil
+				}
+			}
+			// One running pump per family. The loser is superseded and told
+			// which session is running, the way a duplicate timer start is.
+			if running, found := ws.openPump(m.EntityID); found {
+				entity, err := running.Entity()
+				if err != nil {
+					return protocol.Outcome{}, nil, err
+				}
+				return rejection(m, "superseded", "pump_running", &entity), nil, nil
 			}
 		}
 	}
@@ -256,6 +297,8 @@ func mutationBabyID(m protocol.Mutation) string {
 		return p.BabyID
 	case protocol.SupplementPayload:
 		return p.BabyID
+	case protocol.ImmunizationPayload:
+		return p.BabyID
 	case protocol.DiaperPayload:
 		return p.BabyID
 	case protocol.DeletePayload:
@@ -301,6 +344,8 @@ func mutationBabyIDFromEntity(entity protocol.CanonicalEntity) string {
 	case protocol.MeasurementPayload:
 		return p.BabyID
 	case protocol.SupplementPayload:
+		return p.BabyID
+	case protocol.ImmunizationPayload:
 		return p.BabyID
 	case protocol.DiaperPayload:
 		return p.BabyID

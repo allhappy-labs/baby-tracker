@@ -18,6 +18,8 @@ import SwiftUI
     #expect(Tracker.supplement.title == "Meds")
     #expect(Tracker.solids.title == "Solids")
     #expect(Tracker.growth.title == "Growth")
+    #expect(Tracker.vaccine.title == "Vaccine")
+    #expect(Tracker.pump.title == "Pump")
 }
 
 // MARK: - Contrast

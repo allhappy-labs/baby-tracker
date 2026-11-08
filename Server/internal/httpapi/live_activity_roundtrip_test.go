@@ -70,6 +70,25 @@ func TestLiveActivityRegistrationRoundTrips(t *testing.T) {
 		t.Errorf("a held refusal: %d round trips, want 2: %q", got, s.wire.Statements())
 	}
 	s.assertRefusalRollsBack(t, "held 400")
+	// Phase 5 Task 19: a bearer the stack has not seen authenticate is
+	// checked before its body, one statement more than a known bearer's
+	// request; one the check refuses costs that statement alone, with no
+	// transaction.
+	firstSeen := deviceRegistration(t, h)
+	firstSeen.InstallationID = "72000000-0000-4000-8000-000000000999"
+	firstSeen.PushToStartToken = "c999"
+	s.wire.Reset()
+	if rec := s.send(t, "caregiver", http.MethodPut, "/v1/live-activities/device", firstSeen); rec.Code != http.StatusOK || s.wire.Trips() != 6 {
+		t.Errorf("a first-seen bearer's device registration: %d, %d round trips, want 200 and 6: %q", rec.Code, s.wire.Trips(), s.wire.Statements())
+	}
+	for _, route := range []string{"/v1/live-activities/device", "/v1/live-activities/activity"} {
+		s.wire.Reset()
+		rec := s.raw(http.MethodPut, route, []byte(`{}`), liveActivityRequestHeaders(fakeBearer(t)))
+		if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "session_revoked" || s.wire.Trips() != 1 {
+			t.Errorf("%s with a made-up bearer: %d %s, %d round trips, want 401 session_revoked and 1", route, rec.Code, rec.Body.String(), s.wire.Trips())
+		}
+		s.assertRefusedBeforeBody(t, route+" made-up bearer")
+	}
 	limited := newStackWith(t, h, stackConfig{liveActivity: true, options: func(o *Options) {
 		o.LiveActivityDevicePolicy = limits.Policy{Count: 1, Window: time.Hour}
 	}})

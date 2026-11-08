@@ -289,7 +289,7 @@ import os
 /// and support threads. `describe(entryKind:id:)` is the only sanctioned way to
 /// refer to an entry, and it deliberately accepts no value parameters.
 public enum AppLog {
-    public static let subsystem = "com.olhapi.babytracker"
+    public static let subsystem = "com.example.babytracker"
 
     public static let store = Logger(subsystem: subsystem, category: "store")
     public static let timers = Logger(subsystem: subsystem, category: "timers")
@@ -2018,7 +2018,7 @@ v1.1 is done when all of these hold:
 - `xcodebuild test -scheme BabyTracker -only-testing:BabyTrackerUITests` passes, including the four tap-count tests at 2 taps each
 - A failed save shows a banner and leaves the sheet open
 - The store failing to open shows a screen, not a crash, and does not touch the store file
-- `log stream --predicate 'subsystem == "com.olhapi.babytracker"'` shows mutations and rollbacks, and **no entry contents**
+- `log stream --predicate 'subsystem == "com.example.babytracker"'` shows mutations and rollbacks, and **no entry contents**
 - Logging a bottle on Home makes it visible on History and Insights without relaunching
 - The Feed button reads its next action and performs it in one tap
 - Solids and combo feeds can be created and render correctly in Home and History

@@ -3,7 +3,6 @@ package main
 import (
 	"math"
 	"sort"
-	"time"
 )
 
 // MatrixCell contains counts only. No server identifiers belong in artifacts.
@@ -29,17 +28,6 @@ func matrixCells() []MatrixCell {
 		}
 	}
 	return cells
-}
-
-type MatrixBudget struct{ Started time.Time }
-
-func (b MatrixBudget) CellDeadline(now time.Time) time.Time {
-	deadline := now.Add(120 * time.Second)
-	global := b.Started.Add(1200 * time.Second)
-	if global.Before(deadline) {
-		return global
-	}
-	return deadline
 }
 
 type Distribution struct {

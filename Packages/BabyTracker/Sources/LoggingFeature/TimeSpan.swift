@@ -43,6 +43,7 @@ public enum TimeSpanCopy {
     public static let start = LoggingL10n.text("Start")
     public static let end = LoggingL10n.text("End")
     public static let length = LoggingL10n.text("Length")
+    public static let running = LoggingL10n.text("Running")
     public static let addEnd = LoggingL10n.text("Add end time")
     public static let removeEnd = LoggingL10n.text("Remove end time")
     public static let endBeforeStart = LoggingL10n.text("End must be after start.")

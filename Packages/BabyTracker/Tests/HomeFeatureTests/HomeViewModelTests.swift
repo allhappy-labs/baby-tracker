@@ -10,7 +10,7 @@ import BabyCore
         let model = HomeViewModel(store: store, babyID: baby)
         #expect(model.snapshot == nil)
         #expect(model.screen.hero == .awake(since: nil))
-        #expect(model.screen.dock == .start(suggested: .left))
+        #expect(model.screen.dock == .start(suggested: .left, big: .breast, tiles: [.bottle, .sleep, .diaper]))
     }
 
     @Test func refreshPicksUpAWriteMadeWithoutTellingTheViewModel() async throws {
@@ -48,7 +48,7 @@ import BabyCore
 
         let timer = try #require(try store.activeTimer(kind: .feed, for: baby))
         #expect(model.screen.hero == .feedRunning(icon: .breastLeft, title: "Left breast", startedAt: timer.startedAt))
-        #expect(model.screen.dock == .feedRunning(timerID: timer.id, isBottle: false))
+        #expect(model.screen.dock == .feedRunning(timerID: timer.id, isBottle: false, tiles: [.diaper]))
     }
 
     @Test func tappingTheOtherSideWhileOneRunsStopsItAndJoinsTheSameFeed() async throws {
@@ -86,7 +86,7 @@ import BabyCore
         #expect(try store.lastFeed(for: baby)?.components.count == 1)
         guard case .feedBreak(_, let parts) = model.screen.hero else { Issue.record("expected break hero"); return }
         #expect(parts == [PartSummary(icon: .breastLeft, seconds: 542)])
-        #expect(model.screen.dock == .start(suggested: .right))
+        #expect(model.screen.dock == .start(suggested: .right, big: .breast, tiles: [.bottle, .sleep, .diaper]))
     }
 
     @Test func stoppingARunningBottleAsksForItsAmountAndLeavesItRunning() async throws {
@@ -105,7 +105,7 @@ import BabyCore
         try model.refresh()
         let timer = try #require(try store.activeTimer(kind: .sleep, for: baby))
         #expect(model.screen.hero == .sleepRunning(clockFrom: timer.startedAt, since: timer.startedAt))
-        #expect(model.screen.dock == .sleepRunning(timerID: timer.id))
+        #expect(model.screen.dock == .sleepRunning(timerID: timer.id, tiles: [.feed, .action(.diaper)]))
 
         clock.advance(by: 1_200)
         try await model.stopSleep()
@@ -199,5 +199,52 @@ import BabyCore
         model.volumeUnit = .ounces
         let editor = try #require(model.makeTimerEditor())
         #expect(editor.unit == .ounces)
+    }
+
+    @Test func changingTheOrderReshapesTheDockOnTheNextRefresh() throws {
+        let (store, baby, _) = try fixture()
+        let model = HomeViewModel(store: store, babyID: baby)
+        try model.refresh()
+        #expect(model.screen.dock == .start(suggested: try store.suggestedSide(for: baby), big: .breast,
+                                            tiles: [.bottle, .sleep, .diaper]))
+        model.homeOrder = [.solids, .breast, .bottle, .sleep, .diaper, .meds, .growth]
+        try model.refresh()
+        #expect(model.screen.dock == .start(suggested: try store.suggestedSide(for: baby), big: .solids,
+                                            tiles: [.breast, .bottle, .sleep]))
+    }
+
+    /// 2026-11-01: a phone opened after hours still showed a feed the other
+    /// parent had stopped, and had started a sleep since. Stop, tapped
+    /// before the catch-up landed, must not then end that sleep.
+    @Test func aTapTheCatchUpOvertookIsDroppedAndHomeShowsTheFamily() async throws {
+        let (store, baby, clock) = try fixture()
+        let feed = try store.startPart(.breast(.left), for: baby)
+        let model = HomeViewModel(store: store, babyID: baby)
+        try model.refresh()
+
+        // What the catch-up brings: the other phone's stop and new sleep.
+        let ran = try await model.onCurrentState(catchUp: {
+            clock.advance(by: 600)
+            _ = try? store.stopFeed(feed)
+            _ = try? store.startSleep(for: baby)
+        }) {
+            _ = try await model.stopSleep()
+        }
+
+        #expect(!ran)
+        let sleep = try #require(try store.activeTimer(kind: .sleep, for: baby))
+        #expect(model.screen.hero == .sleepRunning(clockFrom: sleep.startedAt, since: sleep.startedAt))
+    }
+
+    @Test func aTapTheCatchUpLeftAsSeenGoesAhead() async throws {
+        let (store, baby, _) = try fixture()
+        _ = try store.startPart(.breast(.left), for: baby)
+        let model = HomeViewModel(store: store, babyID: baby)
+        try model.refresh()
+
+        let ran = try await model.onCurrentState(catchUp: {}) { _ = try await model.stopFeed() }
+
+        #expect(ran)
+        #expect(try store.activeTimer(kind: .feed, for: baby) == nil)
     }
 }

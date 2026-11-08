@@ -6,6 +6,9 @@ import BabyCore
 public enum CompletedFeedPart: Equatable, Sendable {
     case breast(side: BreastSide, from: Date, to: Date)
     case bottle(volumeML: Double, contents: BottleContents, at: Date)
+    /// Solids eaten during a feed: a moment, like a bottle with no end, with
+    /// the note the Solids panel takes.
+    case solids(foods: [String], amount: SolidsAmount, at: Date, note: String?)
 }
 
 /// The session a Join row offers to join: the newest earlier one of the
@@ -35,7 +38,9 @@ public struct PreviousSession: Equatable, Sendable {
 /// id resolves the entry's session first and passes its id.
 public extension BabyStore {
     /// Logs `part` and links it to the session whose root is `rootID`,
-    /// whatever the break limit says (manual add).
+    /// whatever the break limit says (manual add). Solids join only by this
+    /// hand: a session must hold a breast or bottle part, so one of solids
+    /// alone is refused — `FeedingSessionError.solidsNeverJoin`.
     ///
     /// One write and one `create`, already carrying the link. `logBreast` /
     /// `logBottle` can't be wrapped for this: the write boundary is not
@@ -51,14 +56,18 @@ public extension BabyStore {
             build = { self.breastEntry(side: side, seconds: seconds, from: start, to: end, for: babyID) }
         case let .bottle(volumeML, contents, at):
             build = { self.bottleEntry(volumeML: volumeML, contents: contents, at: at, for: babyID) }
+        case let .solids(foods, amount, at, note):
+            build = {
+                let entry = self.solidsEntry(foods: foods, amount: amount, at: at, for: babyID)
+                entry.note = note
+                return entry
+            }
         }
         let expected = try captureWriteContext()
         return try withRealmWrite(expected: expected) {
             let feeds = try self.sessionFeeds(for: babyID)
             let session = try Self.feedSessionKey(rootID, in: feeds)
-            guard !feeds.contains(where: { $0.effectiveFeedingSessionID == session && $0.kind == .solids }) else {
-                throw FeedingSessionError.solidsNeverJoin
-            }
+            guard Self.hasMilk(session, in: feeds) else { throw FeedingSessionError.solidsNeverJoin }
             let entry = build()
             entry.feedingSessionID = session
             self.context.insert(entry)
@@ -142,16 +151,14 @@ public extension BabyStore {
     }
 
     /// The newest earlier session of the same kind (feeds: never a solids-only session).
-    /// Nil too when `rootID`'s own session is solids, which never joins.
+    /// Nil too when `rootID`'s own session is solids alone, which never joins.
     func previousSession(_ kind: SessionKind, before rootID: UUID, for babyID: UUID) throws -> PreviousSession? {
         switch kind {
         case .feed:
             let feeds = try sessionFeeds(for: babyID)
             let session = try Self.feedSessionKey(rootID, in: feeds)
-            guard !feeds.contains(where: { $0.effectiveFeedingSessionID == session && $0.kind == .solids }) else {
-                return nil
-            }
-            let sessions = Self.projectSessions(feeds.filter { $0.kind != .solids })
+            guard Self.hasMilk(session, in: feeds) else { return nil }
+            let sessions = Self.projectSessions(feeds).filter { Self.hasMilk($0.id, in: feeds) }
             guard let index = sessions.firstIndex(where: { $0.id == session }), index > 0 else { return nil }
             let previous = sessions[index - 1]
             guard let first = previous.feedIDs.first, let last = previous.feedIDs.last else { return nil }
@@ -171,65 +178,86 @@ public extension BabyStore {
         }
     }
 
-    /// The end of the part just before `feedID` in its session, if any — the
-    /// latest end among the members ordered before it, as a running timer's
-    /// check uses the whole session's end (`previousPartEnd(of:)`).
-    func previousPartEnd(ofFeed feedID: UUID, for babyID: UUID) throws -> Date? {
+    /// Where the other parts of `feedID`'s session sit: each other entry's
+    /// span, a moment's as its start. An edited part may go anywhere they
+    /// leave free, before or after any of them: the session's order is its
+    /// parts' times, and `updateFeedPart` keeps its root the earliest.
+    func otherPartSpans(ofFeed feedID: UUID, for babyID: UUID) throws -> [PartSpan] {
         let feeds = try sessionFeeds(for: babyID)
         guard let feed = feeds.first(where: { $0.id == feedID }) else { throw PartError.missingFeed }
-        let group = feeds.filter { $0.effectiveFeedingSessionID == feed.effectiveFeedingSessionID }
-            .sorted(by: Self.feedOrder)
-        guard let index = group.firstIndex(where: { $0.id == feedID }) else { return nil }
-        return group[..<index].map { $0.endedAt ?? $0.startedAt }.max()
+        return feeds.filter { $0.id != feedID && $0.effectiveFeedingSessionID == feed.effectiveFeedingSessionID }
+            .map { PartSpan(start: $0.startedAt, end: $0.endedAt ?? $0.startedAt) }
     }
 
-    /// The start of the part just after `feedID` in its session, if any —
-    /// the earliest start among the members ordered after it.
-    func nextPartStart(ofFeed feedID: UUID, for babyID: UUID) throws -> Date? {
-        let feeds = try sessionFeeds(for: babyID)
-        guard let feed = feeds.first(where: { $0.id == feedID }) else { throw PartError.missingFeed }
-        let group = feeds.filter { $0.effectiveFeedingSessionID == feed.effectiveFeedingSessionID }
-            .sorted(by: Self.feedOrder)
-        guard let index = group.firstIndex(where: { $0.id == feedID }) else { return nil }
-        return group[(index + 1)...].map(\.startedAt).min()
-    }
-
-    /// Where an edited part may start within its session: not before the
-    /// previous part ended (ruling H-R4) — `PartError.startBeforePreviousPart`
-    /// — and not after the next part began (ruling H-R15), which would
-    /// reorder the session behind its root — `PartError.startAfterNextPart`.
-    func checkPartStart(_ start: Date, ofFeed feedID: UUID, for babyID: UUID) throws {
-        if let previousEnd = try previousPartEnd(ofFeed: feedID, for: babyID), start < previousEnd {
-            throw PartError.startBeforePreviousPart
-        }
-        if let nextStart = try nextPartStart(ofFeed: feedID, for: babyID), start > nextStart {
-            throw PartError.startAfterNextPart
+    /// The store's own word on an edited part's new span (rulings H-R4,
+    /// H-R14): `PartError.overlapsPart` when it runs into another part of
+    /// its session that its span as stored, `old`, did not already overlap.
+    /// A part that already overlapped one stays editable (ruling H-R12).
+    func checkPartSpan(_ span: PartSpan, was old: PartSpan, ofFeed feedID: UUID, for babyID: UUID) throws {
+        if try PartSpan.clash(span, was: old, among: otherPartSpans(ofFeed: feedID, for: babyID)) != nil {
+            throw PartError.overlapsPart
         }
     }
 
-    /// `previousPartEnd(ofFeed:)` for a sleep: the latest end among the
-    /// sleeps ordered before it in its session. An open sleep counts by its
+    /// `otherPartSpans(ofFeed:)` for a sleep. An open sleep counts by its
     /// start, its latest known moment.
-    func previousPartEnd(ofSleep sleepID: UUID, for babyID: UUID) throws -> Date? {
+    func otherPartSpans(ofSleep sleepID: UUID, for babyID: UUID) throws -> [PartSpan] {
         let (group, index) = try sleepSessionPosition(sleepID, for: babyID)
-        return group[..<index].map { $0.endedAt ?? $0.startedAt }.max()
+        return group.enumerated().filter { $0.offset != index }
+            .map { PartSpan(start: $0.element.startedAt, end: $0.element.endedAt ?? $0.element.startedAt) }
     }
 
-    /// `nextPartStart(ofFeed:)` for a sleep.
-    func nextPartStart(ofSleep sleepID: UUID, for babyID: UUID) throws -> Date? {
-        let (group, index) = try sleepSessionPosition(sleepID, for: babyID)
-        return group[(index + 1)...].map(\.startedAt).min()
+    /// `checkPartSpan` for a sleep.
+    func checkSleepPartSpan(_ span: PartSpan, was old: PartSpan, ofSleep sleepID: UUID, for babyID: UUID) throws {
+        if try PartSpan.clash(span, was: old, among: otherPartSpans(ofSleep: sleepID, for: babyID)) != nil {
+            throw PartError.overlapsPart
+        }
     }
 
-    /// `checkPartStart` for a sleep (rulings H-R4, H-R15): the same two
-    /// bounds, the same two errors.
-    func checkSleepPartStart(_ start: Date, ofSleep sleepID: UUID, for babyID: UUID) throws {
-        if let previousEnd = try previousPartEnd(ofSleep: sleepID, for: babyID), start < previousEnd {
-            throw PartError.startBeforePreviousPart
+    /// Saves an edited feed part, already changed in place, in one write. A
+    /// part whose times moved past another's reorders its session, so the
+    /// session is re-keyed by whichever member now starts first: Split,
+    /// delete and Join all take the key for the earliest member.
+    func updateFeedPart(_ feed: FeedEntry, for babyID: UUID) throws {
+        let expected = try captureWriteContext()
+        try withRealmWrite(expected: expected) {
+            feed.lastModifiedAt = self.now
+            try self.recordLocked(.update, on: feed)
+            try self.rekeyFeedSessionLocked(feed.effectiveFeedingSessionID, for: babyID)
         }
-        if let nextStart = try nextPartStart(ofSleep: sleepID, for: babyID), start > nextStart {
-            throw PartError.startAfterNextPart
+    }
+
+    /// `updateFeedPart` for a sleep.
+    func updateSleepPart(_ sleep: SleepEntry, for babyID: UUID) throws {
+        let expected = try captureWriteContext()
+        try withRealmWrite(expected: expected) {
+            sleep.lastModifiedAt = self.now
+            try self.recordLocked(.update, on: sleep)
+            try self.rekeySleepSessionLocked(sleep.effectiveSleepSessionID, for: babyID)
         }
+    }
+}
+
+/// One part's place in time: from its start to its end, or a moment.
+public struct PartSpan: Equatable, Sendable {
+    public let start: Date
+    public let end: Date
+
+    public init(start: Date, end: Date) {
+        self.start = start
+        self.end = max(start, end)
+    }
+
+    /// Two parts overlap when one starts before the other ends. Parts that
+    /// only touch do not, and neither do two moments at the same time.
+    public func overlaps(_ other: PartSpan) -> Bool {
+        start < other.end && other.start < end
+    }
+
+    /// The earliest of `others` that `span` runs into and `old` did not:
+    /// what an edit that moved a part from `old` to `span` is refused for.
+    public static func clash(_ span: PartSpan, was old: PartSpan, among others: [PartSpan]) -> PartSpan? {
+        others.filter { $0.overlaps(span) && !$0.overlaps(old) }.min { $0.start < $1.start }
     }
 }
 
@@ -252,10 +280,48 @@ extension BabyStore {
         return member.effectiveFeedingSessionID
     }
 
+    /// Whether `session` holds a breast or bottle part: one of solids alone
+    /// never joins and is never joined.
+    static func hasMilk(_ session: UUID, in feeds: [FeedEntry]) -> Bool {
+        feeds.contains { $0.effectiveFeedingSessionID == session && $0.kind != .solids }
+    }
+
     static func sleepSessionKey(_ rootID: UUID, in sleeps: [SleepEntry]) throws -> UUID {
         if sleeps.contains(where: { $0.effectiveSleepSessionID == rootID }) { return rootID }
         guard let member = sleeps.first(where: { $0.id == rootID }) else { throw SleepSessionError.missingSleep }
         return member.effectiveSleepSessionID
+    }
+
+    /// Keys `session` by its earliest member: links every other member to
+    /// it, and a running part that continued the session follows. Nothing
+    /// changes when the earliest already keys it.
+    func rekeyFeedSessionLocked(_ session: UUID, for babyID: UUID) throws {
+        let group = try sessionFeeds(for: babyID).filter { $0.effectiveFeedingSessionID == session }
+            .sorted(by: Self.feedOrder)
+        guard let root = group.first, root.id != session else { return }
+        for member in group {
+            let link: UUID? = member.id == root.id ? nil : root.id
+            guard member.feedingSessionID != link else { continue }
+            member.feedingSessionID = link
+            member.lastModifiedAt = now
+            try recordLocked(.update, on: member)
+        }
+        try relinkRunningPartLocked(.feed, for: babyID, from: session, to: root.id)
+    }
+
+    /// `rekeyFeedSessionLocked` for a sleep.
+    func rekeySleepSessionLocked(_ session: UUID, for babyID: UUID) throws {
+        let group = try sessionSleeps(for: babyID).filter { $0.effectiveSleepSessionID == session }
+            .sorted(by: Self.sleepOrder)
+        guard let root = group.first, root.id != session else { return }
+        for member in group {
+            let link: UUID? = member.id == root.id ? nil : root.id
+            guard member.sleepSessionID != link else { continue }
+            member.sleepSessionID = link
+            member.lastModifiedAt = now
+            try recordLocked(.update, on: member)
+        }
+        try relinkRunningPartLocked(.sleep, for: babyID, from: session, to: root.id)
     }
 
     /// Tombstones `feed`, then, if its session is no longer keyed by a live

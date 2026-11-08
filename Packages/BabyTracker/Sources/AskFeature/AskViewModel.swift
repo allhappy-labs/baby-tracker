@@ -83,10 +83,17 @@ public final class AskViewModel {
             case "sleep": String(localized: "Sleep", bundle: .module)
             case "diaper": String(localized: "Diaper", bundle: .module)
             case "supplement": String(localized: "Med", bundle: .module)
+            case "immunization": String(localized: "Vaccine", bundle: .module)
+            case "pump": String(localized: "Pump", bundle: .module)
             default: String(localized: "Entry", bundle: .module)
             }
             guard let item = try? store.entry(id: id, for: babyID) else {
                 return "\(title) · \(String(localized: "unavailable", bundle: .module))"
+            }
+            // Vaccinations are months apart: the day says which one, a clock time does not.
+            if case .immunization(let shot) = item {
+                let zone = TimeZone(identifier: shot.timeZoneID) ?? .current
+                return "\(title) · \(shot.givenAt.formatted(Date.FormatStyle(timeZone: zone).day().month(.abbreviated).year()))"
             }
             let formatter = DateFormatter()
             formatter.locale = .current

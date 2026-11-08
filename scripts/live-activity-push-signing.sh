@@ -58,7 +58,7 @@ PUSH_ENTITLEMENTS=Apps/BabyTrackerLiveActivityPush.entitlements
 SIMULATOR_KEY='CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]'
 OLD_PIN=pushEntitlementsAreSelectedOnlyForTheSimulatorSDK
 NEW_PIN=pushEntitlementsSignEveryAppConfiguration
-SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'
+SIMULATOR=${BTLAP_SIMULATOR:-'platform=iOS Simulator,name=iPhone 17 Pro'}
 
 # The push entitlements file pins the value the profile must carry
 # (pushEntitlementsAreExactlyTheAppEntitlementsPlusTheDevelopmentGateway).
@@ -108,20 +108,24 @@ pbx_config_ids() { # list-id
 }
 
 # One build setting of one configuration, quotes stripped; empty when unset.
-# A value that is exactly "$(NAME)" is resolved from the project's xcconfigs,
+# Each "$(NAME)" in the value is resolved from the project's xcconfigs,
 # Config/Local.xcconfig first (it overrides Base), as Xcode would.
 pbx_setting() { # config-id key
-  local value name file line
+  local value name resolved found file line rounds=0
   value=$(pbx_raw_setting "$1" "$2")
-  if [[ $value =~ ^\$\(([A-Za-z0-9_]+)\)$ ]]; then
+  while [[ $value =~ \$\(([A-Za-z0-9_]+)\) ]] && (( rounds++ < 8 )); do
     name=${BASH_REMATCH[1]}
+    resolved= found=
     for file in "$(dirname "$PROJECT")/../Config/Local.xcconfig" "$(dirname "$PROJECT")/../Config/Base.xcconfig"; do
       [ -f "$file" ] || continue
       line=$(grep -E "^[[:space:]]*$name[[:space:]]*=" "$file" | tail -1) || continue
-      value=$(printf '%s' "${line#*=}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      resolved=$(printf '%s' "${line#*=}" | sed -e 's/^[[:space:]]*//' -e 's/[[:space:]]*$//')
+      found=1
       break
     done
-  fi
+    [ -n "$found" ] || break
+    value=${value//"\$($name)"/$resolved}
+  done
   printf '%s\n' "$value" | awk NF
 }
 

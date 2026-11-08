@@ -1,6 +1,6 @@
 # Entry panels: verification (2026-10-09)
 
-Branch `entry-panels`. Simulator: shared iPhone 17 Pro (`D17101C9-…`, 402×874 pt). Screenshots are scaled to 1x (402 px wide).
+Branch `entry-panels`. Simulator: shared iPhone 17 Pro (`<simulator-udid>`, 402×874 pt). Screenshots are scaled to 1x (402 px wide).
 
 ## How the screenshots were taken
 
@@ -48,5 +48,5 @@ The Past entry bottle and sleep shots at this size are missing. The temporary te
 ## Commands
 
 - `swift test --filter LoggingFeatureTests` (after `1334ff0b`): 191 tests in 14 suites passed.
-- UI subset: `xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' -parallel-testing-enabled NO -only-testing:BabyTrackerUITests/{EditFlowTests,LoggingFlowTests,RunningTimerLifecycleTests,GrowthFlowUITests,AccessibilityAuditTests}` → `Executed 19 tests, with 0 failures`, `** TEST SUCCEEDED **`, no runner restarts.
+- UI subset: `xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' -parallel-testing-enabled NO -only-testing:BabyTrackerUITests/{EditFlowTests,LoggingFlowTests,RunningTimerLifecycleTests,GrowthFlowUITests,AccessibilityAuditTests}` → `Executed 19 tests, with 0 failures`, `** TEST SUCCEEDED **`, no runner restarts.
 - `make test` → `OK: 1696 tests`.

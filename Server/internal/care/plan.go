@@ -10,7 +10,8 @@ import (
 // collectRefs is everything the batch's mutations reference, for one Fetch:
 // the targets, the payload babies, the session ids (a session id may also
 // name a row) and their live members, the receipts of the mutation ids, and
-// the live baby count when the batch creates a baby. A timer start also
+// the live baby count when the batch creates a baby. A pump create or update
+// reads the family's running pump. A timer start also
 // reads its baby's live timers; a stop reads the id it names for its
 // completion; every other timer command reads the completion of its timer
 // if it has stopped; a baby delete reads the baby's live rows (its cascade
@@ -41,6 +42,8 @@ func collectRefs(cmd BatchCommand) Refs {
 			refs.CountLiveBabies = true
 		case m.EntityKind == "baby" && m.Operation == "delete":
 			add(&refs.CascadeBabyIDs, "cascade", m.EntityID)
+		case m.EntityKind == "pump" && m.Operation != "delete":
+			refs.OpenPump = true
 		case m.EntityKind == "timer":
 			add(&refs.IDs, "row", timerMutationBabyID(m))
 			switch p := m.Payload.(type) {
@@ -133,6 +136,13 @@ func newWorkingSet(cmd BatchCommand, accepted string, fetched Fetched) *workingS
 	// Live timers come whole (with their wire), so they are rows like any
 	// other: a start's live-timer check and the session check read them.
 	for _, r := range fetched.LiveTimers {
+		if _, ok := ws.rows[r.ID]; !ok {
+			ws.rows[r.ID] = r
+		}
+	}
+	// The running pump comes whole, so it is a row like any other: an open
+	// start's check reads it, and it is superseded with it.
+	for _, r := range fetched.OpenPumps {
 		if _, ok := ws.rows[r.ID]; !ok {
 			ws.rows[r.ID] = r
 		}
@@ -251,6 +261,19 @@ func (ws *workingSet) writes() Writes {
 		rows[i] = ws.rows[id]
 	}
 	return Writes{FamilyID: ws.cmd.Grant.FamilyID, Base: ws.base, Sequence: ws.sequence, Rows: rows, Receipts: ws.receiptRows, Delta: ws.delta}
+}
+
+// openPump is the family's running pump other than excluding, in its
+// current state: the fetched one, or one this batch started and has not
+// ended. The family lock Fetch took makes this the whole rule; the unique
+// index care_entities_one_open_pump only backs it.
+func (ws *workingSet) openPump(excluding string) (Row, bool) {
+	for _, r := range ws.rows {
+		if r.Kind == "pump" && r.Live() && r.EndedAt == nil && r.ID != excluding {
+			return r, true
+		}
+	}
+	return Row{}, false
 }
 
 // anyRow visits every row the batch can see in its current state: the

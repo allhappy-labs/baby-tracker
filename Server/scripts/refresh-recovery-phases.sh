@@ -39,19 +39,21 @@ recovery_restart() {
   # nginx resolves the recreated app endpoint on its own restart.
   compose restart tls >/dev/null
 }
-# The child, its receipt and the session_rotated audit row commit together:
-# a fault before the commit leaves nothing, one after it (or a reply lost on
-# the wire) leaves exactly the committed child and its receipt. No boundary
-# makes the node unready: there is no projection to fall behind.
+# The consumed parent, the child and its receipt commit together: a fault
+# before the commit leaves nothing, one after it (or a reply lost on the wire)
+# leaves exactly the committed child and its receipt. A routine rotation
+# appends no audit row (owner decision D1, 2026-10-16): the receipt and the
+# session rows are its record. No boundary makes the node unready: there is
+# no projection to fall behind.
 receipt_proof_sql() {
   printf '%s' "SELECT count(*)::text||':'||count(DISTINCT r.child_id)::text||':'||COALESCE(bool_and(
       (SELECT count(*) FROM sessions c WHERE c.parent_id=r.parent_id)=1
       AND p.status='consumed' AND p.consumed_attempt_id=r.attempt_id AND p.child_id=r.child_id
       AND s.status='active' AND s.parent_id=r.parent_id AND s.lineage_root_id=p.lineage_root_id
       AND r.effective_deadline<=s.deadline_at AND r.refresh_expires_at=s.refresh_expires_at
-      AND EXISTS (SELECT 1 FROM security_audit_events a WHERE a.scope='account' AND a.scope_id=r.account_id AND a.kind='session_rotated'
-        AND a.payload->>'session_id'=r.child_id::text AND a.payload->>'parent_session_id'=r.parent_id::text
-        AND a.payload->>'refresh_attempt_id'=r.attempt_id::text AND a.payload->>'material_digest'=encode(r.material_digest,'hex'))),false)::text
+      AND r.material_digest=sha256(r.material)
+      AND NOT EXISTS (SELECT 1 FROM security_audit_events a WHERE a.scope='account' AND a.scope_id=r.account_id AND a.kind='session_rotated'
+        AND a.payload->>'session_id'=r.child_id::text)),false)::text
     FROM refresh_receipts r JOIN sessions s ON s.id=r.child_id JOIN sessions p ON p.id=r.parent_id WHERE r.attempt_id='$1'"
 }
 for server_boundary in before_authority_commit after_authority_commit after_projection lost_response; do

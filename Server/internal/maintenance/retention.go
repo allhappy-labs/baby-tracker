@@ -11,6 +11,15 @@ const (
 	// AuditPartitionHorizon is how far ahead the monthly audit partitions
 	// reach: three months, so no audit row lands in the default partition.
 	AuditPartitionHorizon = 92 * 24 * time.Hour
+	// AuditRetentionInterval is the audit retention loop's cadence: a month
+	// expires once a month, and a run that finds nothing to drop reads only
+	// the catalog.
+	AuditRetentionInterval = time.Hour
+	// AuditRetentionMonths keeps security audit history 13 months (owner
+	// decision D1, 2026-10-16): a partition is dropped once its whole range
+	// ended that long ago. app.drop_expired_audit_partition enforces the same
+	// window against the database's clock.
+	AuditRetentionMonths = 13
 	// ConsumedSessionRetention keeps consumed, revoked and refresh-expired
 	// sessions for 24 hours. Owner decision D2: after it, a consumed token's
 	// replay is session_revoked, not lineage revocation.

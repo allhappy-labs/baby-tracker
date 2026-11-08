@@ -43,7 +43,60 @@ run_matrix_child() {
   exec python3 "$performance_control_source" supervise "$@"
 }
 
-# Sourcing exposes only the artifact validator for resource-free regressions.
+# Aggregates an output's matrix rows into cells.json and matrix-verdict.json.
+# Non-zero unless all 27 cells are coherent measurements: reporting every row
+# is not a pass (the 2026-10-25 run measured nothing and reported status 0).
+report_matrix() {
+  python3 "$performance_control_source" aggregate "$1/matrix.log" "$1/cells.json" "$2" "$1/build.json" "$1/cell-evidence/control-evidence.jsonl" "$1/cell-evidence"
+}
+
+# The matrix's disposable server only. Its phones are synthetic and share one
+# source address: 2,898 sign-ins (2 per family over 9 x 161 families), an
+# invitation and redemption per family and 256 sockets per 128-family cell,
+# in about an hour, where the production per-address quotas model one
+# household. Aging compresses hours of app renewals into a cell, and one
+# owner token carries a cell's whole pull load. Every other quota (structural,
+# mutation, live per device/account/family, bearer failure, MCP, export) and
+# every window stays the default; production defaults are not changed.
+matrix_quota_overrides() {
+  printf '%s\n' \
+    BT_RATE_LIMIT_AUTH_CHALLENGE_IP_COUNT=100000 \
+    BT_RATE_LIMIT_AUTH_EXCHANGE_IP_COUNT=100000 \
+    BT_RATE_LIMIT_AUTH_REFRESH_IP_COUNT=100000 \
+    BT_RATE_LIMIT_AUTH_REFRESH_ACCOUNT_COUNT=10000 \
+    BT_RATE_LIMIT_AUTH_REFRESH_DEVICE_COUNT=10000 \
+    BT_RATE_LIMIT_INVITATION_CREATE_IP_COUNT=100000 \
+    BT_RATE_LIMIT_INVITATION_REDEEM_IP_COUNT=100000 \
+    BT_RATE_LIMIT_LIVE_ATTEMPT_IP_COUNT=10000 \
+    BT_RATE_LIMIT_SYNC_PULL_DEVICE_COUNT=10000 \
+    BT_RATE_LIMIT_SYNC_PULL_ACCOUNT_COUNT=10000
+}
+
+# The aging loop's renewal spacing in seconds, "<address> <device>": the
+# refresh windows (the 10-minute defaults) over the counts given above.
+matrix_rotation_spacing() {
+  local ip device
+  ip=$(matrix_quota_overrides | sed -n 's/^BT_RATE_LIMIT_AUTH_REFRESH_IP_COUNT=//p')
+  device=$(matrix_quota_overrides | sed -n 's/^BT_RATE_LIMIT_AUTH_REFRESH_DEVICE_COUNT=//p')
+  python3 -c 'import sys; print(*(f"{600/int(v):.6f}" for v in sys.argv[1:]))' "$ip" "$device"
+}
+
+# Adds the matrix quotas to the app service's environment in a disposable
+# override (the helper's `  app:` block, whose mounts may precede it).
+apply_matrix_quotas() {
+  python3 - "$1" "$(matrix_quota_overrides)" <<'MATRIX_QUOTAS'
+import sys
+path=sys.argv[1]; text=open(path).read()
+app=text.index('  app:\n')
+anchor=text.index('    environment:\n',app)+len('    environment:\n')
+following=[text.find(n,app+1) for n in ['\n  db:\n','\n  migrate:\n','\n  tls:\n']]
+assert all(i<0 or i>anchor for i in following), 'override has no app environment'
+lines=''.join('      %s: "%s"\n' % tuple(line.split('=',1)) for line in sys.argv[2].splitlines())
+open(path,'w').write(text[:anchor]+lines+text[anchor:])
+MATRIX_QUOTAS
+}
+
+# Sourcing exposes only the artifact validators for resource-free regressions.
 if [[ ${BASH_SOURCE[0]} != "$0" ]]; then return 0; fi
 set -euo pipefail
 runner_started=$(date +%s)
@@ -67,7 +120,10 @@ while [[ $# -gt 0 ]]; do
   esac
   shift 2
 done
-[[ $duration =~ ^[0-9]+$ && $duration -ge 30 && $duration -le 60 && $total =~ ^[0-9]+$ && $total -ge 60 && $total -le 1200 ]] || { echo "invalid time budget" >&2; exit 2; }
+# 27 matrix cells of up to 116 s need about 55 minutes; the other modes stay at 20.
+max_total=1200
+[[ $mode != matrix ]] || max_total=3600
+[[ $duration =~ ^[0-9]+$ && $duration -ge 30 && $duration -le 60 && $total =~ ^[0-9]+$ && $total -ge 60 && $total -le $max_total ]] || { echo "invalid time budget" >&2; exit 2; }
 [[ $foreground_case == all || ($mode == foreground && $foreground_case == recovery) ]] || { echo "invalid foreground case" >&2; exit 2; }
 [[ $mode == socket || $mode == foreground || $mode == matrix ]] || { echo "invalid mode" >&2; exit 2; }
 if [[ -n $baseline_source ]]; then
@@ -143,7 +199,9 @@ CLEANUP_CONFIG
     python3 "$harness_root/Server/scripts/lib/performance_control.py" cleanup "$output/cleanup-recovery.json" "$output" "$run_deadline" || cleanup_status=$?
   fi
   if [[ $mode == matrix ]]; then
-    python3 "$harness_root/Server/scripts/lib/performance_control.py" aggregate "$output/matrix.log" "$output/cells.json" "$phase" "$output/build.json" "$output/cell-evidence/control-evidence.jsonl" "$output/cell-evidence" || status=1
+    # An earlier failure keeps its own phase; a finished run that measured
+    # less than the full coherent matrix is named for that.
+    report_matrix "$output" "$phase" || { status=1; [[ $phase != complete ]] || phase=matrix_incoherent; }
   fi
   [[ $status != 0 || $cleanup_status == 0 ]] || status=$cleanup_status
   jq -n --arg phase "$phase" --argjson status "$status" '{phase:$phase,status:$status}' > "$output/status.json"
@@ -164,6 +222,10 @@ watchdog_seconds=$((matrix_deadline - $(date +%s)))
 python3 -c 'import os,signal,sys,time; time.sleep(int(sys.argv[1])); os.kill(int(sys.argv[2]),signal.SIGTERM); time.sleep(int(sys.argv[3])); os.kill(int(sys.argv[2]),signal.SIGKILL)' "$watchdog_seconds" "$$" "$cleanup_reserve" & watchdog=$!
 # The shared helper preserves this performance owner's cleanup traps.
 if [[ -n $baseline_source ]]; then cd "$baseline_source"; fi
+# The helper's extension point: the matrix states its disposable quotas.
+if [[ $mode == matrix ]]; then
+  disposable_sync_customize() { apply_matrix_quotas "$override"; }
+fi
 start_disposable_sync self_hosted normal >> "$raw" 2>&1
 # Verify every bind is a file/directory this run created, not a user keyring.
 # Named volumes are isolated by the random Compose project.
@@ -171,22 +233,19 @@ docker inspect "$app" | python3 -c 'import json,os,sys; root=os.path.realpath(sy
 phase=tls
 compose up -d --wait --wait-timeout 60 tls >> "$raw" 2>&1
 curl --silent --fail --max-time 5 --cacert "$BT_SECRETS_DIR/tls.crt" "$BT_PUBLIC_ORIGIN/readyz" >/dev/null
-maintenance=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_function_privilege('baby_tracker_export_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE') AND NOT has_function_privilege('baby_tracker_app','app.cleanup_refresh_recovery_receipts(timestamptz)','EXECUTE')")
+# The first manifest row the maintenance principal holds and the runtime principal
+# lacks at the current schema version (see the query in the Phase 5 plan, Task 7),
+# pinned as a pair of live checks on the two login roles.
+maintenance=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_function_privilege('baby_tracker_export_app','app.abandon_live_activity_start(jsonb,text,text,boolean,boolean)','EXECUTE') AND NOT has_function_privilege('baby_tracker_app','app.abandon_live_activity_start(jsonb,text,text,boolean,boolean)','EXECUTE')")
 [[ $maintenance == t ]] || { echo "maintenance privilege proof failed" >&2; exit 1; }
 if [[ $mode == matrix ]]; then
-  jq -n --arg source "$source_sha" --arg binary "$binary_sha" --arg image "$image_id" --arg harness "$(git -C "$harness_root" rev-parse HEAD)" --arg os "$(uname -sm)" --argjson schema "$schema" '{source:$source,binary_sha:$binary,image:$image,harness_source:$harness,build:"identitytest-no-race",environment:$os,schema:$schema,single_source_ip:true,default_quotas:true,baseline_unmodified:true}' > "$output/build.json"
+  jq -n --arg source "$source_sha" --arg binary "$binary_sha" --arg image "$image_id" --arg harness "$(git -C "$harness_root" rev-parse HEAD)" --arg os "$(uname -sm)" --argjson schema "$schema" --arg quotas "$(matrix_quota_overrides)" '{source:$source,binary_sha:$binary,image:$image,harness_source:$harness,build:"identitytest-no-race",environment:$os,schema:$schema,single_source_ip:true,default_quotas:false,quota_overrides:($quotas|split("\n")|map(split("=")|{(.[0]):(.[1]|tonumber)})|add),baseline_unmodified:true}' > "$output/build.json"
   python3 - "$output/product-source-hashes.json" <<'PRODUCT_HASHES'
 import hashlib,json,pathlib,sys
 paths=[p for root in ['Server/cmd','Server/internal','Server/migrations'] for p in pathlib.Path(root).rglob('*') if p.is_file() and p.suffix in {'.go','.sql'}]
 json.dump({str(p):hashlib.sha256(p.read_bytes()).hexdigest() for p in sorted(paths)},open(sys.argv[1],'w'),sort_keys=True)
 PRODUCT_HASHES
 fi
-phase=recovery_worker
-worker_deadline=$((SECONDS + 330))
-while ! compose logs --no-color app 2>/dev/null | grep -q 'identitytest recovery cleanup completed'; do
-  [[ $SECONDS -lt $worker_deadline ]] || { echo "cleanup worker admission missing" >&2; exit 1; }
-  sleep 1
-done
 phase=client_build
 (cd "$harness_root/Server" && go build -tags identitytest -o "$BT_SECRETS_DIR/performance-client" ./cmd/sync-performance-client) >> "$raw" 2>&1
 phase=client_measurement
@@ -195,17 +254,23 @@ if [[ $mode == matrix ]]; then
   export BABY_TRACKER_CAPACITY_MATRIX=1 BABY_TRACKER_E2E_BASE="$BT_PUBLIC_ORIGIN" BABY_TRACKER_E2E_CERT="$BT_SECRETS_DIR/tls.crt" BABY_TRACKER_E2E_INSTANCE="$BT_SERVER_INSTANCE_ID"
   export BABY_TRACKER_MATRIX_LOG="$raw"
   export BABY_TRACKER_MATRIX_PRIVATE="$BT_SECRETS_DIR/matrix" BABY_TRACKER_MATRIX_CLIENT="$BT_SECRETS_DIR/performance-client" BABY_TRACKER_MATRIX_DEADLINE="$matrix_deadline" BABY_TRACKER_MATRIX_SECONDS="$duration"
+  read -r BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS < <(matrix_rotation_spacing)
+  export BABY_TRACKER_MATRIX_ROTATION_IP_SECONDS BABY_TRACKER_MATRIX_ROTATION_DEVICE_SECONDS
   mkdir -m 0700 "$BABY_TRACKER_MATRIX_PRIVATE"
   export BABY_TRACKER_MATRIX_EVIDENCE="$BABY_TRACKER_MATRIX_PRIVATE/control-evidence.jsonl"
   export BABY_TRACKER_MATRIX_CONTROL="$BABY_TRACKER_MATRIX_PRIVATE/control.jsonl" BABY_TRACKER_MATRIX_ACK="$BABY_TRACKER_MATRIX_PRIVATE/control.ack"
   : > "$BABY_TRACKER_MATRIX_CONTROL"
   chmod 0600 "$BABY_TRACKER_MATRIX_CONTROL"
-  python3 "$harness_root/Server/scripts/lib/performance_control.py" sample-loop "$app" "$db" "$BABY_TRACKER_MATRIX_PRIVATE/resource-samples.jsonl" & metrics_pid=$!
+  python3 "$harness_root/Server/scripts/lib/performance_control.py" sample-loop "$app" "$db" "$BABY_TRACKER_MATRIX_PRIVATE/resource-samples.jsonl" "$matrix_deadline" & metrics_pid=$!
 
   export BABY_TRACKER_MATRIX_HEAD_READER="$BT_SECRETS_DIR/read-head"
   python3 - "$BABY_TRACKER_MATRIX_HEAD_READER" "$db" <<'HEAD_READER'
 import os,shlex,sys
-open(sys.argv[1],'w').write('#!/bin/sh\nexec docker exec '+shlex.quote(sys.argv[2])+" psql -XAt -U postgres -d babytracker -c 'SELECT revision FROM security_projection_head'\n")
+# The history that ages is the credential rotations: every refresh consumes
+# one session row, and consumed rows are kept for 24 hours. Audit rows are not
+# the measure (routine refresh need not append one).
+sql="SELECT count(*) FROM sessions WHERE status = 'consumed'"
+open(sys.argv[1],'w').write('#!/bin/sh\nexec docker exec '+shlex.quote(sys.argv[2])+" psql -XAt -U postgres -d babytracker -c "+shlex.quote(sql)+"\n")
 os.chmod(sys.argv[1],0o700)
 HEAD_READER
   (run_matrix_child "$harness_root/Packages/BabyTracker" swift test --filter CapacityMatrixE2ETests/capacityMatrix) >> "$raw" 2>&1 &
@@ -245,9 +310,9 @@ if [[ $mode == foreground ]]; then
   validate_foreground_artifacts "$output/foreground.log" "$output/foreground-pairs.jsonl" "$foreground_case" | tee -a "$output/foreground.log"
 fi
 phase=artifacts
-head=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c 'SELECT revision FROM security_projection_head')
+head=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT count(*) FROM sessions WHERE status = 'consumed'")
 epoch=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c 'SELECT recovery_epoch FROM server_state WHERE singleton')
-jq -n --arg source "$source_sha" --arg binary "$binary_sha" --arg image "$image_id" --argjson head "$head" --argjson epoch "$epoch" --argjson schema "$schema" --arg foreground_case "$foreground_case" --argjson peer_store_measured "$([[ $mode == foreground ]] && echo true || echo false)" '{source_sha:$source,binary_sha:$binary,image_id:$image,security_events:$head,recovery_epoch:$epoch,schema:$schema,owned_application_binds:true,mode:"self_hosted",build:"identitytest-no-race",maintenance_isolated:true,cleanup_worker_admitted:true,foreground_case:$foreground_case,peer_store_measured:$peer_store_measured,ui_measured:false}' > "$output/composition.json"
+jq -n --arg source "$source_sha" --arg binary "$binary_sha" --arg image "$image_id" --argjson head "$head" --argjson epoch "$epoch" --argjson schema "$schema" --arg foreground_case "$foreground_case" --argjson peer_store_measured "$([[ $mode == foreground ]] && echo true || echo false)" '{source_sha:$source,binary_sha:$binary,image_id:$image,refresh_rotations:$head,recovery_epoch:$epoch,schema:$schema,owned_application_binds:true,mode:"self_hosted",build:"identitytest-no-race",maintenance_isolated:true,foreground_case:$foreground_case,peer_store_measured:$peer_store_measured,ui_measured:false}' > "$output/composition.json"
 if [[ -n $baseline_source ]]; then
   [[ $(git -C "$baseline_source" rev-parse HEAD) == d62286430734d469124ce3dec631b582c914aee5 && -z $(git -C "$baseline_source" status --porcelain --untracked-files=all) ]] || { echo "baseline changed during run" >&2; exit 1; }
 fi

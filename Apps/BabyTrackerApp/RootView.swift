@@ -21,6 +21,12 @@ struct RootView: View {
     @State private var babiesRealm: RealmID?
     @State private var sheet: LogSheet?
     @State private var isSwitchingBaby = false
+    /// The Home buttons screen, opened from the ··· sheet's last row. Queued
+    /// while that sheet closes: two sheets cannot change places in one step.
+    @State private var isEditingHomeButtons = false
+    @State private var editsHomeButtonsAfterDismiss = false
+    /// A widget's link that arrived before the store was open.
+    @State private var parkedLogLink: LogLink?
     /// The Join sheet: from the first-launch screen, or from an invitation
     /// link, which fills in its invitation.
     @State private var joinSheet: JoinSheetRequest?
@@ -94,6 +100,9 @@ struct RootView: View {
                         },
                         onJoinFamily: environment.familyModel.map { _ in { joinSheet = JoinSheetRequest(invitation: nil) } }
                     )
+                    // The whole screen here, not a sheet: it needs the ground
+                    // a sheet would otherwise give it.
+                    .background(Palette.ground.ignoresSafeArea())
                     // The family's babies arrive with the joiner's snapshot.
                     // The tabs watch the revision themselves; this screen has
                     // to, or a caregiver who just joined would stay here.
@@ -106,6 +115,8 @@ struct RootView: View {
                 StoreFailureView(message: environment.storeFailure ?? StoreFailureCopy.title) {
                     environment.retry()
                     reload()
+                    // A widget link that arrived while this screen was up.
+                    openParkedLogLink()
                 }
             }
         }
@@ -129,10 +140,24 @@ struct RootView: View {
         .onChange(of: isShowingActivityHandoff) { _, showing in
             if !showing { consumePendingQuickLog() }
         }
+        .onChange(of: isSwitchingBaby) { _, showing in
+            if !showing { consumePendingQuickLog() }
+        }
+        .onChange(of: isEditingHomeButtons) { _, showing in
+            if !showing { consumePendingQuickLog() }
+        }
+        // `babytracker://log?…` from the Quick Log widget, or
         // `babytracker://invite?…` — from the handoff page's "Open Baby
         // Tracker", or a QR code read by the Camera app. Routing decides;
         // nothing is redeemed until "Join {family}?" is confirmed.
         .onOpenURL { url in
+            // A Quick Log widget tile whose action needs the app. Checked
+            // before the invitation routing, which needs a family model that
+            // a phone outside a family does not have.
+            if LogLink.isLogLink(url) {
+                openLogLink(LogLink(url: url))
+                return
+            }
             guard let familyModel = environment.familyModel else { return }
             // On the mode, not `hasFamily`: a family in recovery is still
             // this phone's family, and gets the alert.
@@ -177,6 +202,9 @@ struct RootView: View {
             // existed. Read here only if the scene is already active; a
             // background launch leaves it for `.active` below.
             consumePendingQuickLog()
+            // A widget link can arrive before the store is open on a cold
+            // launch; `retry()` above has opened it by now.
+            openParkedLogLink()
             // A launch straight into the foreground may never report a change
             // to `.active`, so the cards are reconciled here too. Before the
             // sync: where the server pushes to the cards, any card with server
@@ -184,6 +212,7 @@ struct RootView: View {
             // sync, so this snapshot cannot replace a newer push.
             if let store = environment.store {
                 await LiveActivityController.reconcileBeforeSync(in: store)
+                await PumpActivityController.reconcile(in: store)
             }
             #if DEBUG
             UITestSupport.seedErrorBannerIfRequested(errorReporter)
@@ -205,7 +234,10 @@ struct RootView: View {
                 // pushed card: the server's own expiry, or the pass after
                 // the sync below).
                 if let store = environment.store {
-                    Task { await LiveActivityController.reconcileBeforeSync(in: store) }
+                    Task {
+                        await LiveActivityController.reconcileBeforeSync(in: store)
+                        await PumpActivityController.reconcile(in: store)
+                    }
                 }
                 Task { await environment.familyModel?.sceneBecameActive() }
             case .background:
@@ -255,12 +287,14 @@ struct RootView: View {
                     babyBirthDate: baby.birthDate,
                     babyAvatar: BabyAvatar(iconID: baby.iconID),
                     volumeUnit: environment.volumeUnit,
+                    homeOrder: environment.settings.homeOrder(for: baby.id),
                     onSwitchBaby: { isSwitchingBaby = true },
                     onAction: handleHomeAction,
                     // A running bottle was stopped: its amount is recorded as
                     // the timer finishes.
                     onFinishBottle: { timerID in sheet = .bottleStopped(timerID: timerID) },
                     syncStatus: homeSyncStatus,
+                    awaitCurrentState: homeAwaitCurrentState,
                     onSignIn: environment.familyModel.map { model in { try await model.signInWithApple() } },
                     syncSignInTitle: FamilySyncStatusCopy.signInAgain,
                     syncSignInButton: FamilySyncStatusCopy.signInButton
@@ -289,8 +323,10 @@ struct RootView: View {
                             volumeUnit: environment.volumeUnit
                         ),
                         babyName: baby.name,
+                        babyAvatar: BabyAvatar(iconID: baby.iconID),
                         birthDate: baby.birthDate,
                         volumeUnit: environment.volumeUnit,
+                        onSwitchBaby: { isSwitchingBaby = true },
                         onOpenSource: { source in
                             switch source {
                             case .runningTimer:
@@ -310,7 +346,8 @@ struct RootView: View {
                     store: store, babyID: baby.id, babyName: baby.name,
                     babyAvatar: BabyAvatar(iconID: baby.iconID), volumeUnit: environment.volumeUnit,
                     onSwitchBaby: { isSwitchingBaby = true },
-                    onOpenAllCheckIns: { historyFocus = HistoryFocus(filter: [.growth]); selectedTab = .history }
+                    onOpenAllCheckIns: { historyFocus = HistoryFocus(filter: [.growth]); selectedTab = .history },
+                    onEditEntry: { ref in sheet = .editEntry(ref) }
                 )
             }
             // A fourth tab, against the earlier note that the tab bar is only
@@ -324,12 +361,16 @@ struct RootView: View {
                     settings: environment.settings,
                     familyModel: environment.familyModel,
                     onBabyDeleted: { id in
+                        environment.settings.resetHomeOrder(for: id)
                         do { try environment.askConversations.removeBaby(id) }
                         catch { errorReporter.report("Could not remove Ask chat", error: error, category: AppLog.store) }
                     }
                 )
             }
         }
+        // One accent for the whole app (ruling R19): the tab bar's selected
+        // item and any untinted control, instead of the system blue.
+        .tint(Palette.feed)
         // Settings used to hand back a Done that reloaded this list. It is a
         // tab now with no way to say it finished, so the list follows the
         // store instead: every rename, add and delete in there goes through
@@ -339,19 +380,26 @@ struct RootView: View {
             // The engine pushes only if something is actually owed, so a
             // remote apply bumping the revision costs nothing.
             environment.familyModel?.localWriteHappened()
+            // A stop, a delete or a lost race that arrived by sync ends the pump card.
+            Task { await PumpActivityController.reconcile(in: store) }
             // A sync may have applied the other phone's stop under the editor.
             timerEditor?.refreshAvailability()
         }
         .fittedSheet(item: fittedLogPresentation(store: store, babyID: baby.id),
-                     onDismiss: presentQueuedInvitation) { _ in
+                     onDismiss: logSheetDismissed) { _ in
             if let current = sheet {
                 LogSheetView(
                     sheet: current,
                     store: store,
                     babyID: baby.id,
                     unit: environment.volumeUnit,
+                    homeOrder: environment.settings.homeOrder(for: baby.id),
                     onDone: { sheet = nil },
-                    onSwitchTo: { next in sheet = next }
+                    onSwitchTo: { next in sheet = next },
+                    onEditHomeButtons: {
+                        editsHomeButtonsAfterDismiss = true
+                        sheet = nil
+                    }
                 )
                 // Each panel's seed and state, without replacing the sheet.
                 .id(current.id)
@@ -387,6 +435,35 @@ struct RootView: View {
                 }
             )
         }
+        .sheet(isPresented: $isEditingHomeButtons, onDismiss: presentQueuedInvitation) {
+            NavigationStack {
+                HomeButtonsView(settings: environment.settings, babyID: baby.id, babyName: baby.name)
+                    .toolbar {
+                        ToolbarItem(placement: .confirmationAction) {
+                            Button(HomeButtonsView.doneTitle) { isEditingHomeButtons = false }
+                                .accessibilityIdentifier("homeButtons.done")
+                        }
+                    }
+            }
+        }
+        // The widget draws the same order.
+        .onChange(of: environment.settings.homeOrder(for: baby.id)) { _, _ in
+            WidgetCenter.shared.reloadAllTimelines()
+        }
+    }
+
+    /// The log sheet has closed. The Home buttons screen it asked for comes
+    /// up now; otherwise a queued invitation gets its turn, as before.
+    private func logSheetDismissed() {
+        if editsHomeButtonsAfterDismiss {
+            editsHomeButtonsAfterDismiss = false
+            isEditingHomeButtons = true
+        } else {
+            presentQueuedInvitation()
+            // A bottle and a pump stopped from the Lock Screen each left a
+            // prompt: the second is asked once the first closes.
+            if sheet == nil { consumePendingQuickLog() }
+        }
     }
 
     /// Home's dock and today strip, mapped onto this app's sheets and tabs.
@@ -394,6 +471,13 @@ struct RootView: View {
         switch action {
         case .bottle: sheet = .bottle
         case .diaper: sheet = .diaper
+        case .solids: sheet = .solids
+        case .growth: sheet = .measurement
+        case .vaccine: sheet = .immunization
+        case .pump: sheet = .pump
+        case .editPump(let id): sheet = .editEntry(.pump(id))
+        case .pumpStopped(let id): sheet = .pumpAmount(pumpID: id)
+        case .meds: sheet = .meds
         case .more: sheet = .more
         case .history: selectedTab = .history
         }
@@ -419,6 +503,13 @@ struct RootView: View {
         }
     }
 
+    /// Set only while the family engine catches up after the app came back:
+    /// a Home timer tap then waits for it rather than acting on old state.
+    private var homeAwaitCurrentState: (() async -> Void)? {
+        guard let model = environment.familyModel, model.syncIsCatchingUp else { return nil }
+        return { await model.waitForSyncCatchUp() }
+    }
+
     private var homeSyncStatus: HomeSyncStatus {
         guard let model = environment.familyModel, case .shared = model.mode else { return .hidden }
         guard let count = model.pendingDeliveryCount else { return .recoveryFailed("store") }
@@ -428,6 +519,7 @@ struct RootView: View {
         case .syncing: phase = .syncing
         case .upToDate(let date): phase = .current(date)
         case .offline: phase = .offline
+        case .serverUnreachable: phase = .serverUnreachable
         case .needsSignIn: phase = .needsSignIn
         case .failed(let message): phase = message == SyncIssueCopy.retrying ? .renewing : .failed(message)
         }
@@ -483,7 +575,11 @@ struct RootView: View {
     /// `isShowingActivityHandoff` reads it once the alert goes.
     private func consumePendingQuickLog() {
         guard scenePhase == .active else { return }
-        switch pendingQuickLog.consumeNextActivation(whileShowingHandoff: isShowingActivityHandoff) {
+        // Nothing is consumed while the handoff alert, the baby switcher or
+        // the Home buttons screen is up: "Set amount" could not present over
+        // them and would be gone. It is read when they close.
+        let blocked = isShowingActivityHandoff || isSwitchingBaby || isEditingHomeButtons
+        switch pendingQuickLog.consumeNextActivation(whileShowingHandoff: blocked) {
         case .activityHandoff:
             isShowingActivityHandoff = true
         case .quickLog(let request):
@@ -491,6 +587,33 @@ struct RootView: View {
         case nil:
             break
         }
+    }
+
+    /// A widget tile opened the app: Home, then that baby's panel. A link
+    /// this version cannot read, a baby deleted since the widget drew, a
+    /// caregiver who may not write, or anything already up — a panel, a
+    /// sheet, an alert: Home alone (`LogLink.panel`).
+    private func openLogLink(_ link: LogLink?) {
+        selectedTab = .home
+        guard let link else { return }
+        guard let store = environment.store else {
+            parkedLogLink = link
+            return
+        }
+        let isBusy = sheet != nil || timerEditor != nil || isSwitchingBaby || isEditingHomeButtons
+            || joinSheet != nil || isShowingActivityHandoff || isShowingAlreadyInFamily
+        guard let panel = link.panel(babies: ((try? store.babies()) ?? []).map(\.id),
+                                     canLog: store.canWriteInActiveRealm, isBusy: isBusy) else { return }
+        environment.selection.select(link.babyID)
+        reload()
+        sheet = panel
+    }
+
+    /// A widget link that arrived before the store was open, now that it may be.
+    private func openParkedLogLink() {
+        guard environment.store != nil, let link = parkedLogLink else { return }
+        parkedLogLink = nil
+        openLogLink(link)
     }
 
     private func presentPendingRequest(_ request: PendingQuickLogRequest) {
@@ -506,6 +629,10 @@ struct RootView: View {
             // amount; Home offers to set the real one.
             selectedTab = .home
             sheet = .bottleAmount(feedID: feedID)
+        case .pumpAmount(let pumpID):
+            // A pump stopped on its card: ask for the amount it was saved without.
+            selectedTab = .home
+            sheet = .pumpAmount(pumpID: pumpID)
         }
     }
 
@@ -518,6 +645,15 @@ struct RootView: View {
         guard let store = environment.store,
               let baby = environment.selection.resolve(from: babies) else { return }
         let arguments = ProcessInfo.processInfo.arguments
+        // `-uiTestHomeOrder bottle,breast`: the baby's Home order, set
+        // at launch. A `-key value` pair, read through the
+        // argument domain.
+        if let order = UserDefaults.standard.string(forKey: "uiTestHomeOrder") {
+            environment.settings.setHomeOrder(
+                HomeActionKind.order(fromStored: order.split(separator: ",").map(String.init)), for: baby.id)
+        } else if arguments.contains("-uiTestResetStore") {
+            environment.settings.resetHomeOrder(for: baby.id)
+        }
         if arguments.contains("-uiTestOpenDiaper") {
             sheet = .diaper
         } else if arguments.contains("-uiTestOpenBottle") {
@@ -529,6 +665,15 @@ struct RootView: View {
             sheet = .more
         } else if arguments.contains("-uiTestOpenPastEntry") {
             sheet = .pastEntry
+        } else if arguments.contains("-uiTestOpenVaccine") {
+            sheet = .immunization
+        } else if arguments.contains("-uiTestOpenPump") {
+            sheet = .pump
+        }
+        // `-uiTestLogLink solids`: a Quick Log widget tile's link for the
+        // seeded baby, whose id a test cannot know in advance.
+        if let kind = UserDefaults.standard.string(forKey: "uiTestLogLink").flatMap(HomeActionKind.init(rawValue:)) {
+            openLogLink(LogLink(kind: kind, babyID: baby.id))
         }
     }
     #endif

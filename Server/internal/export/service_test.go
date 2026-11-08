@@ -48,6 +48,12 @@ func TestOwnerExportCreateWorkerDownloadAndExpiry(t *testing.T) {
 	if _, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "supplement.json")); err != nil {
 		t.Fatal(err)
 	}
+	if out, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "immunization.json")); err != nil || out.Status != "applied" {
+		t.Fatalf("immunization %+v %v", out, err)
+	}
+	if out, err := h.Service.Apply(t.Context(), h.Owner, h.FamilyID, testkit.MustMutation(t, "pump.json")); err != nil || out.Status != "applied" {
+		t.Fatalf("pump %+v %v", out, err)
+	}
 	s, w := newExportServices(t, h)
 	id := "30000000-0000-4000-8000-000000001901"
 	created, fresh, err := s.Create(t.Context(), h.Owner, request(id))
@@ -83,7 +89,7 @@ func TestOwnerExportCreateWorkerDownloadAndExpiry(t *testing.T) {
 	if err := json.Unmarshal(raw.Bytes(), &archive); err != nil {
 		t.Fatal(err)
 	}
-	if archive.FamilyID != h.FamilyID || len(archive.Babies) != 1 || len(archive.Feeds) != 1 || len(archive.Supplements) != 1 || len(archive.Journal) < 3 {
+	if archive.FamilyID != h.FamilyID || len(archive.Babies) != 1 || len(archive.Feeds) != 1 || len(archive.Supplements) != 1 || len(archive.Immunizations) != 1 || len(archive.Pumps) != 1 || len(archive.Journal) < 5 {
 		t.Fatalf("archive family=%s babies=%d feeds=%d supplements=%d journal=%d", archive.FamilyID, len(archive.Babies), len(archive.Feeds), len(archive.Supplements), len(archive.Journal))
 	}
 	for _, event := range archive.Audit {

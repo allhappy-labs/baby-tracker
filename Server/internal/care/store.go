@@ -111,6 +111,9 @@ const (
 		WHERE family_id = $1 AND tombstoned_at IS NULL AND baby_id = ANY($2::uuid[])`
 	// care_entities_baby_match_idx.
 	sqlFetchLiveBabies = `SELECT count(*) FROM care_entities WHERE family_id = $1 AND kind = 1 AND tombstoned_at IS NULL`
+	// care_entities_one_open_pump. Kind code literal: 10 pump.
+	sqlFetchOpenPump = `SELECT ` + withWire + ` FROM care_entities
+		WHERE family_id = $1 AND kind = 10 AND tombstoned_at IS NULL AND ended_at IS NULL`
 
 	// care_entities_pkey (conflict target); the WHERE keeps a stored row from
 	// moving back in version or changing kind. The origin (created_device_id,
@@ -147,9 +150,12 @@ const (
 	// care_entities_seq_key.
 	sqlChanges = `SELECT ` + changeColumns + ` FROM care_entities
 		WHERE family_id = $1 AND changed_seq > $2 AND changed_seq <= $3 ORDER BY changed_seq LIMIT $4`
-	// families_pkey, then care_entities_seq_key bounded by the high water
-	// the same statement read.
-	sqlReadPull = `WITH hw AS (SELECT next_sequence FROM families WHERE id = $1)
+	// families_pkey (inside app.family_high_water, 000037), then
+	// care_entities_seq_key bounded by the high water the same statement
+	// read: a STABLE function runs in its caller's snapshot. The function
+	// keeps families out of this statement's plan, so a VACUUM or ANALYZE
+	// of families does not make every backend plan the pull again.
+	sqlReadPull = `WITH hw AS (SELECT next_sequence FROM app.family_high_water($1) AS f(next_sequence))
 	SELECT hw.next_sequence, c.changed_seq, c.kind, c.id::text, c.entity_version, c.actor_account_id::text, c.device_id::text,
 		c.operation::text, c.accepted_at, c.wire
 	FROM hw LEFT JOIN LATERAL (
@@ -264,6 +270,8 @@ type Refs struct {
 	DeviceID    string
 	// CountLiveBabies counts the family's live babies.
 	CountLiveBabies bool
+	// OpenPump loads the family's running pump, if it has one.
+	OpenPump bool
 }
 
 // StoredReceipt is a receipt of the device for one mutation id. SameFamily
@@ -276,11 +284,13 @@ type StoredReceipt struct {
 
 // Fetched is what Fetch read: the locked family's state, the rows by id,
 // session members and cascade targets (WireBytes set, Wire nil), live
-// timers, the live baby count and the receipts by mutation id.
+// timers, the running pump, the live baby count and the receipts by
+// mutation id.
 type Fetched struct {
 	Family                                     FamilyState
 	Rows                                       map[string]Row
 	SessionMembers, LiveTimers, CascadeTargets []Row
+	OpenPumps                                  []Row
 	LiveBabies                                 int
 	Receipts                                   map[string]StoredReceipt
 }
@@ -288,7 +298,8 @@ type Fetched struct {
 // Fetch locks the family row and reads everything refs names in one
 // pipelined round trip: the lock first, then the receipts, the rows (with
 // the stopped timers' completions), session members, live timers, cascade
-// targets and the live baby count, each only when refs asks for it.
+// targets, the running pump and the live baby count, each only when refs
+// asks for it.
 func Fetch(ctx context.Context, tx pgx.Tx, familyID string, refs Refs) (Fetched, error) {
 	fetched := Fetched{Rows: map[string]Row{}, Receipts: map[string]StoredReceipt{}}
 	batch := &pgx.Batch{}
@@ -358,6 +369,9 @@ func Fetch(ctx context.Context, tx pgx.Tx, familyID string, refs Refs) (Fetched,
 	}
 	if len(refs.CascadeBabyIDs) > 0 {
 		queue(sqlFetchCascadeTargets, rowsInto(&fetched.CascadeTargets), familyID, refs.CascadeBabyIDs)
+	}
+	if refs.OpenPump {
+		queue(sqlFetchOpenPump, rowsInto(&fetched.OpenPumps), familyID)
 	}
 	if refs.CountLiveBabies {
 		queue(sqlFetchLiveBabies, func(results pgx.BatchResults) error {
@@ -716,6 +730,26 @@ func ReadPull(ctx context.Context, tx pgx.Tx, familyID string, after uint64, lim
 	if err != nil {
 		return 0, nil, err
 	}
+	return scanPull(rows)
+}
+
+// QueuePull queues ReadPull's statement on b (the pull sent with the
+// commit, authority.CommitPipeline); read returns what ReadPull returns,
+// from that statement's results, after everything queued before it was
+// read.
+func QueuePull(b *pgx.Batch, familyID string, after uint64, limit int) (read func(pgx.BatchResults) (uint64, []ChangeRow, error)) {
+	b.Queue(sqlReadPull, familyID, int64(after), limit)
+	return func(results pgx.BatchResults) (uint64, []ChangeRow, error) {
+		rows, err := results.Query()
+		if err != nil {
+			return 0, nil, err
+		}
+		return scanPull(rows)
+	}
+}
+
+// scanPull reads sqlReadPull's rows and closes them.
+func scanPull(rows pgx.Rows) (highWater uint64, changes []ChangeRow, err error) {
 	defer rows.Close()
 	found := false
 	changes = []ChangeRow{}

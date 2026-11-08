@@ -110,6 +110,13 @@ if [ "$negative_probes" = 0 ]; then
 		  test "$(sql "SELECT bool_and(has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE')) FROM unnest(ARRAY['app.push_targets(uuid[],uuid[])','app.prune_push_tokens(integer)','app.forget_push_token(uuid,bytea)','app.ensure_audit_partitions(timestamp with time zone)','app.purge_family_step(uuid,integer)']) f")" = t
 		  test "$(sql "SELECT to_regclass('public.rate_limit_buckets') IS NULL AND to_regprocedure('app.take_rate_limits(jsonb,timestamp with time zone)') IS NULL")" = t
 		fi
+		# Schema 35 (owner decision D1): the audit retention drop is a
+		# maintenance-only definer, and the retention anchors are read by the
+		# runtime alone (only the definer writes them).
+		if [ "$(sql "SELECT current_version >= 35 FROM schema_compatibility WHERE singleton")" = t ]; then
+		  test "$(sql "SELECT has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE') FROM (SELECT 'app.drop_expired_audit_partition(timestamp with time zone)' AS f) d")" = t
+		  test "$(sql "SELECT has_table_privilege('baby_tracker_runtime','public.audit_retention_anchors','SELECT') AND NOT has_table_privilege('baby_tracker_runtime','public.audit_retention_anchors','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AND NOT bool_or(has_table_privilege(r,'public.audit_retention_anchors','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public','baby_tracker_maintenance']) r")" = t
+		fi
 		# Schema 32 (Phase 4): Live Activity push on the authority schema. The
 		# runtime registers its own devices and card tokens: SELECT, INSERT and
 		# UPDATE on the two tenant tables (each privilege checked on its own),
@@ -399,6 +406,13 @@ if [ "$(sql "SELECT to_regclass('public.schema_migrations') IS NOT NULL")" = t ]
 		  test "$(sql "SELECT NOT bool_or(has_any_column_privilege(r,t,p)) FROM unnest(ARRAY['public']) r CROSS JOIN unnest(ARRAY['public.device_sync_cursors','public.device_push_tokens']) t CROSS JOIN unnest(ARRAY['SELECT','INSERT','UPDATE','REFERENCES']) p")" = t
 		  test "$(sql "SELECT bool_and(has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE')) FROM unnest(ARRAY['app.push_targets(uuid[],uuid[])','app.prune_push_tokens(integer)','app.forget_push_token(uuid,bytea)','app.ensure_audit_partitions(timestamp with time zone)','app.purge_family_step(uuid,integer)']) f")" = t
 		  test "$(sql "SELECT to_regclass('public.rate_limit_buckets') IS NULL AND to_regprocedure('app.take_rate_limits(jsonb,timestamp with time zone)') IS NULL")" = t
+		fi
+		# Schema 35 (owner decision D1): the audit retention drop is a
+		# maintenance-only definer, and the retention anchors are read by the
+		# runtime alone (only the definer writes them).
+		if [ "$(sql "SELECT current_version >= 35 FROM schema_compatibility WHERE singleton")" = t ]; then
+		  test "$(sql "SELECT has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE') FROM (SELECT 'app.drop_expired_audit_partition(timestamp with time zone)' AS f) d")" = t
+		  test "$(sql "SELECT has_table_privilege('baby_tracker_runtime','public.audit_retention_anchors','SELECT') AND NOT has_table_privilege('baby_tracker_runtime','public.audit_retention_anchors','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AND NOT bool_or(has_table_privilege(r,'public.audit_retention_anchors','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public','baby_tracker_maintenance']) r")" = t
 		fi
 		# Schema 32 (Phase 4): Live Activity push on the authority schema. The
 		# runtime registers its own devices and card tokens: SELECT, INSERT and

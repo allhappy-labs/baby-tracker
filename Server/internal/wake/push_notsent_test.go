@@ -75,6 +75,9 @@ func TestAPushThatNeverReachedTheWireIsOwed(t *testing.T) {
 			if stats := pushTick(t, w); stats.Pushed != 0 || stats.PushFailed != 1 {
 				t.Fatalf("%+v, want no send made and one failed", stats)
 			}
+			if totals := w.Totals(); totals.NotSent != 1 || totals.Ambiguous != 0 || totals.PushFailed != 1 || totals.Pushed != 0 {
+				t.Fatalf("totals %+v, want one not sent", totals)
+			}
 			if row := pushRows(t, h, h.FamilyID)[device.DeviceID]; row.Pushed != before.Pushed || row.PushedAt == nil || !row.PushedAt.Equal(sentAt) {
 				t.Fatalf("row %+v, want the sequence given back (%d) and the time kept", row, before.Pushed)
 			}

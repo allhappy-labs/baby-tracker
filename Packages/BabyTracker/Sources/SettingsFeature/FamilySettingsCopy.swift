@@ -101,7 +101,6 @@ enum PendingInvitationCopy {
     static let refreshFailed = String(localized: "Couldn't refresh invitations", bundle: .module)
     static let retry = String(localized: "Retry", bundle: .module)
     static let revoke = String(localized: "Revoke", bundle: .module)
-    static let unavailableTitle = String(localized: "Invitation", bundle: .module)
     static let unavailableMessage = String(localized: "This code was created before a reinstall or on another phone. Revoke it and create a new one if you need to share it again.", bundle: .module)
     static let close = String(localized: "Close", bundle: .module)
 

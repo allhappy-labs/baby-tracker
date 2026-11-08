@@ -2,9 +2,18 @@
 
 Date: 2026-10-09. Part 1 of the pumping request. The Lock Screen card on the *other* phone (server push) is deliberately out of scope, and the user chose to leave it out for now.
 
+> **Revision 2026-10-12 (technical sections only).** The server and the app moved under this design before it was built, so the parts that name storage, versions and entry points were rewritten. The intent, the decisions below and every user-facing behaviour are unchanged.
+> - **Server storage.** Care data now lives in one hash-partitioned table, `care_entities`, with a smallint care kind per record; the per-kind tables, the journal and the snapshot staging are gone. A pump is **care kind 10** with `baby_id` NULL, not a `pump_entries` table.
+> - **Migration and compatibility.** `000034_pumping.sql`, window `min 34, max 34` (`000030` was squashed into the baseline; `000033` is immunizations).
+> - **Phone schema.** `SchemaV12` with a lightweight V11→V12 stage (`SchemaV11` is immunizations).
+> - **Entry point.** Home's buttons became arrangeable per baby. Pump is a Home action, last in the default order, so by default it is in the More (…) sheet and the dock is unchanged, as decided; like every Home action it can be moved in Settings › Home buttons, and a Quick Log widget tile for it opens the pump panel.
+> - **Panels.** Entry panels landed: the pump panel is an `EntryPanel` in a fitted sheet.
+> - **Exports.** The History PDF prints what History lists, so finished pumps appear in it. The read-only MCP does not list pumps, as it does not list immunizations.
+
 Related:
 - [Baby icons and shared switcher](2026-10-08-baby-icons-switcher-design.md): the same deploy-order rule applies.
 - [Entry panels](2026-10-09-entry-panels-design.md): the pump panel follows its layout.
+- [Immunizations](2026-10-11-immunizations-design.md): the precedent for adding a synced kind to `care_entities`.
 
 ## Intent
 
@@ -48,7 +57,7 @@ The usual bookkeeping applies: realm, created by, last modified, tombstone.
   - The timer system assumes a baby at every level: the database, the stop-to-entry conversion and the Lock Screen push. A family-scoped timer would touch all of that.
   - An open-ended entry has precedent: an open sleep.
 - **At most one running pump per family.**
-  - On the server, a unique partial index `(family_id) WHERE ended_at IS NULL AND tombstoned_at IS NULL` enforces it. A second start that loses the race is rejected as superseded, the same way a duplicate timer start is.
+  - On the server, the write path decides it under the family lock, and a unique partial index on `care_entities` `(family_id) WHERE kind = 10 AND ended_at IS NULL AND tombstoned_at IS NULL` backs it. A second start that loses the race is rejected as superseded, the same way a duplicate timer start is.
   - The client checks for a running pump before it creates one.
 - **Validation:**
   - `side` must be in the set;
@@ -59,17 +68,19 @@ The usual bookkeeping applies: realm, created by, last modified, tombstone.
 
 ### Server
 
-- **Migration `000030_pumping.sql`** adds `public.pump_entries`. It follows the supplements/growth pattern: standard meta columns, `PRIMARY KEY (family_id, id)`, the `last_sequence` FK, RLS `family_context`, grants and privilege-manifest rows, and a compatibility bump to 30. The entity-kind CHECKs on the journal, snapshot and import manifests are re-created to include `pump`. There is **no** baby FK.
-- **Protocol:** a `PumpPayload` (payload version 1) with `create`, `update` and `delete`. It is added to every kind list, decode switch and operation matrix.
-- **Records:** a `pumps.go` like `supplements.go`. The baby-required guard in `Repository.Apply` skips `pump`.
-- **Baby deletion:** the child-delete cascade does **not** include pumps.
-- **Snapshot, journal, export:** `pump` is included, so the JSON backup carries pumps.
-- **Import:** pumps are new, so a legacy import has none. The manifest code must not assume every non-baby kind has a `baby_id`.
+- **Storage:** a pump is a `care_entities` row of **care kind 10**. `baby_id` is NULL, as it is for a baby row; `started_at` and `ended_at` are typed columns; the side, the amount and the note live in the stored wire. No new table, policy or grant.
+- **Migration `000034_pumping.sql`** widens the kind checks to 10, lets kind 10 have no baby and an end, bounds a pump's end at six hours after its start, adds the one-running-pump index, widens the snapshot resume-kind check, restates the two kind comments, copies the privilege manifest to 34 and moves the compatibility window to exactly 34. The import manifest's kind check is not widened: a pump is never an import record.
+- **Protocol:** a `PumpPayload` (payload version 1) with `create`, `update` and `delete`. It is added to every kind list, decode switch and operation matrix. A pump's delete payload is `{}`, like a baby's.
+- **Care rules (`internal/care`):** `KindPump = 10`; the baby-required check skips `pump`; a start or end later than the accept time plus one minute is refused; a finished pump cannot be reopened; a second running pump is superseded with the running one as the canonical entity. A pump counts toward the family's record quota like any other record.
+- **Baby deletion:** the cascade selects rows by `baby_id`, so it never reaches a pump.
+- **Per-baby readers:** the family read service (MCP history and summary) and the Live Activity projection select by `baby_id`, so they never see a pump. The MCP does not list pumps.
+- **Snapshot, pull, export:** `pump` is included. Snapshots page it last (kind order 10), and the owner archive carries a `pumps` section, so the JSON backup carries pumps.
+- **Import:** a pump has no baby for the resolver to map, so it is never in a record manifest. The phone sends pumps logged before the family as plain creates once the workspace moves into the family.
 
 ### Phone
 
 - **Model:** a `PumpEntry` SwiftData model.
-- **Schema:** `SchemaV11` keeps `SchemaV10` frozen where models change, with a lightweight V10→V11 stage.
+- **Schema:** `SchemaV12` = `SchemaV11.models + [PumpEntry.self]`, with a lightweight V11→V12 stage. No V11 model changes, so nothing is frozen.
 - **Sync:** `PumpEntry` is ChangeLoggable but **not** `BabyOwnedRecord`. It is added to the wire kind, mutation factory, content hash, remote apply, realm moves and wipes, and the import capture. Every place that drops rows without a `baby_id` must keep pumps.
 - **Queries:**
   - `pumps(in range)` reads the whole realm;
@@ -78,12 +89,16 @@ The usual bookkeeping applies: realm, created by, last modified, tombstone.
 
 ### Deploy order
 
-Server first (migration 30), then the merge, then the phones. A schema-29 server rejects a request carrying a `pump` mutation as `invalid_request`, and the client then quarantines those mutations for good. This is the same rule as for baby icons.
+Server first (migration 34), then the merge, then the phones. This is the same rule as for baby icons and immunizations.
+- A schema-33 server refuses a whole sync request that carries a `pump` mutation as `invalid_request`. The client halves the batch until the refusal names one entry, then quarantines that entry for good.
+- A phone on a build that does not know `pump` cannot skip a pump change: its sync page is refused and its cursor stops until the phone is updated. Both phones must run the new build before the first pump is started.
+- The new server binary serves only schema 34, and the old one only schema 33, so the migration and the restart are one step.
 
 ## 2. Starting, running and stopping
 
 - **Start:**
   - More (…) → **Pump** opens a small panel: **Left / Right / Both**, then **Start**.
+  - Pump is a Home action (`pump`), appended last in the default order, after Vaccine. That puts it in More by default and leaves the dock as it is. It follows the baby's Home order like every other action: moved onto the dock it is a tile that opens the same panel, and it stays available while a feed or a sleep runs.
   - The panel offers only **Edit running** when a pump is already running, whichever phone started it.
 - **While it runs:**
   - Every baby's Home shows a compact **pump strip** above the dock: pump icon, "Pumping · Both · 12:34" (elapsed, live), and **Stop**.
@@ -111,7 +126,7 @@ The pump panel follows the [entry panels](2026-10-09-entry-panels-design.md) lay
 
 The same panel logs a past session (More → Past entry → Pump) and edits one from History.
 
-If entry panels has not landed when this is built, the pump panel uses the same building blocks it specifies (`EditTimeRow`, fitted height), so it needs no rework later.
+Entry panels has landed: the pump panel is an `EntryPanel` with `PanelSection` rows, `TimeSpanSection` and `DetailsSection`, presented in a fitted sheet (no `Form`, no navigation bar).
 
 ## 3. Where finished sessions show
 
@@ -122,6 +137,7 @@ If entry panels has not landed when this is built, the pump panel uses the same 
   - The tracker filter gets **Pump**.
   - Tapping a row opens the pump panel. Delete soft-deletes the session.
   - Pumps appear in every baby's History. They are the same rows, not copies.
+  - The History PDF prints the rows History lists, so a finished pump is a line in it. A running pump is not printed.
 - **Home Today card:** a pump item with today's pumped total in the user's unit and "last 2h 27m ago". It counts finished sessions only, and is the same on every baby's Home. Sessions without an amount count toward "last" but add nothing to the total.
 - **Ask:**
   - `pump` joins the kinds Ask's existing reads accept: totals (amount and count), entries, and latest.
@@ -151,14 +167,14 @@ If entry panels has not landed when this is built, the pump panel uses the same 
   - the wire payload shape;
   - remote apply create/update/delete;
   - the content hash.
-- **Schema:** a V10 store opens in place under V11.
+- **Schema:** a V11 store opens in place under V12.
 - **Server (Go):**
   - validation bounds;
   - one running pump per family, with the race loser superseded;
   - a pump survives a baby delete;
-  - snapshot, journal and export include pumps;
-  - the migration and the kind CHECKs.
+  - a snapshot, a pull and the export include pumps;
+  - migration 000034 over a schema-33 database with rows, and the kind checks.
 - **Protocol end-to-end:** two phones; one runs a bottle while the other starts and stops a pump with an amount; both phones and a fresh snapshot agree.
 - **Ask:** pump totals and the latest session come back through the existing reads.
-- **UI tests (a small subset):** start from More, the strip appears next to a running bottle, Stop then How much? then Save, and the History row. Each asserts logic, never layout geometry.
+- **UI tests (a small subset):** start from More, the strip appears next to a running bottle, Stop then How much? then Save, the History row, and Pump as a Home button. Each asserts logic, never layout geometry.
 - **Simulator screenshots:** the strip alongside a running bottle, the Lock Screen card, the History row, and the Today card.

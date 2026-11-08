@@ -28,7 +28,7 @@
 - **SwiftData:** add `SchemaV10`. `SchemaV9` keeps a frozen copy of the old `Baby` shape. Add one lightweight stage from V9 to V10. A V9 store must open **in place**, not be moved aside.
 - **Accessibility ids that must survive:** `home.babySwitcher`, `history.babySwitcher`, `history.babyName`, `insights.babySwitcher`, `insights.babyName`.
 - **Header type:** name in `.title2.weight(.bold)`, `lineLimit(2)`, `minimumScaleFactor(0.8)`. Icon 32 pt in the header, 28 pt in list rows. Tap area at least 44 pt.
-- **Simulator:** only the shared device `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`. Run `pgrep xcodebuild` first, and never run two xcodebuild jobs at once.
+- **Simulator:** only the shared device `platform=iOS Simulator,id=<simulator-udid>`. Run `pgrep xcodebuild` first, and never run two xcodebuild jobs at once.
 - **Test count:** `make test` asserts a literal total (`Makefile` `EXPECTED_TESTS`, currently 1618). Every task that adds Swift tests bumps it in the same commit by exactly the number of new test cases the run reports.
 - **History import:** the server builds imported babies from `ImportBaby`, which has no icon, and that stays as it is. After an import, the fill-in pass in Task 5 gives the family's babies their icons again, in the same fixed order. Do not change `ImportBaby`, `import_baby_candidates` or the importer.
 - **Branch:** work in a worktree on branch `feat/baby-icons`, never directly on `main`. Other sessions commit to `main` in parallel.
@@ -949,7 +949,7 @@ Run: `make test`, then update `EXPECTED_TESTS`.
 Then build:
 
 ```bash
-pgrep xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build
+pgrep xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build
 ```
 
 Expected: BUILD SUCCEEDED.
@@ -1186,14 +1186,14 @@ Run: `make test`. Expect PASS at an unchanged total. This task adds no unit test
 Then build:
 
 ```bash
-pgrep xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build
+pgrep xcodebuild || xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build
 ```
 
 - [ ] **Step 4: Run the switcher UI tests (a subset only).**
 
 ```bash
 pgrep xcodebuild || xcodebuild test -scheme BabyTracker \
-  -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/GrowthFlowUITests \
   -only-testing:BabyTrackerUITests/SettingsFlowTests \
@@ -1236,7 +1236,7 @@ Add `import BabyCore` if needed.
 
 ```bash
 pgrep xcodebuild || xcodebuild test -scheme BabyTracker \
-  -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/SettingsFlowTests \
   -only-testing:BabyTrackerUITests/GrowthFlowUITests

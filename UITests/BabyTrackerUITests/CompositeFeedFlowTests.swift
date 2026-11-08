@@ -27,6 +27,7 @@ final class CompositeFeedFlowTests: XCTestCase {
         for chip in ["bottle.chip.1", "bottle.chip.2"] {
             XCTAssertTrue(app.tap(app.buttons["home.bottle"], until: app.buttons[chip]))
             app.buttons[chip].tap()
+            app.buttons["bottle.log"].tap()
             XCTAssertTrue(app.buttons[chip].waitForNonExistence(timeout: 5), "\(chip) did not log and close")
         }
 

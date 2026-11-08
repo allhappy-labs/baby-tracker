@@ -24,6 +24,36 @@ final class HistoryRedesignTests: XCTestCase {
 
     // MARK: - Split here and Join
 
+    // MARK: - Add part
+
+    /// Solids added from a feed's Add part open the Solids panel over the
+    /// feed, and once named they list as the feed's last part.
+    func testSolidsAddedToAFeedListAsItsPart() {
+        let app = launchHistory()
+        defer { app.terminate() }
+
+        let feed = app.feedSessionRows.firstMatch
+        XCTAssertTrue(feed.waitForExistence(timeout: 10), app.debugDescription)
+        feed.tap()
+        XCTAssertTrue(app.sessionPart(2).waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertFalse(app.sessionPart(3).exists)
+
+        app.buttons["sessionSheet.addPart"].firstMatch.tap()
+        let solids = app.buttons["sessionSheet.add.solids"].firstMatch
+        XCTAssertTrue(solids.waitForExistence(timeout: 5), app.debugDescription)
+        solids.tap()
+
+        let foods = app.textFields["solids.foods"].firstMatch
+        XCTAssertTrue(foods.waitForExistence(timeout: 5), app.debugDescription)
+        foods.tap()
+        foods.typeText("pear")
+        app.buttons["solids.save"].firstMatch.tap()
+
+        let added = app.sessionPart(3)
+        XCTAssertTrue(added.waitForExistence(timeout: 5), app.debugDescription)
+        XCTAssertTrue(added.label.contains("Pear"), added.label)
+    }
+
     // MARK: - Swipe to delete
 
     /// A session asks first; Keep it leaves the row, Delete removes it.

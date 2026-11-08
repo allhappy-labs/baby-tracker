@@ -16,33 +16,32 @@ public struct FamilyExportView: View {
     }
 
     public var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            CardSection {
                 Text(FamilyExportCopy.introduction)
                     .font(.callout)
+                    .fixedSize(horizontal: false, vertical: true)
                 switch model.state {
                 case .idle:
-                    Button(FamilyExportCopy.request) { Task { await model.request() } }
-                        .accessibilityIdentifier("export.request")
+                    ActionRow(FamilyExportCopy.request, identifier: "export.request") { Task { await model.request() } }
                 case .preparing:
                     ProgressView(FamilyExportCopy.preparing)
                         .accessibilityIdentifier("export.preparing")
                 case .ready:
-                    Button(FamilyExportCopy.downloadAndShare) {
+                    ActionRow(FamilyExportCopy.downloadAndShare, identifier: "export.download") {
                         downloadTask = Task {
                             await model.downloadAndShare()
                             downloadTask = nil
                         }
                     }
-                        .accessibilityIdentifier("export.download")
                 case .sharing:
                     ProgressView(FamilyExportCopy.sharing)
                 case .expired:
                     Text(FamilyExportCopy.expired)
-                    Button(FamilyExportCopy.requestNew) { Task { await model.request() } }
+                    ActionRow(FamilyExportCopy.requestNew, identifier: "export.requestNew") { Task { await model.request() } }
                 case .failed(let message):
-                    Text(message).foregroundStyle(.red)
-                    Button(FamilyExportCopy.tryAgain) { Task { await model.request() } }
+                    InlineError(message)
+                    ActionRow(FamilyExportCopy.tryAgain, identifier: "export.tryAgain") { Task { await model.request() } }
                 }
             } footer: {
                 Text(FamilyExportCopy.sharingFooter)

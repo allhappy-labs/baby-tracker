@@ -246,8 +246,10 @@ func signInHash(in SignIn) ([32]byte, error) {
 // Candidates[0]; an active identity keeps its key; an identity_unavailable
 // one is restored; a registered device must be new; an existing device must
 // be active and bound to the account, origin and continuity digest
-// (device_continuity_invalid); the session ID must be new. Any other failure
-// is invalid_command. Locks: the account
+// (device_continuity_invalid); the session ID must be new. A proposed live
+// account whose deletion committed after the caller resolved it is
+// security_busy (the caller's next sign-in registers the next generation).
+// Any other failure is invalid_command. Locks: the account
 // row (a registration's concurrent twin loses on the primary key, as
 // security_busy).
 func (s *Service) SignIn(ctx context.Context, in SignIn) (SignInResult, error) {
@@ -284,6 +286,13 @@ func (s *Service) SignIn(ctx context.Context, in SignIn) (SignInResult, error) {
 	identityKey := resolution.IdentityKey
 	switch resolution.Status {
 	case "absent", "deleted":
+		// The caller resolved this very account while it was live, and its
+		// deletion committed before this transaction locked it: a lost race,
+		// not a malformed command. The client signs in again and registers
+		// the next generation.
+		if resolution.Status == "deleted" && in.ProposedAccountID == resolution.AccountID && in.ProposedGeneration == resolution.LifecycleGeneration {
+			return SignInResult{}, fmt.Errorf("authority: sign-in's account %s was deleted after it was resolved: %w", in.ProposedAccountID, ErrSecurityBusy)
+		}
 		if in.ProposedGeneration != resolution.NextActorGeneration || exists {
 			return SignInResult{}, ErrInvalidCommand
 		}
@@ -448,11 +457,26 @@ func signInPresentation(ctx context.Context, tx pgx.Tx, accountID string, result
 
 // signInReplay rebuilds an exact retry's result: the stored result, the
 // flags from the audit row it committed, and current presentation.
+//
+// Command receipts are kept forever but audit rows for at least 13 months
+// (owner decision D1): a retry of a sign-in whose row expired with its
+// partition (its seq is at or below the account's retention anchor) is
+// answered from the receipt with neither flag set. The sign-in is that old,
+// so the account is no longer newly registered or restored by it. A row
+// missing above the anchor is not expired: that stays service_unavailable
+// (the verifier fails the chain).
 func signInReplay(ctx context.Context, tx pgx.Tx, accountID string, stored Result) (SignInResult, error) {
 	var kind string
 	var registered bool
 	err := tx.QueryRow(ctx, `SELECT kind::text, coalesce((payload->>'register_account')::boolean, false) FROM security_audit_events
 		WHERE scope='account' AND scope_id=$1 AND seq=$2 AND command_id=$3`, accountID, int64(stored.Revision), stored.CommandID).Scan(&kind, &registered)
+	if errors.Is(err, pgx.ErrNoRows) {
+		anchor, _, anchorErr := retentionAnchor(ctx, tx, ScopeRef{Scope: ScopeAccount, ID: accountID})
+		if anchorErr == nil && stored.Revision <= anchor.seq {
+			return signInPresentation(ctx, tx, accountID, stored, false, false)
+		}
+		err = errors.Join(err, anchorErr)
+	}
 	if err != nil {
 		return SignInResult{}, fmt.Errorf("authority: read sign-in audit row: %w", errors.Join(err, ErrUnavailable))
 	}

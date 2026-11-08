@@ -16,11 +16,11 @@ import (
 )
 
 // cascadeOrder is the legacy cascade order of child kinds.
-var cascadeOrder = map[string]int{"feed": 0, "sleep": 1, "diaper": 2, "supplement": 3, "growth_profile": 4, "measurement": 5, "timer": 6}
+var cascadeOrder = map[string]int{"feed": 0, "sleep": 1, "diaper": 2, "supplement": 3, "growth_profile": 4, "measurement": 5, "immunization": 6, "timer": 7}
 
 // sortedChildren is the live children of baby among rows in cascade order:
 // by kind (feed, sleep, diaper, supplement, growth_profile, measurement,
-// timer), then by id.
+// immunization, timer), then by id.
 func sortedChildren(rows map[string]care.Row, baby string) []care.Row {
 	var children []care.Row
 	for _, r := range rows {
@@ -48,7 +48,7 @@ func TestBabyDeleteCascadeIsSetBasedAndOrdered(t *testing.T) {
 	a, b := caretest.BabyA, caretest.BabyB
 	caretest.Seed(t, h, caretest.Baby(a), caretest.Baby(b), caretest.Feed(a, 1))
 	const children = 5000
-	kinds := []string{"feed", "sleep", "diaper", "supplement", "measurement"}
+	kinds := []string{"feed", "sleep", "diaper", "supplement", "measurement", "immunization"}
 	seed := []protocol.Mutation{caretest.GrowthProfile(b), caretest.StartTimer(b, caretest.TimerB, "feed")}
 	for n := 0; len(seed) < children; n++ {
 		seed = append(seed, caretest.Record(kinds[n%len(kinds)], b, 10+n))

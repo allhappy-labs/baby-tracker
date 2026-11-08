@@ -17,6 +17,7 @@ struct MemberDetailView<Model: FamilySyncSettingsModel>: View {
     @State private var pendingConfirmation: FamilyLifecycleConfirmation?
     @State private var isWorking = false
     @Environment(\.dismiss) private var dismiss
+    @Environment(\.dynamicTypeSize) private var typeSize
     @Environment(\.errorReporter) private var errorReporter
     /// An invitation link arrived: "Remove X?" and its kin give way to the
     /// link's Join sheet or alert, and say when they have gone.
@@ -35,24 +36,32 @@ struct MemberDetailView<Model: FamilySyncSettingsModel>: View {
     }
 
     var body: some View {
-        Form {
-            Section {
-                HStack(spacing: 16) {
+        SettingsPage {
+            CardSection {
+                // The name under the avatar at the accessibility sizes:
+                // beside it, a name was broken mid-word.
+                let layout = typeSize.isAccessibilitySize
+                    ? AnyLayout(VStackLayout(alignment: .leading, spacing: Spacing.s))
+                    : AnyLayout(HStackLayout(spacing: Spacing.l))
+                layout {
                     MemberAvatar(member: member, diameter: 56)
                     VStack(alignment: .leading, spacing: 2) {
                         Text(member.displayName)
                             .font(.title3.weight(.semibold))
+                            .fixedSize(horizontal: false, vertical: true)
                         Text(member.familyRole.displayName)
                             .font(.subheadline)
                             .foregroundStyle(Palette.secondaryText)
                     }
+                    Spacer(minLength: 0)
                 }
-                .padding(.vertical, 4)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.vertical, Spacing.xs)
                 .accessibilityElement(children: .combine)
             }
 
             if member.familyRole != .owner {
-                Section {
+                CardSection(MemberDetailCopy.roleHeader) {
                     Picker(MemberDetailCopy.roleHeader, selection: roleSelection) {
                         Text(FamilyRole.caregiver.displayName).tag(FamilyRole.caregiver)
                         Text(FamilyRole.viewer.displayName).tag(FamilyRole.viewer)
@@ -60,22 +69,16 @@ struct MemberDetailView<Model: FamilySyncSettingsModel>: View {
                     .pickerStyle(.segmented)
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("member.role")
-                } header: {
-                    Text(MemberDetailCopy.roleHeader)
                 } footer: {
                     RoleExplanations()
                 }
             }
 
-            Section {
+            CardSection {
                 if model.canMakeOwner(member) {
-                    Button(MemberDetailCopy.makeOwner) { ask(.makeOwner) }
-                        .frame(minHeight: 44)
-                        .accessibilityIdentifier("member.makeOwner")
+                    ActionRow(MemberDetailCopy.makeOwner, identifier: "member.makeOwner") { ask(.makeOwner) }
                 }
-                Button(MemberDetailCopy.remove, role: .destructive) { ask(.remove) }
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("member.remove")
+                DestructiveButton(MemberDetailCopy.remove, identifier: "member.remove") { ask(.remove) }
             }
         }
         .navigationTitle(member.displayName)

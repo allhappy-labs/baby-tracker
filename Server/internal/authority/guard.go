@@ -28,6 +28,60 @@ const (
 type requestTx struct {
 	conn   *pgxpool.Conn
 	closed bool
+	// atCommit is what PipelineWithCommit queued, sent with the COMMIT.
+	atCommit []pipelinedWithCommit
+}
+
+type pipelinedWithCommit struct {
+	queue func(*pgx.Batch)
+	read  func(pgx.BatchResults) error
+}
+
+// CommitPipeline is a request transaction's commit seam (WithRequestTx,
+// WithFamilyTx and WithAccountTx hand run one): statements that go with the
+// COMMIT, in its round trip, instead of in a round trip of their own before
+// it. It is for transactions that wrote nothing before them (a pull), and
+// it enforces that: the batch first checks, in the server, that the
+// transaction has no transaction id yet (pipelineReadOnlySQL: any write or
+// row lock assigns one), and a transaction that has one fails there, so
+// neither the queued statements nor the COMMIT run and it rolls back
+// (ErrPipelineAfterWrite). A caller holding any other pgx.Tx sends its
+// statements itself.
+//
+// read runs on the results after the COMMIT was sent. Its refusal is
+// therefore a refusal of a committed transaction, and safe only because
+// nothing before the queued statements wrote: the queued statements must
+// be ones whose effect may stand when read refuses (an INSERT … ON
+// CONFLICT DO NOTHING that read refuses only when it inserted nothing, a
+// read). Never queue a write that read's refusal must undo.
+type CommitPipeline interface {
+	// PipelineWithCommit queues what queue adds to the batch, to run just
+	// before the COMMIT in its round trip; read then reads exactly those
+	// statements' results, in order. A statement's error skips the COMMIT,
+	// and the transaction rolls back. read's error, a statement's or its
+	// own, is the request's error, returned as is. Nothing is sent if the
+	// transaction rolls back instead.
+	PipelineWithCommit(queue func(*pgx.Batch), read func(pgx.BatchResults) error)
+}
+
+// ErrPipelineAfterWrite refuses a commit pipeline in a transaction that
+// already wrote (CommitPipeline); the transaction rolls back.
+var ErrPipelineAfterWrite = errors.New("authority: statements pipelined with the commit of a transaction that already wrote")
+
+// pipelineReadOnlySQL fails (22012) when the transaction already has a
+// transaction id, i.e. wrote or locked a row, and selects 1 otherwise. The
+// divisor is volatile, so the planner cannot fold the division.
+const pipelineReadOnlySQL = `SELECT 1 / (pg_catalog.pg_current_xact_id_if_assigned() IS NULL)::int`
+
+var _ CommitPipeline = (*requestTx)(nil)
+
+// PipelineWithCommit implements CommitPipeline; after Commit or Rollback it
+// does nothing.
+func (t *requestTx) PipelineWithCommit(queue func(*pgx.Batch), read func(pgx.BatchResults) error) {
+	if t.closed {
+		return
+	}
+	t.atCommit = append(t.atCommit, pipelinedWithCommit{queue: queue, read: read})
 }
 
 // Limits of requestTx, for request-path callers: Begin (nested savepoint
@@ -48,21 +102,59 @@ func (t *requestTx) Begin(context.Context) (pgx.Tx, error) {
 }
 
 // Commit commits and releases the connection (pgx dbTx.Commit semantics: a
-// commit that rolled back is pgx.ErrTxCommitRollback).
+// commit that rolled back is pgx.ErrTxCommitRollback), with what
+// PipelineWithCommit queued in the commit's round trip.
 func (t *requestTx) Commit(ctx context.Context) error {
+	readErr, commitErr := t.commit(ctx)
+	return errors.Join(readErr, commitErr)
+}
+
+// commit is Commit with the queued statements' read error (readErr) apart
+// from the commit's own.
+func (t *requestTx) commit(ctx context.Context) (readErr, commitErr error) {
 	if t.closed {
-		return pgx.ErrTxClosed
+		return nil, pgx.ErrTxClosed
 	}
 	t.closed = true
 	defer t.conn.Release()
-	tag, err := t.conn.Exec(ctx, "commit")
-	if err != nil {
-		return err
+	var tag pgconn.CommandTag
+	if len(t.atCommit) == 0 {
+		tag, commitErr = t.conn.Exec(ctx, "commit")
+	} else {
+		batch := &pgx.Batch{}
+		batch.Queue(pipelineReadOnlySQL)
+		for _, p := range t.atCommit {
+			p.queue(batch)
+		}
+		batch.Queue("commit")
+		results := t.conn.SendBatch(ctx, batch)
+		if _, err := results.Exec(); err != nil {
+			var pgErr *pgconn.PgError
+			if errors.As(err, &pgErr) && pgErr.Code == "22012" {
+				err = fmt.Errorf("%w (%w)", ErrPipelineAfterWrite, err)
+			}
+			readErr = err
+		} else {
+			for _, p := range t.atCommit {
+				if err := p.read(results); err != nil && readErr == nil {
+					readErr = err
+				}
+			}
+		}
+		tag, commitErr = results.Exec()
+		if err := results.Close(); commitErr == nil {
+			commitErr = err
+		}
+		// A statement's error skipped the COMMIT: the transaction is still
+		// open (failed), so end it before the connection goes back.
+		if t.conn.Conn().PgConn().TxStatus() != 'I' {
+			_, _ = t.conn.Exec(context.WithoutCancel(ctx), "rollback")
+		}
 	}
-	if tag.String() == "ROLLBACK" {
-		return pgx.ErrTxCommitRollback
+	if commitErr == nil && tag.String() == "ROLLBACK" {
+		commitErr = pgx.ErrTxCommitRollback
 	}
-	return nil
+	return readErr, commitErr
 }
 
 // Rollback rolls back and releases the connection; a failed rollback leaves
@@ -171,14 +263,20 @@ func beginRequest(ctx context.Context, pool *pgxpool.Pool, begin string, scan fu
 	return tx, nil
 }
 
-// finish runs run inside tx and commits; any error or panic rolls back.
+// finish runs run inside tx and commits; any error or panic rolls back. An
+// error of what run pipelined with the commit (CommitPipeline) is returned
+// as is, as run's own would be.
 func finish(ctx context.Context, tx *requestTx, run func() error) error {
 	defer tx.Rollback(context.WithoutCancel(ctx))
 	if err := run(); err != nil {
 		return err
 	}
-	if err := tx.Commit(ctx); err != nil {
-		return unavailable("commit request", err)
+	readErr, commitErr := tx.commit(ctx)
+	if readErr != nil {
+		return readErr
+	}
+	if commitErr != nil {
+		return unavailable("commit request", commitErr)
 	}
 	return nil
 }

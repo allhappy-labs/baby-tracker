@@ -39,7 +39,7 @@ func pushTokenHandler(options Options, register bool) http.HandlerFunc {
 			writeSyncCode(w, r, options, "service_unavailable")
 			return
 		}
-		admitted, ok := admitAfterBody(w, r, options, protocol.PushTokenBodyBytes)
+		admitted, ok := admitAfterBody(w, r, options, digests, protocol.PushTokenBodyBytes, writePushTokenError)
 		if !ok {
 			return
 		}

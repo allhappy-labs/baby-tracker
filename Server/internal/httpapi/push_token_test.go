@@ -101,7 +101,7 @@ func newPushStack(t *testing.T, h *testkit.Harness, config pushConfig) *stack {
 	}
 	handler, unlogged, logs := newLoggedStackHandlers(Options{Readiness: config.readiness, Logger: logger, InstanceID: h.Info.InstanceID,
 		RecoveryEpoch: h.Info.RecoveryEpoch, CanonicalOrigin: h.Info.CanonicalOrigin, SyncLimits: &h.Limits, SessionService: h.Auth,
-		AppleAuthorizationMode: "identity_token_only", PushTokens: tokens, Limiter: config.limiter,
+		AppleAuthorizationMode: "identity_token_only", PushTokens: tokens, BearerAuthenticator: guard, Limiter: config.limiter,
 		PushTokenDevicePolicy: config.device, PushTokenAccountPolicy: config.account})
 	if config.logs != nil {
 		logs = config.logs
@@ -380,9 +380,14 @@ const pushPrecedenceGolden = "testdata/push_token_precedence.json"
 //   - before any database work (0 round trips): readiness, no
 //     Authorization header (access_expired), a malformed bearer
 //     (session_revoked);
+//   - for a bearer the stack has not seen authenticate, the credential
+//     check before the body (Phase 5 Task 19; 1 round trip, the authority
+//     statement, no transaction): authentication (session_revoked,
+//     access_expired, epoch_changed, reauthentication_required), so these
+//     never meet the body; a bearer that passes it goes on to the request
+//     transaction (3 round trips in all);
 //   - in the request transaction (2 round trips: BEGIN+authority, then one
-//     ROLLBACK): authentication (session_revoked, access_expired,
-//     epoch_changed, reauthentication_required), then Admit (a session
+//     ROLLBACK): authentication again, then Admit (a session
 //     that is not a refreshed family session: family_scope_required or
 //     access_expired; then the held header, query or body refusal), then
 //     family policy, then the in-memory charge.
@@ -459,7 +464,7 @@ func TestPushTokenErrorPrecedence(t *testing.T) {
 		headers map[string]string
 		status  int
 		code    string
-		trips   int // 0 before any database work, else exactly 2
+		trips   int // exactly; see assertRefusalStatements
 	}
 	put, del := http.MethodPut, http.MethodDelete
 	h0 := func(on *stack, subject string) map[string]string { return on.pushHeaders(subject) }
@@ -468,14 +473,14 @@ func TestPushTokenErrorPrecedence(t *testing.T) {
 		{"node not ready, delete", notReady, del, pushTokenTarget, nil, h0(notReady, "owner"), 503, "service_unavailable", 0},
 		{"no credential, malformed body", s, put, pushTokenTarget, malformed, withHeader(h0(s, "owner"), "Authorization", ""), 401, "access_expired", 0},
 		{"malformed bearer", s, put, pushTokenTarget, valid, withHeader(h0(s, "owner"), "Authorization", "Bearer not-a-token"), 401, "session_revoked", 0},
-		{"removed caregiver, malformed body", s, put, pushTokenTarget, malformed, h0(s, "removed"), 401, "session_revoked", 2},
-		{"removed caregiver, bad token", s, put, pushTokenTarget, badToken, h0(s, "removed"), 401, "session_revoked", 2},
-		{"removed caregiver, delete", s, del, pushTokenTarget, nil, h0(s, "removed"), 401, "session_revoked", 2},
-		{"expired access token, bad token", expired, put, pushTokenTarget, badToken, h0(expired, "owner"), 401, "access_expired", 2},
-		{"another recovery epoch, bad token", epoch, put, pushTokenTarget, badToken, h0(epoch, "owner"), 401, "epoch_changed", 2},
-		{"past the reauthentication deadline, bad token", deadline, put, pushTokenTarget, badToken, h0(deadline, "owner"), 401, "reauthentication_required", 2},
-		{"unrefreshed account session, bad token", unrefreshed, put, pushTokenTarget, badToken, h0(unrefreshed, "caregiver"), 401, "access_expired", 2},
-		{"account with no family, bad token", s, put, pushTokenTarget, badToken, h0(s, "outsider"), 403, "family_scope_required", 2},
+		{"removed caregiver, malformed body", s, put, pushTokenTarget, malformed, h0(s, "removed"), 401, "session_revoked", 1},
+		{"removed caregiver, bad token", s, put, pushTokenTarget, badToken, h0(s, "removed"), 401, "session_revoked", 1},
+		{"removed caregiver, delete", s, del, pushTokenTarget, nil, h0(s, "removed"), 401, "session_revoked", 1},
+		{"expired access token, bad token", expired, put, pushTokenTarget, badToken, h0(expired, "owner"), 401, "access_expired", 1},
+		{"another recovery epoch, bad token", epoch, put, pushTokenTarget, badToken, h0(epoch, "owner"), 401, "epoch_changed", 1},
+		{"past the reauthentication deadline, bad token", deadline, put, pushTokenTarget, badToken, h0(deadline, "owner"), 401, "reauthentication_required", 1},
+		{"unrefreshed account session, bad token", unrefreshed, put, pushTokenTarget, badToken, h0(unrefreshed, "caregiver"), 401, "access_expired", 3},
+		{"account with no family, bad token", s, put, pushTokenTarget, badToken, h0(s, "outsider"), 403, "family_scope_required", 3},
 		{"account with no family, delete", s, del, pushTokenTarget, nil, h0(s, "outsider"), 403, "family_scope_required", 2},
 		{"family recovery session, bad token", recovery, put, pushTokenTarget, badToken, h0(recovery, "owner"), 403, "family_scope_required", 2},
 		{"unsupported protocol header, malformed body", s, put, pushTokenTarget, malformed, withHeader(h0(s, "owner"), "X-Baby-Tracker-Protocol", "v2"), 400, "unsupported_protocol", 2},
@@ -527,9 +532,7 @@ func TestPushTokenErrorPrecedence(t *testing.T) {
 			if trips := c.on.wire.Trips(); trips != c.trips {
 				t.Errorf("%d round trips, want %d: %q", trips, c.trips, c.on.wire.Statements())
 			}
-			if c.trips != 0 {
-				c.on.assertRefusalRollsBack(t, c.name)
-			}
+			c.on.assertRefusalStatements(t, c.name, c.trips)
 			got[c.name] = observe(rec)
 		})
 	}

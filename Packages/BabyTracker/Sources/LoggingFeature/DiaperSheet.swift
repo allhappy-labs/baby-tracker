@@ -162,10 +162,18 @@ public final class DiaperEditModel {
 /// values: the choices as a selection rather than a save, Dry as a fourth
 /// choice so no recorded value is lost (ruling H-R3), and Save and Delete
 /// at the bottom.
+///
+/// From Past entry (`onBack`) a choice selects rather than saves, so the
+/// time can be set first; Save writes, and Back returns to the list. Dry is
+/// offered there too.
 public struct DiaperSheet: View {
     let store: BabyStore
     let babyID: UUID
     let onDone: () -> Void
+    private let onBack: (() -> Void)?
+
+    /// Past entry's choice, until Save.
+    @State private var picked: DiaperContents?
 
     /// Present in edit mode only. New mode keeps its own `@State` below.
     @State private var editModel: DiaperEditModel?
@@ -188,10 +196,12 @@ public struct DiaperSheet: View {
     /// scaled, it has been overruled.
     @Environment(\.dynamicTypeSize) private var typeSize
 
-    public init(store: BabyStore, babyID: UUID, editing diaperID: UUID? = nil, onDone: @escaping () -> Void) {
+    public init(store: BabyStore, babyID: UUID, editing diaperID: UUID? = nil, onBack: (() -> Void)? = nil,
+                onDone: @escaping () -> Void) {
         self.store = store
         self.babyID = babyID
         self.onDone = onDone
+        self.onBack = onBack
         _when = State(wrappedValue: store.now)
         let model = diaperID.map { DiaperEditModel(store: store, babyID: babyID, diaperID: $0) }
         _editModel = State(wrappedValue: model)
@@ -205,7 +215,10 @@ public struct DiaperSheet: View {
         editing ? DiaperContents.allCases : DiaperContents.fastPath
     }
 
-    private var offered: [DiaperContents] { Self.choices(editing: editModel != nil) }
+    private var offered: [DiaperContents] { Self.choices(editing: editModel != nil || isPicking) }
+
+    /// Past entry's new mode: a choice selects, Save writes.
+    private var isPicking: Bool { editModel == nil && onBack != nil }
 
     /// Verification-only: lets a screenshot show the accordion already open
     /// without a tap. Every `-uiTest*` hook stays behind `#if DEBUG` — see
@@ -256,19 +269,19 @@ public struct DiaperSheet: View {
             stackedChoices
         } else {
             ViewThatFits(in: .horizontal) {
-                EqualWidthRow(spacing: 10) {
+                EqualWidthRow(spacing: Spacing.m) {
                     ForEach(offered, id: \.self) { contents in
                         choice(contents, stacked: true)
                     }
                 }
                 if offered.count == 4 {
-                    VStack(spacing: 10) {
-                        EqualWidthRow(spacing: 10) {
+                    VStack(spacing: Spacing.m) {
+                        EqualWidthRow(spacing: Spacing.m) {
                             ForEach(offered.prefix(2), id: \.self) { contents in
                                 choice(contents, stacked: true)
                             }
                         }
-                        EqualWidthRow(spacing: 10) {
+                        EqualWidthRow(spacing: Spacing.m) {
                             ForEach(offered.suffix(2), id: \.self) { contents in
                                 choice(contents, stacked: true)
                             }
@@ -281,7 +294,7 @@ public struct DiaperSheet: View {
     }
 
     private var stackedChoices: some View {
-        VStack(spacing: 10) {
+        VStack(spacing: Spacing.m) {
             ForEach(offered, id: \.self) { contents in
                 choice(contents, stacked: false)
             }
@@ -295,10 +308,15 @@ public struct DiaperSheet: View {
     /// In edit mode a tap selects, and Save writes: the entry already
     /// exists, and a stray tap must not rewrite it.
     private func choice(_ contents: DiaperContents, stacked: Bool) -> some View {
-        let isSelected = editModel.map { $0.contents == contents } ?? true
+        let isSelected = editModel.map { $0.contents == contents } ?? (picked.map { $0 == contents } ?? true)
+        let showsSelection = editModel != nil || picked != nil
         return Button {
             if let editModel {
                 editModel.contents = contents
+                return
+            }
+            if isPicking {
+                picked = contents
                 return
             }
             do {
@@ -322,19 +340,17 @@ public struct DiaperSheet: View {
                 if stacked {
                     VStack(spacing: 6) { glyph; title }
                 } else {
-                    HStack(spacing: 10) { glyph; title; Spacer(minLength: 0) }
+                    HStack(spacing: Spacing.m) { glyph; title; Spacer(minLength: 0) }
                 }
             }
-            .frame(maxWidth: .infinity, minHeight: 64)
+            .frame(maxWidth: .infinity)
         }
-        // Unselected choices in edit mode go grey, so the selected one is
-        // told apart by colour as well as by its stronger stroke.
-        .buttonStyle(.tracker(isSelected ? Palette.diaper : Palette.secondaryText,
-                              emphasis: isSelected ? .primary : .secondary))
+        // The selected choice has the stronger fill, in edit mode and once
+        // one is picked; in new mode a tap saves, so none is selected.
+        .buttonStyle(.tile(Palette.diaper, size: .large, isSelected: showsSelection && isSelected))
         // A sheet that comes up short scrolls rather than squashing the
         // choices — they are the point of the sheet.
         .fixedSize(horizontal: false, vertical: true)
-        .accessibilityAddTraits(editModel != nil && isSelected ? .isSelected : [])
         .accessibilityIdentifier("diaper.\(contents.rawValue)")
     }
 
@@ -355,8 +371,10 @@ public struct DiaperSheet: View {
             // choice saves, with the Time row's value. Edit mode's choices
             // select, and Save writes.
             EntryPanel(title: DiaperSheetCopy.title, icon: .diaper, tint: Palette.diaper,
-                       canSave: editModel?.canSave ?? false, identifierPrefix: "diaper",
-                       onCancel: onDone, onSave: saveAction, onDelete: deleteAction) {
+                       canSave: editModel?.canSave ?? (picked != nil && when <= store.now),
+                       identifierPrefix: "diaper", onCancel: onBack ?? onDone,
+                       cancelTitle: onBack == nil ? EditChromeCopy.cancel : EditChromeCopy.back,
+                       onSave: saveAction, onDelete: deleteAction) {
                 // One row where the words fit, not three stacked slabs. Still
                 // tap-to-save rather than select-then-confirm: two taps — open,
                 // choose — while a parent has one hand free.
@@ -364,7 +382,7 @@ public struct DiaperSheet: View {
 
                 // The same dated row logging and editing: a change remembered
                 // the morning after belongs to the day before.
-                PanelSection {
+                CardSection {
                     EditTimeRow(date: timeBinding, latest: editModel?.latestAllowedDate ?? store.now,
                                 identifier: "diaper.time")
                 }
@@ -389,10 +407,12 @@ public struct DiaperSheet: View {
         return Binding(get: { editModel[keyPath: keyPath] }, set: { editModel[keyPath: keyPath] = $0 })
     }
 
-    /// Edit mode only: in new mode a choice saves, and nothing deletes.
+    /// Edit mode and Past entry: otherwise a choice saves. Only edit mode
+    /// deletes.
     private var saveAction: (() -> Void)? {
-        guard editModel != nil else { return nil }
-        return { save() }
+        if editModel != nil { return { save() } }
+        if isPicking { return { savePicked() } }
+        return nil
     }
 
     private var deleteAction: (() -> Void)? {
@@ -403,6 +423,21 @@ public struct DiaperSheet: View {
     /// The edit model's time in edit mode, the sheet's own otherwise.
     private var timeBinding: Binding<Date> {
         if let editModel { Bindable(editModel).when } else { $when }
+    }
+
+    // MARK: - Past entry
+
+    private func savePicked() {
+        guard let picked else { return }
+        do {
+            try Self.log(picked, at: when, store: store, babyID: babyID,
+                         consistency: consistency, color: color, note: note)
+            errorReporter.clear()
+            finish()
+        } catch {
+            errorReporter.report(ErrorBannerCopy.saveFailed(what: ErrorSubject.diaperChange), error: error,
+                                 category: AppLog.store)
+        }
     }
 
     // MARK: - Edit mode

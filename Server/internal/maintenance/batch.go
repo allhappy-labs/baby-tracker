@@ -15,13 +15,19 @@ import (
 // once by another, until a short batch or until the pass has removed
 // PassCap rows. A statement timeout (the batch could not finish in 10s, as
 // on slow storage) halves Size, down to Min, so a backlog still drains
-// instead of rolling back on every pass; the smaller size persists.
+// instead of rolling back on every pass. The smaller size grows back: after
+// GrowAfter consecutive full batches without a timeout (counted across
+// passes) it doubles, up to Start, so one slow moment does not cap the
+// throughput for good (C18). A timeout resets the streak; a short batch
+// neither counts nor resets it.
 //
-// The zero size is Start. Drain may run beside itself; each call reads the
-// current size per batch.
+// The zero size is Start and the zero GrowAfter is 4. Drain may run beside
+// itself; each call reads the current size per batch.
 type AdaptiveBatch struct {
 	Start, Min, PassCap int
+	GrowAfter           int          // 0: 4
 	size                atomic.Int64 // 0: Start
+	streak              atomic.Int64 // full batches since the last timeout or growth
 }
 
 // Size is the rows per statement the next batch uses.
@@ -44,12 +50,17 @@ func (b *AdaptiveBatch) Drain(ctx context.Context, prune func(ctx context.Contex
 		if err != nil {
 			if statementTimedOut(ctx, err) {
 				b.size.Store(int64(max(limit/2, b.Min)))
+				b.streak.Store(0)
 			}
 			return removed, false, err
 		}
 		removed += n
 		if n < limit {
 			return removed, false, nil
+		}
+		if b.streak.Add(1) >= int64(b.growAfter()) && limit < b.Start {
+			b.size.Store(int64(min(limit*2, b.Start)))
+			b.streak.Store(0)
 		}
 		if removed >= b.PassCap {
 			return removed, true, nil
@@ -58,6 +69,14 @@ func (b *AdaptiveBatch) Drain(ctx context.Context, prune func(ctx context.Contex
 			return removed, false, err
 		}
 	}
+}
+
+// growAfter is GrowAfter, or 4 when unset.
+func (b *AdaptiveBatch) growAfter() int {
+	if b.GrowAfter > 0 {
+		return b.GrowAfter
+	}
+	return 4
 }
 
 // statementTimedOut reports a statement the server cancelled at its

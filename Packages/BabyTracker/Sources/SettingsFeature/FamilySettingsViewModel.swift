@@ -127,6 +127,20 @@ public final class FamilySettingsViewModel: FamilySyncSettingsModel {
         return engine?.status
     }
 
+    /// Whether this phone is still catching up after coming to the
+    /// foreground: what it shows may predate the other phone's last taps.
+    public var syncIsCatchingUp: Bool {
+        guard case .shared = mode else { return false }
+        return engine?.isCatchingUp ?? false
+    }
+
+    /// Returns once the foreground catch-up has an answer (at most
+    /// `FamilySyncEngine.defaultCatchUpHold`), or at once.
+    public func waitForSyncCatchUp() async {
+        guard case .shared = mode else { return }
+        await engine?.waitForCatchUp()
+    }
+
     public var pendingDeliveryCount: Int? {
         guard case .shared(let key) = mode else { return nil }
         // Delivery state, not an empty pull or a timestamp, decides whether

@@ -12,14 +12,60 @@ import (
 	"babytracker/server/internal/testpg"
 )
 
-// The fresh-install catalog is pinned: a schema change updates this golden in
-// the same commit (BT_GOLDEN_UPDATE=1), so a squash or a migration that changes
-// the catalog by accident fails here.
+// The baseline's catalog is pinned: a squash that changes it by accident
+// fails here. The baseline is frozen, so this golden no longer changes.
 func TestBaselineCatalogMatchesTheChainGolden(t *testing.T) { // Review Focus 2
-	f := testpg.New(t)
+	f := testpg.NewThrough(t, 32)
 	testpg.ProductionShape(t, f)
 	got := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
 	testkit.AssertGolden(t, "../migrate/testdata/catalog-32.golden", got.Lines)
+}
+
+// The catalog with 000033 applied stays pinned beside the baseline's; it no
+// longer changes.
+func TestImmunizationsCatalogMatchesItsGolden(t *testing.T) {
+	f := testpg.NewThrough(t, 33)
+	testpg.ProductionShape(t, f)
+	got := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
+	testkit.AssertGolden(t, "../migrate/testdata/catalog-33.golden", got.Lines)
+}
+
+// The catalog with 000034 applied stays pinned beside the earlier ones; it
+// no longer changes.
+func TestPumpingCatalogMatchesItsGolden(t *testing.T) {
+	f := testpg.NewThrough(t, 34)
+	testpg.ProductionShape(t, f)
+	got := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
+	testkit.AssertGolden(t, "../migrate/testdata/catalog-34.golden", got.Lines)
+}
+
+// The catalog with 000035 applied stays pinned beside the earlier ones; it
+// no longer changes.
+func TestAuditRetentionCatalogMatchesItsGolden(t *testing.T) {
+	f := testpg.NewThrough(t, 35)
+	testpg.ProductionShape(t, f)
+	got := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
+	testkit.AssertGolden(t, "../migrate/testdata/catalog-35.golden", got.Lines)
+}
+
+// The catalog with 000036 applied stays pinned beside the earlier ones; it
+// no longer changes.
+func TestRequestAuthorityFamilyKeyCatalogMatchesItsGolden(t *testing.T) {
+	f := testpg.NewThrough(t, 36)
+	testpg.ProductionShape(t, f)
+	got := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
+	testkit.AssertGolden(t, "../migrate/testdata/catalog-36.golden", got.Lines)
+}
+
+// The current fresh-install catalog, 000037 applied, is pinned beside the
+// earlier ones: a schema change updates this golden in the same commit
+// (BT_GOLDEN_UPDATE=1), so a migration that changes the catalog by accident
+// fails here.
+func TestCurrentCatalogMatchesItsGolden(t *testing.T) {
+	f := testpg.New(t)
+	testpg.ProductionShape(t, f)
+	got := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
+	testkit.AssertGolden(t, "../migrate/testdata/catalog-37.golden", got.Lines)
 }
 
 // chainGolden is catalog-32.golden as the 000001–000032 chain recorded it
@@ -39,7 +85,7 @@ var retiredRoles = []string{"baby_tracker_projector", "baby_tracker_apple_revoke
 // manifest's principal CHECK. Nothing else in the catalog moved.
 func TestBaselineDropsExactlyTheLegacyRoles(t *testing.T) { // Review Focus 2
 	chain := readChainGolden(t)
-	f := testpg.New(t)
+	f := testpg.NewThrough(t, 32)
 	testpg.ProductionShape(t, f)
 	now := testpg.SnapshotCatalog(t, f.Owner, testpg.Roles(t, f))
 

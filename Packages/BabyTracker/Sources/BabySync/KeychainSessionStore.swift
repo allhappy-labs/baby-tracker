@@ -1,4 +1,5 @@
 import Foundation
+import BabyCore
 import BabyStore
 import Security
 
@@ -140,7 +141,7 @@ public enum SessionStoreError: Error, Sendable, Equatable {
 /// strings silently orphans every stored credential on every existing install,
 /// which looks exactly like a mass sign-out.
 enum SessionItemEncoding {
-    static let service = "com.olhapi.babytracker.session"
+    static let service = AppIdentity.identifier("session")
 
     static func account(_ key: AccountSessionKey) -> String {
         "account|\(base64(key.canonicalOrigin))|\(key.serverInstanceID.uuidString.lowercased())|\(key.accountID.uuidString.lowercased())|\(key.deviceID.uuidString.lowercased())|\(key.recoveryEpoch)"

@@ -9,25 +9,27 @@ public enum PartKind: Hashable, CaseIterable, Sendable {
 }
 
 /// One part of a session, as History edits it: a breast or bottle component
-/// of a feed entry, or a whole sleep (ruling H-R2).
+/// of a feed entry, or a whole sleep (ruling H-R2) — or solids eaten during
+/// a feed, which the Solids panel edits rather than `PartEditModel`.
 public enum PartEditTarget: Hashable, Sendable, Identifiable {
     public var id: Self { self }
 
     case breast(feedID: UUID, componentID: UUID)
     case bottle(feedID: UUID, componentID: UUID)
+    case solids(feedID: UUID, componentID: UUID)
     case sleep(sleepID: UUID)
 
     /// The entry the part belongs to.
     public var entryID: UUID {
         switch self {
-        case .breast(let feedID, _), .bottle(let feedID, _): feedID
+        case .breast(let feedID, _), .bottle(let feedID, _), .solids(let feedID, _): feedID
         case .sleep(let sleepID): sleepID
         }
     }
 
     public var sessionKind: SessionKind {
         switch self {
-        case .breast, .bottle: .feed
+        case .breast, .bottle, .solids: .feed
         case .sleep: .sleep
         }
     }
@@ -51,8 +53,8 @@ public enum PartEditCopy {
         LoggingL10n.format("The start can't be before the previous part ended, at %@.", time)
     }
 
-    /// Ruling H-R15's message: a start moved past the next part's start
-    /// would reorder the session.
+    /// A part of an old combined feed keeps its place among its entry's
+    /// other parts, so its start may not pass the next one's.
     public static func startAfterNextPart(at time: String) -> String {
         LoggingL10n.format("The start can't be after the next part began, at %@.", time)
     }
@@ -96,16 +98,20 @@ public final class PartEditModel {
     /// only into fields the user has not touched, and a start is checked
     /// against the previous part only once it moves (ruling H-R12).
     private var loaded: Draft
-    /// Where a moved start may go: after the part before this one ended, and
-    /// not after the part after it began — the store's answer for the other
-    /// entries of the session, and the other components of an old combined
-    /// entry. Read on load and reload rather than per render.
+    /// Where moved times may go: anywhere the session's other entries leave
+    /// free, before or after any of them — the store's answer — and, for a
+    /// part of an old combined entry, between that entry's parts before and
+    /// after it. Read on load and reload rather than per render.
     private var bounds: Bounds
     /// The zone the entry was logged in, for the time the H-R4 and H-R15
     /// messages quote.
     private var zoneID: String
 
     private struct Bounds {
+        /// The other entries of the session.
+        var others: [PartSpan] = []
+        /// The end of the part before, and the start of the part after, in
+        /// this part's own old combined entry.
         var previousPartEnd: Date?
         var nextPartStart: Date?
     }
@@ -151,7 +157,9 @@ public final class PartEditModel {
     public var kind: PartKind {
         switch target {
         case .breast: .breast
-        case .bottle: .bottle
+        // Solids open the Solids panel instead; this editor finds nothing
+        // for them and is gone at once.
+        case .bottle, .solids: .bottle
         case .sleep: .sleep
         }
     }
@@ -166,17 +174,17 @@ public final class PartEditModel {
     /// sleep.
     private var loadedEnd: Date? {
         switch target {
-        case .breast, .bottle: loaded.end
+        case .breast, .bottle, .solids: loaded.end
         case .sleep: loaded.hasEnd ? loaded.end : nil
         }
     }
 
     /// Nil when the part can be saved as it stands. The same rules as the
-    /// Past entry sheet, plus rulings H-R4 and H-R15: a start moved before
-    /// the previous part ended, or after the next part began, says when that
-    /// was; so does an end moved past the next part's start (final review
-    /// M3). Like the start (ruling H-R12), the 30-second floor and the end
-    /// are judged only once they change, so an old part stays editable.
+    /// Past entry sheet, plus ruling H-R4 as overlap: moved times may not run
+    /// into another part of the session, and the message says where that
+    /// part ends or begins. They may pass one, which reorders the session.
+    /// Like the start (ruling H-R12), the 30-second floor and the overlap
+    /// are judged only once times change, so an old part stays editable.
     public var validationMessage: String? {
         guard !isGone else { return nil }
         let latest = latestAllowedDate
@@ -195,7 +203,7 @@ public final class PartEditModel {
                problem == .inTheFuture || problem == .endBeforeStart || durationSeconds != loaded.seconds {
                 return TimeSpanCopy.message(problem)
             }
-        case .bottle:
+        case .bottle, .solids:
             if timesMoved, let problem = TimeSpan(start: start, end: end).problem(latest: latest) {
                 return TimeSpanCopy.message(problem)
             }
@@ -215,7 +223,21 @@ public final class PartEditModel {
         if end != loadedEnd, let end, let nextPartStart = bounds.nextPartStart, end > nextPartStart {
             return PartEditCopy.endAfterNextPart(at: JoinRowModel.clockTime(nextPartStart, zone: zoneID))
         }
+        if timesMoved, let clash = PartSpan.clash(span, was: loadedSpan, among: bounds.others) {
+            return clash.start <= start
+                ? PartEditCopy.startBeforePreviousPart(at: JoinRowModel.clockTime(clash.end, zone: zoneID))
+                : PartEditCopy.endAfterNextPart(at: JoinRowModel.clockTime(clash.start, zone: zoneID))
+        }
         return nil
+    }
+
+    /// The part's span as edited, and as it was read: an open sleep's, or a
+    /// moment's, is its start.
+    private var span: PartSpan { PartSpan(start: start, end: writesTimedEnd ? end ?? start : start) }
+    private var loadedSpan: PartSpan { PartSpan(start: loaded.start, end: loadedEnd ?? loaded.start) }
+    private var writesTimedEnd: Bool {
+        if case .sleep = target { return writesSleepEnd }
+        return true
     }
 
     /// A zero-volume bottle renders while every total that gates on `> 0`
@@ -236,14 +258,17 @@ public final class PartEditModel {
     /// unrelated save to commit without its change-log entry.
     public func save() throws -> Bool {
         switch target {
+        case .solids:
+            isGone = true
+            throw EditModeError.gone
         case let .breast(feedID, componentID), let .bottle(feedID, componentID):
             guard let (feed, index) = locatedFeed(feedID, componentID) else {
                 isGone = true
                 throw EditModeError.gone
             }
             guard canSave else { return false }
-            if start != loaded.start {
-                guard try passesStoreCheck({ try store.checkPartStart(start, ofFeed: feedID, for: babyID) },
+            if start != loaded.start || end != loaded.end {
+                guard try passesStoreCheck({ try store.checkPartSpan(span, was: loadedSpan, ofFeed: feedID, for: babyID) },
                                            refresh: { Self.bounds(of: feed, index: index, babyID: babyID, in: store) })
                 else { return false }
             }
@@ -256,8 +281,9 @@ public final class PartEditModel {
                 throw EditModeError.gone
             }
             guard canSave else { return false }
-            if start != loaded.start {
-                guard try passesStoreCheck({ try store.checkSleepPartStart(start, ofSleep: sleepID, for: babyID) },
+            if start != loaded.start || end != loaded.end {
+                guard try passesStoreCheck({ try store.checkSleepPartSpan(span, was: loadedSpan, ofSleep: sleepID,
+                                                                          for: babyID) },
                                            refresh: { Self.bounds(ofSleep: sleepID, babyID: babyID, in: store) })
                 else { return false }
             }
@@ -268,14 +294,14 @@ public final class PartEditModel {
         return true
     }
 
-    /// Runs the store's part-start check. On its refusal the editor's own
+    /// Runs the store's overlap check. On its refusal the editor's own
     /// bounds were out of date: take the store's, so the message shows the
     /// time it refused on, and say the save may not go ahead.
     private func passesStoreCheck(_ check: () throws -> Void, refresh: () -> Bounds) throws -> Bool {
         do {
             try check()
             return true
-        } catch PartError.startBeforePreviousPart, PartError.startAfterNextPart {
+        } catch PartError.overlapsPart {
             bounds = refresh()
             return false
         }
@@ -286,7 +312,7 @@ public final class PartEditModel {
     /// one; a sleep is deleted with its session relinked. Never `softDelete`.
     public func delete() throws {
         switch target {
-        case let .breast(feedID, componentID), let .bottle(feedID, componentID):
+        case let .breast(feedID, componentID), let .bottle(feedID, componentID), let .solids(feedID, componentID):
             guard locatedFeed(feedID, componentID) != nil else {
                 isGone = true
                 throw EditModeError.gone
@@ -374,7 +400,7 @@ public final class PartEditModel {
         if refit { Self.fitSpan(of: feed, edited: index) }
         feed.note = EditModel.trimmedToNil(note)
         do {
-            try store.update(feed)
+            try store.updateFeedPart(feed, for: babyID)
         } catch {
             (feed.components, feed.startedAt, feed.endedAt, feed.note, feed.lastModifiedAt) = before
             throw error
@@ -388,7 +414,7 @@ public final class PartEditModel {
         sleep.kindOverride = sleepKind
         sleep.note = EditModel.trimmedToNil(note)
         do {
-            try store.update(sleep)
+            try store.updateSleepPart(sleep, for: babyID)
         } catch {
             (sleep.startedAt, sleep.endedAt, sleep.kindOverrideRaw, sleep.note, sleep.lastModifiedAt) = before
             throw error
@@ -424,6 +450,8 @@ public final class PartEditModel {
     private static func read(_ target: PartEditTarget, babyID: UUID, in store: BabyStore)
         -> (draft: Draft, bounds: Bounds, zoneID: String)? {
         switch target {
+        case .solids:
+            return nil
         case let .breast(feedID, componentID), let .bottle(feedID, componentID):
             guard let (feed, index) = locatedFeed(feedID, componentID, babyID: babyID, in: store) else { return nil }
             let component = feed.components[index]
@@ -468,22 +496,18 @@ public final class PartEditModel {
               sleepKind: sleep.kindOverride, note: sleep.note ?? "")
     }
 
-    /// A feed part's bounds: the store's (the entries before and after this
-    /// one in its session), narrowed by the components before and after this
-    /// one in its own entry, for an old combined feed.
+    /// A feed part's bounds: the store's (the other entries of its
+    /// session), and the components before and after this one in its own
+    /// entry, for an old combined feed.
     private static func bounds(of feed: FeedEntry, index: Int, babyID: UUID, in store: BabyStore) -> Bounds {
-        let previous = try? store.previousPartEnd(ofFeed: feed.id, for: babyID)
-        let next = try? store.nextPartStart(ofFeed: feed.id, for: babyID)
-        let ownEarlier = feed.components[..<index].compactMap { $0.endedAt ?? $0.startedAt }.max()
-        let ownLater = feed.components[(index + 1)...].compactMap(\.startedAt).min()
-        return Bounds(previousPartEnd: [previous, ownEarlier].compactMap { $0 }.max(),
-                      nextPartStart: [next, ownLater].compactMap { $0 }.min())
+        Bounds(others: (try? store.otherPartSpans(ofFeed: feed.id, for: babyID)) ?? [],
+               previousPartEnd: feed.components[..<index].compactMap { $0.endedAt ?? $0.startedAt }.max(),
+               nextPartStart: feed.components[(index + 1)...].compactMap(\.startedAt).min())
     }
 
-    /// A sleep part's bounds: the sleeps before and after it in its session.
+    /// A sleep part's bounds: the other sleeps of its session.
     private static func bounds(ofSleep sleepID: UUID, babyID: UUID, in store: BabyStore) -> Bounds {
-        Bounds(previousPartEnd: try? store.previousPartEnd(ofSleep: sleepID, for: babyID),
-               nextPartStart: try? store.nextPartStart(ofSleep: sleepID, for: babyID))
+        Bounds(others: (try? store.otherPartSpans(ofSleep: sleepID, for: babyID)) ?? [])
     }
 
     private static func locatedFeed(_ feedID: UUID, _ componentID: UUID, babyID: UUID,

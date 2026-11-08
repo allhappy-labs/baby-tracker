@@ -6,7 +6,7 @@
 
 ## Global constraints
 
-- Same as the predecessor plan: automatic behaviour on the built-in server only; self-hosted unchanged; no settings UI; no per-second pushes; no public ports; shared simulator `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853` only, never create/clone/erase simulators.
+- Same as the predecessor plan: automatic behaviour on the built-in server only; self-hosted unchanged; no settings UI; no per-second pushes; no public ports; shared simulator `platform=iOS Simulator,id=<simulator-udid>` only, never create/clone/erase simulators.
 - No Apple account, profile or key changes; no deployment, SSH, image push, merge to main or phone install. Tools that would touch Apple or production are written and tested locally (dry-run / disposable) but not executed against real systems.
 - Migration 28 is still unshipped: amend in place, regenerate the manifest with the existing command, keep historical hashes, keep privilege inventories exact.
 - Never log or store keys, tokens, baby names, care content or raw payloads.

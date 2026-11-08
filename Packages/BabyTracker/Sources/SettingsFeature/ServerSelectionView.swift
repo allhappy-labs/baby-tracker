@@ -40,18 +40,14 @@ public struct ServerSelectionView: View {
     }
 
     public var body: some View {
-        Form {
+        SettingsPage {
             if let hostedEndpoint {
-                Section {
-                    Button(Copy.useHosted) { checkHosted(hostedEndpoint) }
-                        .frame(minHeight: 44)
-                        .accessibilityIdentifier("server.useHosted")
-                } header: {
-                    Text(Copy.hostedHeader)
+                CardSection(Copy.hostedHeader) {
+                    ActionRow(Copy.useHosted, identifier: "server.useHosted") { checkHosted(hostedEndpoint) }
                 }
             }
 
-            Section {
+            CardSection(Copy.customHeader) {
                 TextField(Copy.field, text: $input)
                     #if os(iOS)
                     .textInputAutocapitalization(.never)
@@ -61,37 +57,28 @@ public struct ServerSelectionView: View {
                     .frame(minHeight: 44)
                     .accessibilityIdentifier("server.field")
 
-                Button(Copy.check) { check() }
-                    .frame(minHeight: 44)
+                ActionRow(Copy.check, identifier: "server.check") { check() }
                     .disabled(input.isEmpty || isProbing)
-                    .accessibilityIdentifier("server.check")
-            } header: {
-                Text(Copy.customHeader)
             } footer: {
                 Text(Copy.customFooter)
             }
 
             if let problem {
-                Section {
-                    Text(problem)
-                        .foregroundStyle(Palette.destructive)
+                CardSection {
+                    InlineError(problem)
                         .accessibilityIdentifier("server.problem")
                 }
             }
 
             if let pending {
-                Section {
-                    LabeledContent(Copy.originLabel, value: pending.origin.canonicalString)
-                    LabeledContent(Copy.instanceLabel, value: pending.info.serverInstanceID.uuidString)
-                    LabeledContent(Copy.versionLabel, value: pending.info.sourceVersion)
+                CardSection(Copy.confirmHeader) {
+                    ListRow(Copy.originLabel, value: pending.origin.canonicalString)
+                    ListRow(Copy.instanceLabel, value: pending.info.serverInstanceID.uuidString)
+                    ListRow(Copy.versionLabel, value: pending.info.sourceVersion)
 
-                    Button(Copy.confirm) {
+                    ActionRow(Copy.confirm, identifier: "server.confirm") {
                         onConfirmed(ConfirmedEndpoint(origin: pending.origin, serverInstanceID: pending.info.serverInstanceID))
                     }
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("server.confirm")
-                } header: {
-                    Text(Copy.confirmHeader)
                 } footer: {
                     Text(knownInstanceID == nil ? Copy.confirmFooter : Copy.instanceChangedFooter)
                 }

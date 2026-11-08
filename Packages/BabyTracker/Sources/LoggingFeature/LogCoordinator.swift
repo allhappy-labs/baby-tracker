@@ -16,8 +16,16 @@ public enum LogSheet: Identifiable {
     case solids
     case diaper
     case supplement
+    /// Meds from the dock: the saved meds as chips.
+    case meds
     case measurement
-    /// The ··· sheet: Solids, Growth, Past entry and Meds.
+    /// Log a vaccination.
+    case immunization
+    /// The Pump Home action: start a session, or edit the one already running.
+    case pump
+    /// A pump just stopped needs its amount (How much?).
+    case pumpAmount(pumpID: UUID)
+    /// The ··· sheet: what the dock has no room for, and Past entry.
     case more
     case pastEntry
     /// One logged entry, in the sheet it was logged with, in edit mode —
@@ -37,7 +45,11 @@ public enum LogSheet: Identifiable {
         case .bottleAmount(let feedID): "bottleAmount-\(feedID)"
         case .solids: "solids"
         case .measurement: "measurement"
+        case .immunization: "immunization"
+        case .pump: "pump"
+        case .pumpAmount(let pumpID): "pumpAmount-\(pumpID)"
         case .supplement: "supplement"
+        case .meds: "meds"
         case .diaper: "diaper"
         case .more: "more"
         case .pastEntry: "pastEntry"
@@ -57,6 +69,8 @@ private extension EntryRef {
         case .diaper: "diaper"
         case .supplement: "supplement"
         case .measurement: "measurement"
+        case .immunization: "immunization"
+        case .pump: "pump"
         }
     }
 }
@@ -91,6 +105,8 @@ enum EditDestination: Equatable {
     /// sheet can list.
     case session(SessionKind, rootID: UUID)
     case measurement(UUID)
+    case immunization(UUID)
+    case pump(UUID)
     /// Deleted since the tap — on this phone or the other — or never an
     /// entry of that kind.
     case gone
@@ -101,17 +117,24 @@ enum EditDestination: Equatable {
             let found = (try? store.measurements(for: babyID))?.contains { $0.id == id } ?? false
             return found ? .measurement(id) : .gone
         }
+        // A pump belongs to the family: found by id alone, whichever baby's
+        // screen asked.
+        if case .pump(let id) = ref {
+            return (try? store.pump(id: id)) != nil ? .pump(id) : .gone
+        }
         guard let item = try? store.entry(id: ref.id, for: babyID) else { return .gone }
         switch (ref, item) {
         case (.diaper, .diaper(let diaper)):
             return .diaper(diaper.id)
         case (.supplement, .supplement(let med)):
             return .supplement(med.id)
+        case (.immunization, .immunization(let shot)):
+            return .immunization(shot.id)
         case (.sleep, .sleep(let sleep)):
             return .part(.sleep(sleepID: sleep.id))
         case (.feed, .feed(let feed)):
-            // Solids never join a session, so they never reach the session
-            // sheet, which has nothing to show for them.
+            // Solids open their own panel, even when added to a feed: the
+            // panel edits their foods, which the session sheet only lists.
             if feed.kind == .solids { return .solids(feedID: feed.id) }
             guard feed.components.count == 1, let only = feed.components.first else {
                 return .session(.feed, rootID: feed.effectiveFeedingSessionID)
@@ -132,23 +155,29 @@ public struct LogSheetView: View {
     let store: BabyStore
     let babyID: UUID
     let unit: VolumeUnit
+    let homeOrder: [HomeActionKind]
     let onDone: () -> Void
     let onSwitchTo: (LogSheet) -> Void
+    let onEditHomeButtons: (() -> Void)?
 
     public init(
         sheet: LogSheet,
         store: BabyStore,
         babyID: UUID,
         unit: VolumeUnit = .millilitres,
+        homeOrder: [HomeActionKind] = HomeActionKind.defaultOrder,
         onDone: @escaping () -> Void,
-        onSwitchTo: @escaping (LogSheet) -> Void
+        onSwitchTo: @escaping (LogSheet) -> Void,
+        onEditHomeButtons: (() -> Void)? = nil
     ) {
         self.sheet = sheet
         self.store = store
         self.babyID = babyID
         self.unit = unit
+        self.homeOrder = homeOrder
         self.onDone = onDone
         self.onSwitchTo = onSwitchTo
+        self.onEditHomeButtons = onEditHomeButtons
     }
 
     public var body: some View {
@@ -167,12 +196,21 @@ public struct LogSheetView: View {
             MeasurementSheet(store: store, mode: .create(babyID: babyID), onDone: onDone)
         case .supplement:
             SupplementSheet(store: store, babyID: babyID, onDone: onDone)
+        case .immunization:
+            ImmunizationSheet(store: store, babyID: babyID, onDone: onDone)
+        case .pump:
+            PumpSheet(store: store, mode: .start, unit: unit, onDone: onDone, onSwitchTo: onSwitchTo)
+        case .pumpAmount(let pumpID):
+            PumpAmountSheet(store: store, pumpID: pumpID, unit: unit, onDone: onDone)
         case .diaper:
             DiaperSheet(store: store, babyID: babyID, onDone: onDone)
+        case .meds:
+            MedsSheet(store: store, babyID: babyID, onSwitchTo: onSwitchTo, onDone: onDone)
         case .more:
-            MoreSheet(store: store, babyID: babyID, onSwitchTo: onSwitchTo, onDone: onDone)
+            MoreSheet(store: store, babyID: babyID, order: homeOrder, onSwitchTo: onSwitchTo,
+                      onEditHomeButtons: onEditHomeButtons, onDone: onDone)
         case .pastEntry:
-            NewPartSheet(store: store, babyID: babyID, unit: unit, onDone: onDone)
+            PastEntrySheet(store: store, babyID: babyID, unit: unit, onDone: onDone)
         case .editEntry(let ref):
             EditSheetRouter(ref: ref, store: store, babyID: babyID, unit: unit, onDone: onDone)
         case .session(let kind, let rootID):
@@ -221,6 +259,10 @@ private struct EditSheetRouter: View {
             DiaperSheet(store: store, babyID: babyID, editing: id, onDone: onDone)
         case .supplement(let id):
             SupplementSheet(store: store, babyID: babyID, editing: id, onDone: onDone)
+        case .immunization(let id):
+            ImmunizationSheet(store: store, babyID: babyID, editing: id, onDone: onDone)
+        case .pump(let id):
+            PumpSheet(store: store, mode: .edit(id), unit: unit, onDone: onDone)
         case .solids(let feedID):
             SolidsSheet(store: store, babyID: babyID, editing: feedID, onDone: onDone)
         case let .bottle(feedID, componentID):

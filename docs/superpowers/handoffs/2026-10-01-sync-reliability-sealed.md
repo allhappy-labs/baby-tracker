@@ -8,7 +8,7 @@ The user requested: “Seal up the work quickly, do not run tests.” No new tes
 - Recovery design and implementation were approved; performance work uses the subagent-driven Superpowers workflow.
 - No main merge, push, deployment or paired-phone update for this architecture. No release readiness claim.
 - Main has unrelated dirty `TASKS.md` and untracked `work/`; preserve them. Keep Growth source ZIP/PDF ignored and outside Git/app bundles.
-- Use only existing shared iPhone17Pro `D17101C9-01EB-488D-AFE1-58E6C089B853` with explicit destination if iOS gates become authorized. No cloning/reset/uninstall/runtime install. Home fixtures are isolated; broad `make test-ui` deletes persistent shared data and is excluded.
+- Use only existing shared iPhone17Pro `<simulator-udid>` with explicit destination if iOS gates become authorized. No cloning/reset/uninstall/runtime install. Home fixtures are isolated; broad `make test-ui` deletes persistent shared data and is excluded.
 
 ## What is committed
 

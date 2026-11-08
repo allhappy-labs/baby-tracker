@@ -36,7 +36,7 @@ All re-checked against the tree in the readiness plan's final fix wave (branch `
 | Item | Value | Where |
 | --- | --- | --- |
 | Built-in server identity | origin `https://baby-sync.example-tailnet.ts.net`, instance `<instance-uuid>` | `Packages/BabyTracker/Sources/SettingsFeature/FamilySyncComposition.swift:21-22` |
-| App bundle and APNs topic | `com.olhapi.babytracker`; topic `com.olhapi.babytracker.push-type.liveactivity` | `project.pbxproj:468,505`; `Server/internal/liveactivity/apns.go:154` |
+| App bundle and APNs topic | `com.example.babytracker`; topic `com.example.babytracker.push-type.liveactivity` | `project.pbxproj:468,505`; `Server/internal/liveactivity/apns.go:154` |
 | Signing | team `TEAM123456`, manual signing. Debug and Release both use the profile `BabyTracker Development - TEAM123456`; the widget uses `BabyTrackerWidgets Development - TEAM123456`. Device builds of both targets sign with the identity `Apple Development: developer@example.com (CERT123456)` (`CODE_SIGN_IDENTITY[sdk=iphoneos*]`). | `project.pbxproj:470,507,538,570` (profiles); `:448,485,520,552` (identity) |
 | Device entitlements | `Apps/BabyTracker.entitlements` (no `aps-environment`) | `project.pbxproj:446` (Debug), `:483` (Release) |
 | Simulator-only entitlements | `Apps/BabyTrackerLiveActivityPush.entitlements` (`aps-environment` = `development`), selected only through `"CODE_SIGN_ENTITLEMENTS[sdk=iphonesimulator*]"` | `project.pbxproj:447,484` |
@@ -57,7 +57,7 @@ All re-checked against the tree in the readiness plan's final fix wave (branch `
 | APNs answer per attempt | `live_activity_history`: `event` at intent, then `result` (`accepted`, `invalidToken`, `retryable`, `configurationFailure`, `ambiguous`), `http_status` and an allowlisted APNs `reason`. `live_activity_delivery.last_reason`: the latest non-accepted class, `dispatch_failed` for a parked job, or `transient_conflict` for a job that lost a database race (SQLSTATE class 40) and is retried after the shortest backoff. | `Server/migrations/000028_live_activity_push.sql` (`live_activity_history`, `app.live_activity_target`) |
 | Response classes | `BadDeviceToken` (also a token from the other APNs environment) and `Unregistered`/410 → `invalidToken`: that token is cleared. `DeviceTokenNotForTopic`, `TopicDisallowed`, `BadTopic` and any other 4xx such as 403 `InvalidProviderToken` → `configurationFailure`: no token is cleared and no generation fenced. 429 and 5xx → `retryable`. No answer → `ambiguous`. | `Server/internal/liveactivity/apns.go:168-186,255-268` |
 | APNs priority | 10 for starts, ends and updates that change phase, activity kind or write access; 5 for content-only edits in the same phase | `Server/internal/liveactivity/lifecycle.go` (`updatePriority`) |
-| Request log | JSON (`slog`): `msg="request completed"`, `route` (the pattern, never ids) and `status`. Every 5xx the shared error writers send adds one line: `msg="request failed"` at ERROR, or `msg="request abandoned by client"` at INFO when the client had already gone (`client_gone=true`, a force-quit or a lost connection; the response goes nowhere), with `route`, `code` (what the client saw, usually `service_unavailable`) and `cause` (a bounded name of the underlying failure: SQLSTATE and Postgres text, `context canceled`, a Go type; never provider or client text). | `Server/internal/httpapi/middleware.go` (`withMiddleware`, `logServerFault`) |
+| Request log | JSON (`slog`): `msg="request completed"`, `route` (the pattern, never ids) and `status`. Every 5xx the shared error writers send adds one line: `msg="request failed"` at ERROR, or `msg="request abandoned by client"` at INFO when the client had already gone (`client_gone=true`, `cause_class="client_gone"`: a force-quit or a lost connection; the response goes nowhere), with `route`, `code` (what the client saw, usually `service_unavailable`), `cause` (a bounded name of the underlying failure: SQLSTATE and Postgres text, `context canceled`, a Go type; never provider or client text), `cause_type` (each underlying error's Go type) and, when the cause is a code-shaped sentinel such as `family_lock_timeout`, `cause_code`. A request that ran out of the server's own time stays at ERROR with `cause_class="timed_out"`. A lost race (`code` `security_busy` or `credential_rotation_busy`, a retryable 503 the client retries, not a server fault) leaves `msg="request lost a race"` at WARN instead of the ERROR line, with the same fields plus `suppressed`, at most one a second per code. The 503s no shared writer sends (`server_busy`, `not_ready`, the challenge route's `rate_limit_unavailable` and `identity_unavailable`) leave `msg="request refused"` at WARN, at most one a second per `refusal` code, with `suppressed` (that code's refusals since its last line) and the cause fields when there is a cause. | `Server/internal/httpapi/middleware.go` (`withMiddleware`, `logServerFault`), `refusal_log.go` (`logRefusal`) |
 
 ## Known limits
 
@@ -147,7 +147,7 @@ git show "$new_sha:Server/internal/migrate/compatibility.json" | jq -c '{min,max
 
 - [ ] **Gates.** If `git diff --stat … -- Server` is empty, the fix wave's server gates stand (all recorded at `$gate_sha` in the [verification note](../verification/2026-10-03-family-live-activity-push.md)). If it is not empty, rerun `make server-test`, `make server-smoke`, `make server-protocol-e2e` and `make server-build`.
   - Always run `TMPDIR=$(mktemp -d /tmp/btlap.XXXXXX) make test` with an owned short `TMPDIR`; see the verification note on Task 1.
-  - Always run `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`.
+  - Always run `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`.
   - Record the exit codes: `<…>`.
 - [ ] **Fresh `linux/amd64` image.** Do not reuse `baby-tracker-server:rollout-e974fa1bb2ad` (`sha256:9a98587f…`): its label names `e974fa1`, not the final source.
 
@@ -183,9 +183,9 @@ Today it ends with `blocked: profile "BabyTracker Development - TEAM123456" (<uu
 
 With approval, in the Apple Developer account of team `TEAM123456`. Apple's console wording may differ; confirm on the day.
 
-1. **App ID `com.olhapi.babytracker`:** enable **Push Notifications**. ActivityKit push tokens belong to the app, so the widget App ID `com.olhapi.babytracker.widgets` needs no change; `check` reports the widget profiles with `aps-environment: not required`. Change it only if signing reports otherwise.
+1. **App ID `com.example.babytracker`:** enable **Push Notifications**. ActivityKit push tokens belong to the app, so the widget App ID `com.example.babytracker.widgets` needs no change; `check` reports the widget profiles with `aps-environment: not required`. Change it only if signing reports otherwise.
 2. **Regenerate the development profile** under the same name, `BabyTracker Development - TEAM123456`, with both phones included. `PROVISIONING_PROFILE_SPECIFIER` then stays unchanged. Install it, remove the stale copies of the same name from `~/Library/Developer/Xcode/UserData/Provisioning Profiles` (the script lists their paths), and re-run `check`. Expected: every listed `BabyTracker Development - TEAM123456` profile shows `aps-environment: development -> ok`, every `signing identity` line ends `-> ok`, and the last line is `result: ready (every device configuration of BabyTracker has a push-capable profile)`.
-3. **APNs authentication key.** Reuse an existing team APNs key if there is one. Otherwise create one for Apple Push Notifications service with the sandbox environment (sandbox and production also works), and with topic `com.olhapi.babytracker` if Apple asks for a topic.
+3. **APNs authentication key.** Reuse an existing team APNs key if there is one. Otherwise create one for Apple Push Notifications service with the sandbox environment (sandbox and production also works), and with topic `com.example.babytracker` if Apple asks for a topic.
    - Record the 10-character Key ID and the Team ID; neither is a secret.
    - Download the `.p8` once into the password manager. It never goes into the repository, a command argument, a log, or this document.
    - The repository does not create Apple keys.
@@ -212,7 +212,7 @@ What `enable` writes, and nothing else:
 - The two entitlement files differ only by `aps-environment` (`pushEntitlementsAreExactlyTheAppEntitlementsPlusTheDevelopmentGateway`).
 - `pushEntitlementsAreSelectedOnlyForTheSimulatorSDK` (`Packages/BabyTracker/Tests/BabySyncTests/LiveActivityPushEligibilityTests.swift`) pins the current split. `enable` replaces it in the same step with `pushEntitlementsSignEveryAppConfiguration`, which asserts the new state: two push lines, no base-file line, no simulator conditional. One test replaces one, so `EXPECTED_TESTS` is unchanged.
 - `enable` refuses on a project or pinning test in any other state (`unexpected project state`), and a second run on a switched project is a no-op (`already enabled`). `--dry-run` while P1 is still blocked prints the diff and ends with `dry-run: enable would be refused`, exit 1.
-- Gates, printed by `enable` as its `next` steps: `TMPDIR=$(mktemp -d /tmp/btlap.XXXXXX) make test`, `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853'`, the signed device build, and `check --app` on it (D-3). The script's own fixture tests: `make test-signing-script`.
+- Gates, printed by `enable` as its `next` steps: `TMPDIR=$(mktemp -d /tmp/btlap.XXXXXX) make test`, `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'`, the signed device build, and `check --app` on it (D-3). The script's own fixture tests: `make test-signing-script`.
 - **Do not** run `enable` before P1. The script refuses anyway: without `aps-environment` in the profile, manual signing of a device build fails on the entitlement mismatch.
 - Commit exactly the two files the script changed, as one reviewed commit (`git add BabyTracker.xcodeproj/project.pbxproj Packages/BabyTracker/Tests/BabySyncTests/LiveActivityPushEligibilityTests.swift`).
 
@@ -622,7 +622,7 @@ shasum -a 256 "$app/BabyTracker"
 
 `check --app` runs `codesign -d --entitlements - --xml` on the app and the widget, decodes `embedded.mobileprovision`, and applies the resolver's rules (`ProvisioningProfileEnvironmentResolver`: simulator → sandbox; no embedded profile on a device build → production; otherwise the profile's `aps-environment`, anything else → `nil`).
 
-- **Expected.** `codesign aps-environment: development`, `embedded profile: "BabyTracker Development - TEAM123456" (<uuid>), … aps-environment: development`, `resolver: sandbox (embedded profile aps-environment development)`, `widget aps-environment: none (expected; …)`, and `result: ready`, exit 0. The application-groups and keychain-access-groups lines must still name `group.com.olhapi.babytracker`. `check --app` repeats the project check first, so its `signing identity: "…" -> ok` lines appear as in P1.
+- **Expected.** `codesign aps-environment: development`, `embedded profile: "BabyTracker Development - TEAM123456" (<uuid>), … aps-environment: development`, `resolver: sandbox (embedded profile aps-environment development)`, `widget aps-environment: none (expected; …)`, and `result: ready`, exit 0. The application-groups and keychain-access-groups lines must still name `group.com.example.babytracker`. `check --app` repeats the project check first, so its `signing identity: "…" -> ok` lines appear as in P1.
 - **Blockers the script raises itself:** `embedded profile "…" (<uuid>) is not the app target's profile "BabyTracker Development - TEAM123456"` (the bundle was signed with some other profile, such as an automatic team profile), `codesign (…) and embedded profile (…) disagree`, or `… is signed without aps-environment; push stays inert on this build`. Each is exit 1.
 - **The runtime proof is A1:** each phone's registration shows `sandbox` on the server.
 - *Any other combination is a STOP. Do not install.*
@@ -677,7 +677,7 @@ The worker credential must differ from the runtime, projector, export and mainte
 ```sh
 cp -p "$BT_DEPLOY_ROOT/deployment.env" "$BT_DEPLOY_ROOT/deployment.env.before-push-$short" &&
 ! grep -q '^BT_APNS_' "$BT_DEPLOY_ROOT/deployment.env" &&
-printf 'BT_APNS_TEAM_ID=%s\nBT_APNS_KEY_ID=%s\nBT_APNS_BUNDLE_ID=com.olhapi.babytracker\n' '<team id>' '<key id>' \
+printf 'BT_APNS_TEAM_ID=%s\nBT_APNS_KEY_ID=%s\nBT_APNS_BUNDLE_ID=com.example.babytracker\n' '<team id>' '<key id>' \
   >> "$BT_DEPLOY_ROOT/deployment.env" &&
 compose_push config --quiet && echo 'PUSH CONFIG: OK'
 ```
@@ -697,8 +697,8 @@ compose_push run --rm --no-deps app live-activity-preflight --environment sandbo
 - **Expected** (the D build is development-signed, so its tokens are sandbox):
   ```
   [PASS] key file: regular file, mode 0600, P-256 private key
-  [PASS] identifiers: team <team id>, key ID <key id>, bundle com.olhapi.babytracker
-  [PASS] topic: com.olhapi.babytracker.push-type.liveactivity
+  [PASS] identifiers: team <team id>, key ID <key id>, bundle com.example.babytracker
+  [PASS] topic: com.example.babytracker.push-type.liveactivity
   [PASS] apple sandbox: 400 BadDeviceToken - key, team ID and key ID accepted; topic not contradicted (a dummy token cannot prove it)
   [SKIP] apple production: not selected
   [SKIP] worker database: skipped by --skip-database

@@ -20,7 +20,7 @@ import UIKit
 ///
 /// Rules for the content, all from the research's experiments:
 /// - No `Form` and no `NavigationStack` at its root: both measure as zero.
-///   Draw the title and Cancel in the content (`SheetHeader`) and group rows
+///   Draw the title and Cancel in the content (`SheetScaffold`) and group rows
 ///   in cards. A `ScrollView` with `.scrollBounceBehavior(.basedOnSize)` is
 ///   fine, and scrolls once the content is taller than the screen.
 /// - The keyboard is kept out of the measurement; the system raises the sheet
@@ -69,10 +69,8 @@ public struct FittedSheetToken: Identifiable, Sendable {
 /// places the content at the top, so SwiftUI never centres the content while
 /// the sheet is moving to a new height; asked with no height it reports the
 /// content's own — the measurement the sheet's detent uses.
-public struct SheetTopFill: Layout {
-    public init() {}
-
-    public func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
+private struct SheetTopFill: Layout {
+    func sizeThatFits(proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) -> CGSize {
         guard let content = subviews.first else { return .zero }
         let natural = content.sizeThatFits(ProposedViewSize(width: proposal.width, height: nil))
         let width = proposal.width ?? natural.width
@@ -80,7 +78,7 @@ public struct SheetTopFill: Layout {
         return CGSize(width: width, height: natural.height)
     }
 
-    public func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
+    func placeSubviews(in bounds: CGRect, proposal: ProposedViewSize, subviews: Subviews, cache: inout ()) {
         guard let content = subviews.first else { return }
         let natural = content.sizeThatFits(ProposedViewSize(width: bounds.width, height: nil))
         // Taller than the sheet (the largest text sizes): the content gets the
@@ -88,66 +86,6 @@ public struct SheetTopFill: Layout {
         let height = min(natural.height, bounds.height)
         content.place(at: bounds.origin, anchor: .topLeading,
                       proposal: ProposedViewSize(width: bounds.width, height: height))
-    }
-}
-
-/// The title row a fitted sheet draws itself, in place of a navigation bar:
-/// Cancel on the left, the title in the middle, an optional action (Save,
-/// Add) on the right.
-public struct SheetHeader<Title: View, Trailing: View>: View {
-    private let cancelTitle: String
-    private let cancelIdentifier: String?
-    private let onCancel: (() -> Void)?
-    private let title: Title
-    private let trailing: Trailing
-
-    public init(cancelTitle: String, cancelIdentifier: String? = nil, onCancel: (() -> Void)?,
-                @ViewBuilder title: () -> Title, @ViewBuilder trailing: () -> Trailing) {
-        self.cancelTitle = cancelTitle
-        self.cancelIdentifier = cancelIdentifier
-        self.onCancel = onCancel
-        self.title = title()
-        self.trailing = trailing()
-    }
-
-    public var body: some View {
-        ZStack {
-            title
-                .padding(.horizontal, 110)
-            HStack {
-                if let onCancel {
-                    Button(cancelTitle, action: onCancel)
-                        .buttonStyle(.glass)
-                        .controlSize(.large)
-                        .accessibilityIdentifier(cancelIdentifier ?? "")
-                }
-                Spacer(minLength: 0)
-                trailing
-            }
-        }
-        .frame(minHeight: 44)
-        .padding(.horizontal, 16)
-        .padding(.top, 16)
-    }
-}
-
-public extension SheetHeader where Title == SheetTitleText, Trailing == EmptyView {
-    /// A text title and Cancel.
-    init(_ title: String, cancelTitle: String, cancelIdentifier: String? = nil, onCancel: @escaping () -> Void) {
-        self.init(cancelTitle: cancelTitle, cancelIdentifier: cancelIdentifier, onCancel: onCancel, title: { SheetTitleText(title) }, trailing: { EmptyView() })
-    }
-}
-
-/// A fitted sheet's title, as a navigation bar would set it.
-public struct SheetTitleText: View {
-    private let text: String
-    public init(_ text: String) { self.text = text }
-    public var body: some View {
-        Text(text)
-            .font(.headline)
-            .foregroundStyle(Palette.primaryText)
-            .lineLimit(1)
-            .accessibilityAddTraits(.isHeader)
     }
 }
 

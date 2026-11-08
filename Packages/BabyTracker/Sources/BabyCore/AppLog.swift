@@ -9,7 +9,7 @@ import os
 /// and support threads. `describe(entryKind:id:)` is the only sanctioned way to
 /// refer to an entry, and it deliberately accepts no value parameters.
 public enum AppLog {
-    public static let subsystem = "com.olhapi.babytracker"
+    public static let subsystem = AppIdentity.bundlePrefix
 
     public static let store = Logger(subsystem: subsystem, category: "store")
     public static let timers = Logger(subsystem: subsystem, category: "timers")

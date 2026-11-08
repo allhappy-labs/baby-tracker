@@ -38,7 +38,8 @@ struct OwnerReplayTests {
         let baby = try fixture("baby.json")
         try add(baby.entityID, "baby", "create", baby.payload)
         for name in ["feed-bottle.json", "feed-breast.json", "feed-combination.json", "feed-solids.json",
-                     "sleep.json", "diaper.json", "supplement.json", "growth-profile.json", "measurement.json"] {
+                     "sleep.json", "diaper.json", "supplement.json", "growth-profile.json", "measurement.json",
+                     "immunization.json", "pump.json"] {
             let record = try fixture(name)
             try add(record.entityID, record.entityKind.rawValue, record.operation.rawValue, record.payload)
         }
@@ -154,6 +155,8 @@ struct OwnerReplayTests {
         #expect(try store.diaperEntryForTesting(UUID(uuidString: "40000000-0000-4000-8000-000000000001")!)?.contents == .mixed)
         #expect(try store.diaperEntryForTesting(diaperID)?.isTombstoned != false)
         #expect(try store.context.fetch(FetchDescriptor<SupplementEntry>()).map(\.name) == ["Vitamin D"])
+        #expect(try store.context.fetch(FetchDescriptor<ImmunizationEntry>()).map(\.vaccine) == ["Prevenar 13"])
+        #expect(try store.context.fetch(FetchDescriptor<PumpEntry>()).map(\.side) == [.both])
         #expect(try store.growthProfile(for: babyID)?.referenceSex == .girls)
         #expect(try store.measurements(for: babyID).first?.lengthCM == 65.5)
 

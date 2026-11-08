@@ -2,6 +2,7 @@ import SwiftUI
 import BabyCore
 import BabyStore
 import BabyUI
+import BabyFeature
 
 /// Every string the edit sheet shows. Strings never live in a view: a string
 /// baked into a `View` cannot be read by a test, and this project found
@@ -9,16 +10,8 @@ import BabyUI
 public enum BabyEditCopy {
     public static let profileLoadFailed = String(localized: "Growth settings could not be loaded. Saving will only update name and birth date.", bundle: .module)
     public static let retryGrowthSettings = String(localized: "Retry loading growth settings", bundle: .module)
-    public static let growthReference = String(localized: "Swiss PEZZ 2025 reference", bundle: .module)
-    public static let chooseReference = String(localized: "Choose a reference", bundle: .module)
-    public static let girls = String(localized: "Girls", bundle: .module)
-    public static let boys = String(localized: "Boys", bundle: .module)
-    public static let addDueDate = String(localized: "Add expected due date", bundle: .module)
-    public static let dueDate = String(localized: "Expected due date", bundle: .module)
     public static let referenceFooter = String(localized: "Choose a reference to enable growth comparisons. Existing measurements remain available without one.", bundle: .module)
     public static let title = String(localized: "Edit baby", bundle: .module)
-    public static let nameLabel = String(localized: "Name", bundle: .module)
-    public static let bornLabel = String(localized: "Born", bundle: .module)
     /// Shown to a caregiver instead of the control. It says who can do it, so
     /// the answer is "ask the owner" rather than "the app is broken".
     public static let deleteOwnerOnly = String(localized: "Only the family owner can remove a baby.", bundle: .module)
@@ -91,135 +84,106 @@ public struct BabyEditSheet: View {
         return (try? store.writePermission())?.canManageMembers ?? false
     }
 
+    /// Presented full height from Settings.
     public var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    TextField(BabyEditCopy.nameLabel, text: $name)
-                        #if os(iOS)
-                        // Autocapitalization is a UIKit text-input concept.
-                        .textInputAutocapitalization(.words)
-                        #endif
-                        .frame(minHeight: 44)
-                        .accessibilityLabel(BabyEditCopy.nameLabel)
-                    // A birth date in the future is not a correction, it is a
-                    // typo — and every age on Insights would go negative.
-                    DatePicker(
-                        BabyEditCopy.bornLabel,
-                        selection: $birthDate,
-                        in: ...store.now,
-                        displayedComponents: [.date]
-                    )
-                }
-
-                Section {
-                    if growth.loaded {
-                        Picker(BabyEditCopy.growthReference, selection: $growth.referenceSex) {
-                            if !growth.hasExistingReference {
-                                Text(BabyEditCopy.chooseReference).tag(GrowthReferenceSex?.none)
-                            }
-                            Text(BabyEditCopy.girls).tag(GrowthReferenceSex?.some(.girls))
-                            Text(BabyEditCopy.boys).tag(GrowthReferenceSex?.some(.boys))
-                        }
-                        .accessibilityIdentifier("baby.referenceSex")
-                        Toggle(BabyEditCopy.addDueDate, isOn: $growth.hasDueDate)
-                            .disabled(growth.referenceSex == nil)
-                            .accessibilityIdentifier("baby.hasDueDate")
-                        if growth.hasDueDate {
-                            DatePicker(BabyEditCopy.dueDate, selection: $growth.dueDate, displayedComponents: [.date])
-                                .accessibilityIdentifier("baby.dueDate")
-                        }
-                    } else if growth.failed {
-                        Text(BabyEditCopy.profileLoadFailed)
-                            .accessibilityIdentifier("baby.growthLoadError")
-                        Button(BabyEditCopy.retryGrowthSettings, action: loadGrowthProfile)
-                            .frame(minHeight: 44)
-                            .accessibilityIdentifier("baby.retryGrowthProfile")
-                    } else {
-                        ProgressView()
-                    }
-                } footer: {
-                    if growth.loaded { Text(BabyEditCopy.referenceFooter) }
-                }
-
-                // Deleting a baby removes it for the whole family, including
-                // every record every caregiver logged against it, so only the
-                // owner gets the control at all. Hidden rather than disabled:
-                // a greyed-out delete invites a tap and explains nothing.
-                Section {
-                    if canDeleteBaby {
-                        Button(BabyEditCopy.deleteLabel, role: .destructive) {
-                            isConfirmingDelete = true
-                        }
-                        .frame(minHeight: 44)
-                        .accessibilityIdentifier("baby.delete")
-                    } else {
-                        Text(BabyEditCopy.deleteOwnerOnly)
-                            .font(.footnote)
-                            .accessibilityIdentifier("baby.deleteOwnerOnly")
-                    }
-                } footer: {
-                    Text(canDeleteBaby ? BabyEditCopy.sharedDeleteFooter : BabyEditCopy.deleteFooter)
-                }
-            }
-            .task { if !growth.loaded { loadGrowthProfile() } }
-            .navigationTitle(BabyEditCopy.title)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(BabyEditCopy.cancelLabel, action: onDone)
-                }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button(BabyEditCopy.saveLabel) {
-                        do {
-                            try BabyGrowthEditValidation.save(
-                                store: store, baby: baby, name: name, birthDate: birthDate,
-                                // A failed/uncompleted profile read explicitly preserves profile state.
-                                referenceSex: growth.referenceForSave,
-                                expectedDueDate: try growth.dueDateForSave()
-                            ) {
-                                errorReporter.clear()
-                                onDone()
-                            }
-                        } catch {
-                            // Stays open: dismissing would throw away the name
-                            // the user just typed and look like it saved.
-                            errorReporter.report(
-                                ErrorBannerCopy.saveFailed(what: ErrorSubject.baby),
-                                error: error,
-                                category: AppLog.store
-                            )
-                        }
-                    }
-                    .disabled(!canSave)
-                    .accessibilityIdentifier("baby.save")
-                }
-            }
-            .confirmationDialog(
-                BabyEditCopy.deleteConfirmTitle(name: baby.name),
-                isPresented: $isConfirmingDelete,
-                titleVisibility: .visible
+        SheetScaffold(
+            BabyEditCopy.title,
+            closeTitle: BabyEditCopy.cancelLabel,
+            onClose: onDone,
+            primary: SheetAction(BabyEditCopy.saveLabel, identifier: "baby.save", isEnabled: canSave, action: save)
+        ) {
+            BabyFormFields(
+                name: $name,
+                birthDate: $birthDate,
+                latestBirthDate: store.now,
+                referenceSex: $growth.referenceSex,
+                offersNoReference: !growth.hasExistingReference,
+                hasDueDate: $growth.hasDueDate,
+                dueDateNeedsReference: true,
+                dueDate: $growth.dueDate,
+                growthFooter: BabyEditCopy.referenceFooter,
+                showsGrowth: growth.loaded,
+                identifierPrefix: "baby"
             ) {
-                Button(BabyEditCopy.deleteConfirmAction, role: .destructive) {
-                    do {
-                        try store.deleteBaby(baby)
-                        errorReporter.clear()
-                        onDeleted(baby.id)
-                        onDone()
-                    } catch {
-                        // A failed delete that dismissed looked exactly like a
-                        // successful one until the baby reappeared.
-                        errorReporter.report(
-                            ErrorBannerCopy.deleteFailed(what: ErrorSubject.baby),
-                            error: error,
-                            category: AppLog.store
-                        )
+                if growth.failed {
+                    InlineError(BabyEditCopy.profileLoadFailed)
+                        .accessibilityIdentifier("baby.growthLoadError")
+                    Button(action: loadGrowthProfile) {
+                        Text(BabyEditCopy.retryGrowthSettings)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                            .contentShape(Rectangle())
                     }
+                    .accessibilityIdentifier("baby.retryGrowthProfile")
+                } else {
+                    ProgressView()
                 }
-                Button(BabyEditCopy.deleteKeepAction, role: .cancel) {}
             }
+
+            // Deleting a baby removes it for the whole family, including
+            // every record every caregiver logged against it, so only the
+            // owner gets the control at all. Hidden rather than disabled:
+            // a greyed-out delete invites a tap and explains nothing.
+            CardSection {
+                if canDeleteBaby {
+                    DestructiveButton(BabyEditCopy.deleteLabel, identifier: "baby.delete") {
+                        isConfirmingDelete = true
+                    }
+                } else {
+                    Text(BabyEditCopy.deleteOwnerOnly)
+                        .font(.footnote)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .accessibilityIdentifier("baby.deleteOwnerOnly")
+                }
+            } footer: {
+                Text(canDeleteBaby ? BabyEditCopy.sharedDeleteFooter : BabyEditCopy.deleteFooter)
+            }
+        }
+        .tint(Palette.feed)
+        .task { if !growth.loaded { loadGrowthProfile() } }
+        .confirmDelete(
+            isPresented: $isConfirmingDelete,
+            title: BabyEditCopy.deleteConfirmTitle(name: baby.name),
+            deleteTitle: BabyEditCopy.deleteConfirmAction,
+            keepTitle: BabyEditCopy.deleteKeepAction,
+            identifierPrefix: "baby"
+        ) {
+            do {
+                try store.deleteBaby(baby)
+                errorReporter.clear()
+                onDeleted(baby.id)
+                onDone()
+            } catch {
+                // A failed delete that dismissed looked exactly like a
+                // successful one until the baby reappeared.
+                errorReporter.report(
+                    ErrorBannerCopy.deleteFailed(what: ErrorSubject.baby),
+                    error: error,
+                    category: AppLog.store
+                )
+            }
+        }
+    }
+
+    private func save() {
+        do {
+            try BabyGrowthEditValidation.save(
+                store: store, baby: baby, name: name, birthDate: birthDate,
+                // A failed/uncompleted profile read explicitly preserves profile state.
+                referenceSex: growth.referenceForSave,
+                expectedDueDate: try growth.dueDateForSave()
+            ) {
+                errorReporter.clear()
+                onDone()
+            }
+        } catch {
+            // Stays open: dismissing would throw away the name
+            // the user just typed and look like it saved.
+            errorReporter.report(
+                ErrorBannerCopy.saveFailed(what: ErrorSubject.baby),
+                error: error,
+                category: AppLog.store
+            )
         }
     }
 }

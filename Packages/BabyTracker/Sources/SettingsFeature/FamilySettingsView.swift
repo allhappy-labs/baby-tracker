@@ -61,7 +61,7 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
     }
 
     public var body: some View {
-        Form {
+        SettingsListPage {
             switch model.mode {
             case .localOnly:
                 serverSelectionSection
@@ -84,10 +84,12 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
                     onRetryInvitations: { Task { await model.reloadInvitations() } },
                     onConfirm: { pendingConfirmation = $0 }
                 )
-                Section {
-                    NavigationLink("Account") { AccountSettingsView(model: model) }
-                        .frame(minHeight: 44)
-                        .accessibilityIdentifier("family.account")
+                CardListSection {
+                    // The List draws a link's chevron.
+                    NavigationLink { AccountSettingsView(model: model) } label: {
+                        ListRow(AccountCopy.title)
+                    }
+                    .accessibilityIdentifier("family.account")
                 }
             }
         }
@@ -183,29 +185,21 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
     // MARK: Sections
 
     private var serverSelectionSection: some View {
-        Section {
-            Button(FamilyCopy.chooseServer) { showingServerSelection = true }
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("family.chooseServer")
-        } header: {
-            Text(FamilyCopy.serverHeader)
+        CardListSection(FamilyCopy.serverHeader) {
+            ActionRow(FamilyCopy.chooseServer, identifier: "family.chooseServer") { showingServerSelection = true }
         } footer: {
             Text(FamilyCopy.serverFooter)
         }
     }
 
     private var signedOutSection: some View {
-        Section {
+        CardListSection(FamilyCopy.title) {
             // The name comes first: the server refuses an account's first
             // sign-in without one, and Apple only offers a name the very
             // first time — never on a second device or a reinstall.
             displayNameRow
-            Button(FamilyCopy.signIn) { run { try await model.signInWithApple() } }
-                .frame(minHeight: 44)
+            ActionRow(FamilyCopy.signIn, identifier: "family.signIn") { run { try await model.signInWithApple() } }
                 .disabled(!model.displayNameConfirmed)
-                .accessibilityIdentifier("family.signIn")
-        } header: {
-            Text(FamilyCopy.title)
         } footer: {
             // The reassurance that stops this screen reading as a paywall:
             // nothing here is required to use the app.
@@ -216,23 +210,20 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
     /// Apple says this account no longer authorizes us. The screen states
     /// plainly that the family's data is safe and what the user must do.
     private var revokedSection: some View {
-        Section {
+        CardListSection(FamilyCopy.signedOutHeader) {
             Text(model.confirmationCopy.isEmpty ? FamilyLifecycleCopy.selfHostRevocation : model.confirmationCopy)
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("family.revocationCopy")
             displayNameRow
-            Button(FamilyCopy.signInAgain) { run { try await model.signInWithApple() } }
-                .frame(minHeight: 44)
+            ActionRow(FamilyCopy.signInAgain, identifier: "family.signInAgain") { run { try await model.signInWithApple() } }
                 .disabled(!model.displayNameConfirmed)
-                .accessibilityIdentifier("family.signInAgain")
-        } header: {
-            Text(FamilyCopy.signedOutHeader)
         }
     }
 
     @ViewBuilder
     private var noFamilySection: some View {
-        Section {
+        CardListSection(FamilyCopy.noFamilyHeader) {
             // Apple gives a name on the first authorization only, and both
             // creating and joining need one. Without this row a reinstall or
             // a second device could do neither.
@@ -240,14 +231,21 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
             TextField(FamilyCopy.familyNameField, text: $familyName)
                 .frame(minHeight: 44)
                 .accessibilityIdentifier("family.nameField")
+        }
+
+        CardListButtonSection {
             Button(FamilyCopy.createFamily) {
                 run { try await model.createFamily(name: familyName) }
             }
-            .frame(minHeight: 44)
+            .buttonStyle(.primary)
             .disabled(familyName.trimmingCharacters(in: .whitespaces).isEmpty || !model.displayNameConfirmed)
             .accessibilityIdentifier("family.create")
+        } footer: {
+            Text(FamilyCopy.noFamilyFooter)
+        }
 
-            Button {
+        CardListSection {
+            ActionRow(FamilyCopy.scanQRCode, identifier: "family.scanQRCode", systemImage: "qrcode.viewfinder") {
                 Task {
                     // Asks for the camera the first time, so a fresh install
                     // can scan at all.
@@ -261,26 +259,14 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
                         scannerUnavailable = ScannerUnavailableNotice(showSettings: false)
                     }
                 }
-            } label: {
-                Label(FamilyCopy.scanQRCode, systemImage: "qrcode.viewfinder")
             }
-            .frame(minHeight: 44)
             .disabled(!model.displayNameConfirmed || model.confirmedOrigin == nil)
-            .accessibilityIdentifier("family.scanQRCode")
             if let scannerUnavailable {
                 ScannerUnavailableRows(cameraDenied: scannerUnavailable.showSettings)
             }
-        } header: {
-            Text(FamilyCopy.noFamilyHeader)
-        } footer: {
-            Text(FamilyCopy.noFamilyFooter)
         }
 
-        Section {
-            InvitationCodeRows(model: model, isWorking: $isWorking)
-        } header: {
-            Text(FamilyCopy.orPasteCode)
-        }
+        InvitationCodeRows(model: model, isWorking: $isWorking)
     }
 
     /// "Join {family}?" is up while an invitation waits and the phone can
@@ -303,31 +289,24 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
             Button {
                 showingDisplayName = true
             } label: {
-                LabeledContent(FamilyCopy.nameLabel, value: model.profile.displayName)
+                ListRow(FamilyCopy.nameLabel, value: model.profile.displayName, accessory: .disclosure)
             }
-            .frame(minHeight: 44)
+            .buttonStyle(.plain)
             .accessibilityIdentifier("family.displayName")
         } else {
-            Button(FamilyCopy.chooseName) { showingDisplayName = true }
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("family.displayName")
+            ActionRow(FamilyCopy.chooseName, identifier: "family.displayName") { showingDisplayName = true }
         }
     }
 
     private var recoverySection: some View {
-        Section {
+        CardListSection(FamilyCopy.recoveryHeader) {
             Text(FamilyCopy.recoveryExplanation)
                 .font(.callout)
-            Button(FamilyCopy.recoverFamily) { run { try await model.recoverFamily() } }
-                .frame(minHeight: 44)
-                .accessibilityIdentifier("family.recover")
-            Button(FamilyCopy.forfeitRecovery, role: .destructive) {
+                .fixedSize(horizontal: false, vertical: true)
+            ActionRow(FamilyCopy.recoverFamily, identifier: "family.recover") { run { try await model.recoverFamily() } }
+            DestructiveButton(FamilyCopy.forfeitRecovery, identifier: "family.forfeit") {
                 run { try await model.forfeitFamilyRecovery() }
             }
-            .frame(minHeight: 44)
-            .accessibilityIdentifier("family.forfeit")
-        } header: {
-            Text(FamilyCopy.recoveryHeader)
         }
     }
 
@@ -335,18 +314,16 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
     /// and a transient retry are said plainly and in the neutral colour: the
     /// entries are safe and nothing is asked of the parent.
     private func syncStatusSection(_ line: FamilySyncStatusLine) -> some View {
-        Section {
+        CardListSection {
             Text(line.text)
                 .font(.callout)
                 .foregroundStyle(line.isProblem ? Palette.primaryText : Palette.secondaryText)
-                .frame(minHeight: 44, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("family.syncStatus")
             if line.offersSignIn {
                 displayNameRow
-                Button(FamilySyncStatusCopy.signInButton) { run { try await model.signInWithApple() } }
-                    .frame(minHeight: 44)
+                ActionRow(FamilySyncStatusCopy.signInButton, identifier: "family.syncSignIn") { run { try await model.signInWithApple() } }
                     .disabled(!model.displayNameConfirmed)
-                    .accessibilityIdentifier("family.syncSignIn")
             }
         }
     }
@@ -355,12 +332,11 @@ public struct FamilySettingsView<Model: FamilySyncSettingsModel>: View {
     /// A viewer who does not know why the log buttons vanished will assume the
     /// app is broken.
     private var readOnlySection: some View {
-        Section {
+        CardListSection(FamilyCopy.readOnlyHeader) {
             Text(FamilyCopy.readOnlyExplanation)
                 .font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
                 .accessibilityIdentifier("family.readOnlyExplanation")
-        } header: {
-            Text(FamilyCopy.readOnlyHeader)
         }
     }
 

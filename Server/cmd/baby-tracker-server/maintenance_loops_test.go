@@ -246,14 +246,27 @@ func TestAuditRollBeforeServing(t *testing.T) {
 	started, stop := startMaintenance(t.Context(), ready, requestAuthority, f.Maintenance, slots, slog.New(slog.DiscardHandler))
 	rolled := len(months())
 	stop()
-	if len(started) != 4 || started[0].Name != "retention" || started[1].Name != "audit-partitions" ||
+	if len(started) != 5 || started[0].Name != "retention" || started[1].Name != "audit-partitions" ||
 		started[1].Offset != maintenance.AuditPartitionInterval || started[2].Name != "push-tokens" ||
-		started[2].Offset != pushTokenLoopOffset || started[3].Name != "family-purge" || rolled != len(present) {
+		started[2].Offset != pushTokenLoopOffset || started[3].Name != "family-purge" || started[4].Name != "audit-retention" || rolled != len(present) {
 		t.Fatalf("startMaintenance started %d loops (audit offset %v), %d months on return; want retention, the audit loop an interval out "+
-			"(the month rolled), the push-token loop at its offset and the family purge", len(started), started[min(1, len(started)-1)].Offset, rolled)
+			"(the month rolled), the push-token loop at its offset, the family purge and the audit retention", len(started), started[min(1, len(started)-1)].Offset, rolled)
 	}
 	if purger, ok := started[3].Sweeps[0].(*maintenance.Purger); !ok || purger.Authority != requestAuthority {
 		t.Fatalf("startMaintenance's purge loop %+v, want the purge over the request authority", started[3])
+	}
+	// Audit retention (owner decision D1): its own hourly loop, well after
+	// startup, on the maintenance pool inside its worker slots, behind
+	// readiness; the pre-serving roll stays roll-only.
+	expiry := started[4]
+	sweep, ok := expiry.Sweeps[0].(maintenance.AuditRetentionSweep)
+	if len(expiry.Sweeps) != 1 || !ok || sweep.Pool != f.Maintenance || sweep.Slots != slots || sweep.Logger == nil ||
+		expiry.Interval != maintenance.AuditRetentionInterval || expiry.Offset != auditRetentionLoopOffset || auditRetentionLoopOffset <= pushTokenLoopOffset ||
+		expiry.FailureRetry != maintenance.AuditRetentionInterval || expiry.Timeout != maintenance.AuditRetentionSweepTimeout || expiry.Ready == nil || expiry.Now == nil {
+		t.Fatalf("audit retention loop %+v, want the retention sweep hourly (a failure retried an hour later) on the maintenance pool inside its slots, after the push-token loop", expiry)
+	}
+	if len(started[1].Sweeps) != 1 {
+		t.Fatalf("the audit roll loop runs %d sweeps, want the roll alone", len(started[1].Sweeps))
 	}
 }
 

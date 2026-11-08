@@ -49,8 +49,10 @@ struct BackgroundWakePushE2ETests {
                      "the token did not register through the route: \(caregiver.traffic.pushTokenCalls)")
         try await caregiver.sync() // the caregiver is at the high water: nothing to wake yet
         try #require(caregiver.traffic.liveDials.isEmpty, "the caregiver dialled the live socket: \(caregiver.traffic.liveDials)")
-        // Past a wake-worker tick (every 2 s): a token alone is not a reason to push.
-        try await Task.sleep(for: .seconds(3))
+        // Past a whole successful wake-worker tick, by the worker's own count
+        // rather than a sleep (which is vacuous when a loaded machine delays
+        // or fails the tick): a token alone is not a reason to push.
+        try await recorder.waitForWholeWakeTick(timeout: .seconds(20))
         try #require(try await recorder.records(token: tokenHex).isEmpty, "the caregiver was pushed before the owner wrote")
 
         let timer = try owner.store.startPart(.breast(.left), for: baby)
@@ -78,8 +80,9 @@ struct BackgroundWakePushE2ETests {
         try #require(pulled.id == timer.id)
 
         // One push, never a second: the caregiver is up to date, and the
-        // device is inside its 20-minute APNs window anyway.
-        try await Task.sleep(for: .seconds(3))
+        // device is inside its 20-minute APNs window anyway. A whole
+        // successful tick after the pull, by the worker's count.
+        try await recorder.waitForWholeWakeTick(timeout: .seconds(20))
         let pushes = try await recorder.records(token: tokenHex)
         try #require(pushes.count == 1, "the caregiver was pushed \(pushes.count) times")
         try #require(caregiver.traffic.liveDials.isEmpty)

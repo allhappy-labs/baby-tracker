@@ -12,25 +12,28 @@ struct InsightSectionCard: View {
     @ScaledMetric(relativeTo: .footnote) private var gridLabelLine: CGFloat = 18
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 8) {
+        Card(padding: Spacing.m) {
+            content
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityIdentifier("insights.section." + section.id)
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: Spacing.s) {
             headline
             if section.headline == nil {
                 // The headline's label already says it; read once.
                 Text(L10n.tr("Nothing logged in this period."))
-                    .font(.footnote).foregroundStyle(Palette.secondaryText)
+                    .textRole(.caption)
                     .accessibilityHidden(true)
             } else {
                 chart
                 axis
                 if section.kind == .sleep { sleepKey }
-                ForEach(section.rows) { rowView($0) }
+                VStack(alignment: .leading, spacing: 0) { ForEach(section.rows) { rowView($0) } }
             }
         }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.055), in: .rect(cornerRadius: 18))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("insights.section." + section.id)
     }
 
     private var headline: some View {
@@ -105,7 +108,7 @@ struct InsightSectionCard: View {
                     .foregroundStyle(Palette.primaryText.opacity(0.2))
                     .annotation(position: .top, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         Text(bar.callout).font(.footnote.monospacedDigit())
-                            .padding(6).background(Palette.ground.opacity(0.95), in: .rect(cornerRadius: 8))
+                            .padding(6).background(Palette.ground.opacity(0.95), in: .rect(cornerRadius: Radius.control))
                     }
                     .accessibilityHidden(true)
             }
@@ -156,7 +159,7 @@ struct InsightSectionCard: View {
     }
 
     private var sleepKey: some View {
-        HStack(spacing: 12) {
+        HStack(spacing: Spacing.m) {
             key(L10n.tr("Night"), opacity: 0.75)
             key(L10n.tr("Naps"), opacity: 0.35)
         }
@@ -167,24 +170,15 @@ struct InsightSectionCard: View {
 
     private func key(_ title: String, opacity: Double) -> some View {
         HStack(spacing: 4) {
-            RoundedRectangle(cornerRadius: 2).fill(section.tracker.color.opacity(opacity)).frame(width: 9, height: 9)
+            Circle().fill(section.tracker.color.opacity(opacity)).frame(width: 9, height: 9)
             Text(title)
         }
     }
 
     @ViewBuilder
     private func rowView(_ row: InsightRow) -> some View {
-        VStack(alignment: .leading, spacing: 4) {
-            Divider().overlay(.white.opacity(0.06))
-            let layout = typeSize.isAccessibilitySize
-                ? AnyLayout(VStackLayout(alignment: .leading, spacing: 2))
-                : AnyLayout(HStackLayout(alignment: .firstTextBaseline))
-            layout {
-                Text(row.label).foregroundStyle(Palette.secondaryText)
-                if !typeSize.isAccessibilitySize { Spacer(minLength: 8) }
-                Text(row.value).fontWeight(.semibold).monospacedDigit().foregroundStyle(Palette.primaryText)
-            }
-            .font(.subheadline)
+        VStack(alignment: .leading, spacing: Spacing.xs) {
+            ListRow(row.label, value: row.value, density: .compact)
             if !row.shares.isEmpty {
                 GeometryReader { geometry in
                     HStack(spacing: 0) {
@@ -198,6 +192,9 @@ struct InsightSectionCard: View {
                 .clipShape(Capsule())
             }
         }
+        // The row is its own accessibility element, so its 44 pt target is
+        // set here, inside it, not by the container around it.
+        .cardRow()
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(row.label): \(row.value)")
     }

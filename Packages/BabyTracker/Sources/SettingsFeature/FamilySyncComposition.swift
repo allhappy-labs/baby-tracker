@@ -519,6 +519,9 @@ public protocol FamilySyncDriving: AnyObject {
     func localWriteHappened()
     func startForegroundPolling()
     func stopForegroundPolling()
+    /// See `FamilySyncEngine.isCatchingUp`.
+    var isCatchingUp: Bool { get }
+    func waitForCatchUp() async
     /// Waits until nothing is in flight and refuses all later work. Called
     /// before anything that purges the family's realm.
     func stop() async
@@ -528,6 +531,8 @@ extension FamilySyncEngine: FamilySyncDriving {}
 
 public extension FamilySyncDriving {
     var operationalStatus: SyncOperationalStatus { .inactive }
+    var isCatchingUp: Bool { false }
+    func waitForCatchUp() async {}
 }
 
 public extension FamilySettingsViewModel {

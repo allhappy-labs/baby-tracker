@@ -445,6 +445,37 @@ func TestPrincipalProbeAndSmokeAssertTheMaintenanceGrants(t *testing.T) {
 	}
 }
 
+// Schema 35 (owner decision D1): both principal-probe modes and the smoke
+// assert the audit retention grants: the drop definer executed by the
+// maintenance group alone, and the retention anchors read by the runtime
+// alone and written by nobody.
+func TestPrincipalProbeAndSmokeAssertTheAuditRetentionGrants(t *testing.T) {
+	principal, err := os.ReadFile("check-principals.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	smoke, err := os.ReadFile("smoke.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	definer := "has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE') FROM (SELECT 'app.drop_expired_audit_partition(timestamp with time zone)' AS f) d"
+	for _, check := range []struct {
+		script, text, required string
+		want                   int
+	}{
+		{"check-principals.sh", string(principal), `if [ "$(sql "SELECT current_version >= 35 FROM schema_compatibility WHERE singleton")" = t ]; then`, 2},
+		{"check-principals.sh", string(principal), definer, 2},
+		{"check-principals.sh", string(principal), "has_table_privilege('baby_tracker_runtime','public.audit_retention_anchors','SELECT') AND NOT has_table_privilege('baby_tracker_runtime','public.audit_retention_anchors','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AND NOT bool_or(has_table_privilege(r,'public.audit_retention_anchors','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public','baby_tracker_maintenance']) r", 2},
+		{"smoke.sh", string(smoke), "if (( expected_schema_version >= 35 )); then", 1},
+		{"smoke.sh", string(smoke), definer, 1},
+		{"smoke.sh", string(smoke), "has_table_privilege('baby_tracker_runtime','audit_retention_anchors','SELECT') AND NOT has_table_privilege('baby_tracker_runtime','audit_retention_anchors','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AND NOT bool_or(has_table_privilege(r,'audit_retention_anchors','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public','baby_tracker_maintenance']) r", 1},
+	} {
+		if n := strings.Count(check.text, check.required); n != check.want {
+			t.Fatalf("%s holds %d copies of %q, want %d", check.script, n, check.required, check.want)
+		}
+	}
+}
+
 // Schema 32: both principal-probe modes and the smoke assert the Live Activity
 // grants: the runtime's SELECT, INSERT and UPDATE on the two tenant tables
 // (each on its own, never DELETE) and its five registration definers; the

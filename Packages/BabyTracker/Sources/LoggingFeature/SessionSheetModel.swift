@@ -45,9 +45,10 @@ public struct SessionPart: Identifiable, Equatable {
     public let canSplitBefore: Bool
 }
 
-/// What "Add part" adds. Solids never join a session, so they are not here.
+/// What "Add part" adds. Solids join a feed only this way: the break limit
+/// never joins them.
 public enum AddPartKind: CaseIterable, Sendable {
-    case left, right, bottle, sleep
+    case left, right, bottle, solids, sleep
 
     /// What a session of `kind` offers.
     public static func offered(for kind: SessionKind) -> [AddPartKind] {
@@ -61,6 +62,7 @@ public enum AddPartKind: CaseIterable, Sendable {
         case .left: BreastSide.left.displayName
         case .right: BreastSide.right.displayName
         case .bottle: PartEditCopy.bottleTitle
+        case .solids: SolidsSheetCopy.title
         case .sleep: Tracker.sleep.title
         }
     }
@@ -70,6 +72,7 @@ public enum AddPartKind: CaseIterable, Sendable {
         case .left: .breastLeft
         case .right: .breastRight
         case .bottle: .bottle
+        case .solids: .solids
         case .sleep: .sleep
         }
     }
@@ -188,6 +191,14 @@ public final class SessionSheetModel {
         return start.addingTimeInterval(Self.minimumLength(addition)) <= addedPartLimit
     }
 
+    /// The Solids panel for solids eaten during this feed, at the session's
+    /// end to start with. Nothing is written until it saves, as solids are
+    /// their foods and there is no sensible default to write first.
+    public func newSolidsModel() -> SolidsLogModel? {
+        guard kind == .feed, canAdd(.solids), let start = addedPartStart else { return nil }
+        return SolidsLogModel(store: store, babyID: babyID, session: rootID, at: start)
+    }
+
     /// Adds a part starting at the session's end, linked to this session
     /// whatever the break limit says, and returns it for its editor to open.
     /// It starts a second later when a part already starts at that end
@@ -195,9 +206,10 @@ public final class SessionSheetModel {
     /// ten minutes, as on the Past entry sheet, or up to now when the session
     /// ended less than that ago (ruling H-R18), or up to where a part running
     /// on from the session began (final review M6); a bottle takes the Bottle
-    /// sheet's usual amount and contents. Refused while `canAdd` is false.
+    /// sheet's default amount and contents. Refused while `canAdd` is false,
+    /// and for solids, which `newSolidsModel()` adds once they are named.
     public func addPart(_ addition: AddPartKind) throws -> PartEditTarget {
-        guard addition.sessionKind == kind else { throw EditModeError.invalid }
+        guard addition.sessionKind == kind, addition != .solids else { throw EditModeError.invalid }
         guard !isGone, let start = addedPartStart else { throw EditModeError.gone }
         guard canAdd(addition) else { throw EditModeError.invalid }
         let end = min(start.addingTimeInterval(600), addedPartLimit)
@@ -210,12 +222,14 @@ public final class SessionSheetModel {
             target = .breast(feedID: feed.id, componentID: component.id)
         case .bottle:
             let defaults = LogDefaults(store: store)
-            let volume = (try? defaults.mostUsedBottleVolumeML(for: babyID)) ?? LogDefaults.fallbackVolumeML
+            let volume = (try? defaults.lastBottleVolumeML(for: babyID)) ?? LogDefaults.fallbackVolumeML
             let contents = (try? defaults.lastBottleContents(for: babyID)) ?? LogDefaults.fallbackContents
             let feed = try store.addFeedPart(.bottle(volumeML: volume, contents: contents, at: start),
                                              toSession: rootID, for: babyID)
             guard let component = feed.components.first else { throw EditModeError.gone }
             target = .bottle(feedID: feed.id, componentID: component.id)
+        case .solids:
+            throw EditModeError.invalid
         case .sleep:
             let sleep = try store.addSleepPart(from: start, to: end, toSession: rootID, for: babyID)
             target = .sleep(sleepID: sleep.id)
@@ -231,7 +245,7 @@ public final class SessionSheetModel {
     public func deletePart(_ partID: UUID) throws {
         guard let part = parts.first(where: { $0.id == partID }) else { return reload() }
         switch part.target {
-        case let .breast(feedID, componentID), let .bottle(feedID, componentID):
+        case let .breast(feedID, componentID), let .bottle(feedID, componentID), let .solids(feedID, componentID):
             try store.removeComponent(componentID, fromFeed: feedID, for: babyID)
         case let .sleep(sleepID):
             try store.deleteSleepPart(sleepID, for: babyID)
@@ -294,12 +308,12 @@ public final class SessionSheetModel {
     }
 
     /// The shortest part Add part may write: the store's breast minimum, a
-    /// minute of sleep, and a bottle's moment.
+    /// minute of sleep, and a bottle's or solids' moment.
     private static func minimumLength(_ addition: AddPartKind) -> TimeInterval {
         switch addition {
         case .left, .right: 30
         case .sleep: 60
-        case .bottle: 0
+        case .bottle, .solids: 0
         }
     }
 
@@ -349,8 +363,12 @@ public final class SessionSheetModel {
                     let time = Self.clock(start, zone: feed.timeZoneID)
                     detail = (seconds ?? 0) > 0 ? "\(time)–\(Self.clock(end, zone: feed.timeZoneID))" : time
                     volumeML += volume
-                case .solids:
-                    continue
+                case let .solids(id, foods, amount):
+                    label = Self.solidsLabel(foods, amount)
+                    icon = .solids
+                    target = .solids(feedID: feed.id, componentID: id)
+                    end = start
+                    detail = Self.clock(start, zone: feed.timeZoneID)
                 }
                 // An entry's first part starts with the entry, timed or not.
                 let startsEntry = previous.map { $0.entryID != feed.id } ?? false
@@ -406,6 +424,13 @@ public final class SessionSheetModel {
         var totals = [ElapsedFormatter.total(sleeps.compactMap(\.durationSeconds).reduce(0, +))]
         if sleeps.count > 1 { totals.append(SessionSheetCopy.wakes(sleeps.count - 1)) }
         self.totals = totals.joined(separator: " · ")
+    }
+
+    /// "Pear, oat · A little", as History's chip reads; the amount alone
+    /// when no food was named.
+    static func solidsLabel(_ foods: [String], _ amount: SolidsAmount) -> String {
+        ((foods.isEmpty ? [] : [foods.joined(separator: ", ").sentenceCased]) + [amount.displayName])
+            .joined(separator: " · ")
     }
 
     /// "10:23 – 11:48", or the one time when the session is a moment.

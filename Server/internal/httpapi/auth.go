@@ -14,6 +14,10 @@ import (
 	"babytracker/server/internal/protocol"
 )
 
+// errChallengeUnconfigured is the cause of a challenge not_ready from a
+// node built without the challenge's dependencies.
+var errChallengeUnconfigured = errors.New("challenge_unconfigured")
+
 const authBodyBytes int64 = 32 << 10
 const appleNotificationBodyBytes int64 = 64 << 10
 
@@ -21,12 +25,12 @@ func challengeHandler(options Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		requestID := requestIDFromContext(request.Context())
-		if authDependenciesError(request, options) != nil {
-			writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestID, true)
+		if err := authDependenciesError(request, options); err != nil {
+			writeNotReady(w, request, err)
 			return
 		}
 		if options.ClientIPResolver == nil || options.Limiter == nil || options.ChallengeService == nil {
-			writeError(w, http.StatusServiceUnavailable, "not_ready", "Service is not ready", requestID, true)
+			writeNotReady(w, request, errChallengeUnconfigured)
 			return
 		}
 		address, err := options.ClientIPResolver.Resolve(request.RemoteAddr, request.Header)
@@ -36,6 +40,7 @@ func challengeHandler(options Options) http.HandlerFunc {
 		}
 		decision, err := options.Limiter.Take(request.Context(), limits.ScopeAuthChallengeIP, address.String(), options.ChallengePolicy)
 		if err != nil {
+			logRefusal(request, refusalRateLimitUnavailable, http.StatusServiceUnavailable, err)
 			writeError(w, http.StatusServiceUnavailable, "rate_limit_unavailable", "Rate limit service is unavailable", requestID, true)
 			return
 		}
@@ -59,6 +64,7 @@ func challengeHandler(options Options) http.HandlerFunc {
 		}
 		challenge, err := options.ChallengeService.Challenge(request.Context())
 		if err != nil {
+			logRefusal(request, refusalIdentityUnavailable, http.StatusServiceUnavailable, err)
 			writeError(w, http.StatusServiceUnavailable, "identity_unavailable", "Identity service is unavailable", requestID, true)
 			return
 		}
@@ -119,6 +125,7 @@ func appleExchangeHandler(options Options) http.HandlerFunc {
 			writeAuthError(w, request, err)
 			return
 		}
+		options.KnownRefreshes.issued(refreshDigests(options, bundle.RefreshToken))
 		writeJSON(w, http.StatusOK, sessionResponse(bundle))
 	}
 }
@@ -164,6 +171,7 @@ func refreshHandler(options Options) http.HandlerFunc {
 			writeAuthError(w, request, err)
 			return
 		}
+		options.KnownRefreshes.rotated(refreshDigests(options, input.RefreshToken), refreshDigests(options, bundle.RefreshToken))
 		writeJSON(w, http.StatusOK, sessionResponse(bundle))
 	}
 }
@@ -213,11 +221,13 @@ func recoverableRefreshHandler(options Options) http.HandlerFunc {
 			writeRateLimited(w, request, decision)
 			return
 		}
+		input.Subject = subject // the rotation does not look the session up again
 		bundle, err := options.RecoveryService.RefreshRecoverable(request.Context(), input)
 		if err != nil {
 			writeAuthError(w, request, err)
 			return
 		}
+		options.KnownRefreshes.rotated(refreshDigests(options, input.RefreshToken), refreshDigests(options, bundle.RefreshToken))
 		writeJSON(w, http.StatusOK, protocol.RecoverableRefreshResponse{SessionResponse: sessionResponse(bundle.SessionBundle), RefreshAttemptID: bundle.RefreshAttemptID, ServerInstanceID: options.InstanceID})
 	}
 }
@@ -225,7 +235,7 @@ func recoverableRefreshHandler(options Options) http.HandlerFunc {
 func refreshAckHandler(options Options) http.HandlerFunc {
 	return func(w http.ResponseWriter, request *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
-		if !options.RecoveryEnabled || options.RecoveryService == nil || options.SessionService == nil || options.RecoveryReadiness == nil {
+		if !options.RecoveryEnabled || options.RecoveryService == nil || options.RecoveryReadiness == nil {
 			writeAuthCode(w, request, "service_unavailable")
 			return
 		}
@@ -251,12 +261,9 @@ func refreshAckHandler(options Options) http.HandlerFunc {
 			writeAuthError(w, request, err)
 			return
 		}
-		principal, err := options.SessionService.Authenticate(request.Context(), token)
-		if err != nil {
-			writeAuthError(w, request, err)
-			return
-		}
-		if err := options.RecoveryService.AcknowledgeRefresh(request.Context(), principal, wire.RefreshAttemptID, identity.DeviceContinuityClaim{DeviceID: wire.DeviceContinuity.DeviceID, Credential: wire.DeviceContinuity.Credential}); err != nil {
+		// The bearer is authenticated in the acknowledgement's transaction:
+		// its refusals first, then the acknowledgement's.
+		if err := options.RecoveryService.AcknowledgeRefreshToken(request.Context(), token, wire.RefreshAttemptID, identity.DeviceContinuityClaim{DeviceID: wire.DeviceContinuity.DeviceID, Credential: wire.DeviceContinuity.Credential}); err != nil {
 			writeAuthError(w, request, err)
 			return
 		}

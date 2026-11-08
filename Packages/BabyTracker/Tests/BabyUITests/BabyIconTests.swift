@@ -15,6 +15,8 @@ import SwiftUI
         #expect(Tracker.diaper.icon == .diaper)
         #expect(Tracker.supplement.icon == .meds)
         #expect(Tracker.supplement.title == "Meds")
+        #expect(Tracker.pump.icon == .pump)
+        #expect(BabyIcon.pump.assetName == "icon-pump")
     }
 
     @Test func breastSidesShareTheFeedDrop() {

@@ -74,24 +74,14 @@ struct HeroView: View {
         }
     }
 
-    /// When the start can be edited, the start time is drawn as a tinted pill
+    /// When the start can be edited, the start time is drawn as a tinted chip
     /// with a pencil, so the hero's tap target is visible. The whole hero
-    /// stays the button; the pill is its cue.
+    /// stays the button; the chip is its cue.
     @ViewBuilder
     private func sinceLabel(_ since: Date, tint: Color) -> some View {
         if onEdit != nil {
-            HStack(spacing: 5) {
-                Text(HomeCopy.since(since))
-                Image(systemName: "pencil")
-                    .imageScale(.small)
-            }
-            .font(.footnote.weight(.semibold))
-            .foregroundStyle(tint)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 6)
-            .background(tint.opacity(0.14), in: Capsule())
-            .overlay(Capsule().strokeBorder(tint.opacity(0.25), lineWidth: 1))
-            .padding(.top, 6)
+            Chip(HomeCopy.since(since), systemImage: "pencil", tint: tint, size: .small)
+                .padding(.top, Spacing.s)
         } else {
             Text(HomeCopy.since(since))
                 .font(.footnote)
@@ -112,7 +102,7 @@ struct HeroView: View {
                     .numeralStyle(.hero)
                     .lineLimit(1)
                     .minimumScaleFactor(0.5)
-                PartsRow(parts: parts)
+                PartsRow(parts.map(\.partsRowItem))
             }
             .frame(maxWidth: .infinity)
             .accessibilityElement(children: .ignore)
@@ -144,26 +134,11 @@ struct HeroView: View {
     }
 }
 
-/// The finished parts of a session: "L 9:02  R 4:10".
-struct PartsRow: View {
-    let parts: [PartSummary]
-    var iconSize: CGFloat = 16
-
-    var body: some View {
-        HStack(spacing: 12) {
-            ForEach(Array(parts.enumerated()), id: \.offset) { _, part in
-                HStack(spacing: 4) {
-                    BabyIconView(part.icon, size: iconSize)
-                        .foregroundStyle(part.icon == .sleep ? Palette.sleep : Palette.feed)
-                    Text(HomeCopy.partTime(part.seconds))
-                        .font(.footnote.weight(.semibold).monospacedDigit())
-                        .foregroundStyle(Palette.primaryText)
-                        // A time is never broken across lines: in the join
-                        // chip, two parts wrapped "9:02" into "9:0" over "2".
-                        .lineLimit(1)
-                        .fixedSize()
-                }
-            }
-        }
+extension PartSummary {
+    /// A finished part in the kit's `PartsRow`: a sleep in the sleep colour,
+    /// a breast or bottle in the feed colour.
+    var partsRowItem: PartsRow.Item {
+        PartsRow.Item(icon: icon, tint: icon == .sleep ? Palette.sleep : Palette.feed,
+                      text: HomeCopy.partTime(seconds), accessibilityLabel: HomeCopy.spokenPart(self))
     }
 }

@@ -110,8 +110,8 @@ final class LoggingFlowTests: XCTestCase {
         )
     }
 
-    /// Tap 1 opens the Bottle sheet, tap 2 is an amount, which logs the
-    /// finished bottle at once.
+    /// Tap 1 opens the Bottle sheet, tap 2 is Log, which logs the finished
+    /// bottle at once with the amount it opened on (the previous bottle's).
     ///
     /// `waitForRow(startingWith: "Feed")` would be VACUOUS on the seeded
     /// fixture, which already holds feeds; the assertion is a DELTA read off
@@ -133,8 +133,8 @@ final class LoggingFlowTests: XCTestCase {
         XCTAssertTrue(app.goToTab("Home"))
 
         countedTap(app.buttons["home.bottle"], "the dock's Bottle")
-        countedTap(app.buttons["bottle.chip.2"], "the bottle sheet's third amount")
-        XCTAssertTrue(app.buttons["bottle.chip.2"].waitForNonExistence(timeout: 5), "the amount did not close the sheet")
+        countedTap(app.buttons["bottle.log"], "the bottle sheet's Log")
+        XCTAssertTrue(app.buttons["bottle.log"].waitForNonExistence(timeout: 5), "Log did not close the sheet")
 
         XCTAssertTrue(app.goToTab("History"))
         let deadline = Date().addingTimeInterval(10)
@@ -179,9 +179,12 @@ final class LoggingFlowTests: XCTestCase {
     /// the default ten minutes up to now → Save → a Left feed row in History.
     func testPastEntryLogsALeftBreastFeedToHistory() {
         XCTAssertTrue(app.tap(app.buttons["home.more"], until: app.buttons["more.pastEntry"]))
-        XCTAssertTrue(app.tap(app.buttons["more.pastEntry"], until: app.buttons["partEdit.save"]))
+        XCTAssertTrue(app.tap(app.buttons["more.pastEntry"], until: app.buttons["pastEntry.diaper"]),
+                      "Past entry does not list Diaper")
+        XCTAssertTrue(app.buttons["pastEntry.solids"].exists, "Past entry does not list Solids")
+        XCTAssertTrue(app.tap(app.buttons["pastEntry.breast"], until: app.buttons["partEdit.save"]))
 
-        // Breast is the default kind; choose Right, then back to Left.
+        // Choose Right, then back to Left.
         let side = app.segmentedControls["partEdit.side"]
         XCTAssertTrue(side.waitForExistence(timeout: 5))
         side.buttons["Right"].tap()
@@ -206,6 +209,200 @@ final class LoggingFlowTests: XCTestCase {
         )
         let row = app.historyRow(startingWith: "Feed, ")
         XCTAssertTrue(row.label.hasPrefix("Feed, L "), "the row is not the left side: \(row.label)")
+    }
+
+    // MARK: - Home buttons and the amount screen
+
+    /// The order decides the dock: Bottle first is the big button and opens
+    /// the bottle panel; Breast, now a tile, asks which side.
+    func testABottleFirstOrderLeadsHomeWithBottle() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true, homeOrder: "bottle,breast,sleep,diaper"))
+        XCTAssertTrue(app.buttons["home.breast"].waitForExistence(timeout: 15), "Breast is not a tile")
+        XCTAssertFalse(app.buttons["home.start.left"].exists, "Left is still a big button")
+
+        XCTAssertTrue(app.tap(app.buttons["home.breast"], until: app.buttons["Left breast"]),
+                      "the Breast tile did not ask which side")
+        app.buttons["Left breast"].tap()
+        XCTAssertTrue(app.buttons["home.stop"].waitForExistence(timeout: 8), "Left did not start")
+        // Under 30 seconds: discarded at Stop, which is all this needs.
+        XCTAssertTrue(app.tap(app.buttons["home.stop"], until: app.buttons["home.bottle"]), "Stop did not stop")
+
+        XCTAssertTrue(app.tap(app.buttons["home.bottle"], until: app.buttons["bottle.start"]),
+                      "the big Bottle button did not open the bottle panel")
+    }
+
+    /// The amount screen offers contents, and what is chosen there is what
+    /// the bottle is saved with: opened again from History, it reads the same.
+    ///
+    /// History's rows do not name a bottle's contents, so the saved value is
+    /// read where the app shows it — the bottle's own panel.
+    func testContentsChosenOnTheAmountScreenAreSaved() {
+        XCTAssertTrue(app.tap(app.buttons["home.bottle"], until: app.buttons["bottle.start"]))
+        XCTAssertTrue(app.tap(app.buttons["bottle.start"], until: app.buttons["home.stop"]), "the bottle did not start")
+        // A bottle stopped inside its first second is discarded, not saved.
+        Thread.sleep(forTimeInterval: 2)
+        XCTAssertTrue(app.tap(app.buttons["home.stop"], until: app.buttons["bottle.done"]), "Stop did not ask for the amount")
+
+        // The amount screen's only segmented control.
+        let contents = app.segmentedControls.firstMatch
+        XCTAssertTrue(contents.waitForExistence(timeout: 5), "the amount screen offers no contents")
+        // Whichever contents the bottle was not started with.
+        guard let other = contents.buttons.allElementsBoundByIndex.first(where: { !$0.isSelected }) else {
+            return XCTFail("no other contents to choose")
+        }
+        let chosen = other.label
+        other.tap()
+        app.buttons["bottle.done"].tap()
+        XCTAssertTrue(app.buttons["home.start.left"].waitForExistence(timeout: 8), "the bottle did not stop")
+
+        XCTAssertTrue(app.goToTab("History"))
+        let row = app.historyRows(startingWith: "Feed, ").firstMatch
+        XCTAssertTrue(row.waitForExistence(timeout: 8), "the bottle is not in History")
+        let saved = app.segmentedControls.buttons[chosen]
+        XCTAssertTrue(app.tap(row, until: saved), "the bottle's panel does not offer \(chosen)")
+        XCTAssertTrue(saved.isSelected, "the bottle was not saved as \(chosen)")
+    }
+
+    /// A Quick Log widget tile whose action needs the app opens that baby's
+    /// panel on Home.
+    func testAWidgetLinkOpensItsPanel() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true, logLink: "growth"))
+        XCTAssertTrue(app.buttons["measurement.save"].waitForExistence(timeout: 15),
+                      "the widget's Growth link did not open the growth panel")
+    }
+
+    // MARK: - Vaccinations
+
+    /// More → Vaccine → a new name saves with dose 1; History reads it.
+    func testAVaccineIsLoggedFromMore() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true))
+        XCTAssertTrue(app.tap(app.revealOnHome(app.buttons["home.more"]), until: app.buttons["more.vaccine"]))
+        let name = app.textFields["immunization.name"]
+        XCTAssertTrue(app.tap(app.buttons["more.vaccine"], until: name))
+        let save = app.buttons["immunization.save"]
+        XCTAssertFalse(save.isEnabled, "Save is on with no vaccine named")
+        name.tap()
+        name.typeText("Rotarix")
+        let dose = app.descendants(matching: .any)["immunization.dose"]
+        XCTAssertEqual(dose.value as? String, "1", "a first shot of a vaccine did not offer dose 1")
+        XCTAssertTrue(save.isEnabled)
+        save.tap()
+        XCTAssertTrue(app.buttons["home.more"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.goToTab("History"))
+        XCTAssertTrue(app.historyRows(startingWith: "Vaccine, Rotarix · dose 1").firstMatch.waitForExistence(timeout: 15),
+                      "History has no row for the vaccination")
+    }
+
+    /// Nothing is selected on open; picking a saved vaccine offers its next dose.
+    func testPickingASavedVaccineOffersTheNextDose() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true, seedVaccines: true, openVaccine: true))
+        let picker = app.descendants(matching: .any)["immunization.picker"]
+        XCTAssertTrue(picker.waitForExistence(timeout: 15))
+        let save = app.buttons["immunization.save"]
+        XCTAssertFalse(save.isEnabled, "a vaccine was selected before the caregiver chose one")
+        let dose = app.descendants(matching: .any)["immunization.dose"]
+        XCTAssertNotEqual(dose.value as? String, "3")
+        picker.tap()
+        let choice = app.buttons["Prevenar 13"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 10))
+        choice.tap()
+        XCTAssertEqual(dose.value as? String, "3", "the next dose after two is three")
+        XCTAssertTrue(save.isEnabled)
+        keep("panel-picked")
+        save.tap()
+        XCTAssertTrue(app.buttons["home.more"].waitForExistence(timeout: 15))
+        XCTAssertTrue(app.goToTab("History"))
+        XCTAssertTrue(app.historyRows(startingWith: "Vaccine, Prevenar 13 · dose 3").firstMatch.waitForExistence(timeout: 15))
+        keep("history-row")
+    }
+
+    /// The Insights card opens the Immunizations screen; a row opens its
+    /// panel; deleting it there drops the row from the screen.
+    func testTheImmunizationsCardOpensTheScreen() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true, seedVaccines: true))
+        XCTAssertTrue(app.goToTab("Insights"))
+        let open = app.buttons["insights.immunizations.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        for _ in 0..<8 where !open.isHittable { app.swipeUp() }
+        keep("insights-card")
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'immunizations.row.'"))
+        XCTAssertTrue(app.tap(open, until: rows.firstMatch))
+        XCTAssertEqual(rows.count, 4)
+        keep("screen")
+        XCTAssertTrue(app.tap(rows.element(boundBy: 0), until: app.buttons["immunization.delete"]))
+        app.buttons["immunization.delete"].tap()
+        let confirm = app.buttons["immunization.confirmDelete"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        confirm.tap()
+        let three = NSPredicate { _, _ in rows.count == 3 }
+        XCTAssertEqual(XCTWaiter.wait(for: [XCTNSPredicateExpectation(predicate: three, object: nil)], timeout: 15), .completed,
+                       "the deleted shot is still on the Immunizations screen")
+    }
+
+    /// Deleting the only shot from the Immunizations screen leaves the screen
+    /// up, saying there are none; it does not drop back to Insights.
+    func testDeletingTheLastShotLeavesTheScreenSayingThereAreNone() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true))
+        XCTAssertTrue(app.tap(app.revealOnHome(app.buttons["home.more"]), until: app.buttons["more.vaccine"]))
+        let name = app.textFields["immunization.name"]
+        XCTAssertTrue(app.tap(app.buttons["more.vaccine"], until: name))
+        name.tap()
+        name.typeText("Rotarix")
+        app.buttons["immunization.save"].tap()
+        XCTAssertTrue(app.buttons["home.more"].waitForExistence(timeout: 15))
+
+        XCTAssertTrue(app.goToTab("Insights"))
+        let open = app.buttons["insights.immunizations.open"]
+        XCTAssertTrue(open.waitForExistence(timeout: 15))
+        for _ in 0..<8 where !open.isHittable { app.swipeUp() }
+        let rows = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH 'immunizations.row.'"))
+        XCTAssertTrue(app.tap(open, until: rows.firstMatch))
+        XCTAssertTrue(app.tap(rows.firstMatch, until: app.buttons["immunization.delete"]))
+        app.buttons["immunization.delete"].tap()
+        let confirm = app.buttons["immunization.confirmDelete"].firstMatch
+        XCTAssertTrue(confirm.waitForExistence(timeout: 10))
+        confirm.tap()
+        let empty = app.descendants(matching: .any)["immunizations.empty"].firstMatch
+        XCTAssertTrue(empty.waitForExistence(timeout: 15), "the screen did not stay to say there are no vaccinations")
+        let range = app.descendants(matching: .any)["insights.range"].firstMatch
+        XCTAssertFalse(range.exists && range.isHittable, "the screen dropped back to Insights")
+        keep("screen-empty")
+    }
+
+    /// A named screenshot kept with the result, for the verification notes.
+    private func keep(_ name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .keepAlways
+        add(shot)
+    }
+
+    /// A Quick Log widget tile for Vaccine opens the vaccine panel.
+    func testAVaccineLinkOpensItsPanel() {
+        app.terminate()
+        app = Harness.launch(Harness.Launch(reset: true, seedBaby: true, logLink: "vaccine"))
+        XCTAssertTrue(app.textFields["immunization.name"].waitForExistence(timeout: 15),
+                      "the widget's Vaccine link did not open the vaccine panel")
+    }
+
+    /// A link for a baby deleted since the widget drew brings Home forward
+    /// and opens nothing.
+    func testAWidgetLinkForAnUnknownBabyOnlyOpensHome() throws {
+        XCTAssertTrue(app.homeMarker.waitForExistence(timeout: 15))
+        let link = try XCTUnwrap(URL(string: "babytracker://log?kind=solids&baby=00000000-0000-4000-8000-000000000000"))
+        XCUIDevice.shared.system.open(link)
+        // The simulator asks before handing a custom scheme to the app.
+        let open = XCUIApplication(bundleIdentifier: "com.apple.springboard").buttons["Open"]
+        if open.waitForExistence(timeout: 5) { open.tap() }
+        XCTAssertTrue(app.wait(for: .runningForeground, timeout: 10), "the link did not bring the app forward")
+        XCTAssertTrue(app.buttons["home.start.left"].waitForExistence(timeout: 8), "Home is not up")
+        XCTAssertFalse(app.buttons["Cancel"].waitForExistence(timeout: 2), "a panel opened for a baby this phone does not have")
     }
 }
 

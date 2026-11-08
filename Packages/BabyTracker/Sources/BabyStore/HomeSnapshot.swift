@@ -38,6 +38,12 @@ public struct HomeSnapshot {
     /// session, the open feed break and the running feed's session — keyed by
     /// id, so `sessionMembers(_:)` resolves them without another fetch.
     let sessionFeedsByID: [UUID: FeedEntry]
+    /// The family's running pump, the same on every baby's Home.
+    public var runningPump: PumpEntry? = nil
+    /// Millilitres pumped in finished sessions that started today.
+    public var todayPumpML: Double = 0
+    /// When the last finished session ended, for "last 2h 27m ago".
+    public var lastPumpEndedAt: Date? = nil
 
     /// A session's feeds in session order, for those this snapshot exposes:
     /// `lastFeedingSession`, `feedBreak` and `runningFeedSession`. Any other
@@ -71,6 +77,8 @@ public enum HistoryItem: @MainActor Identifiable {
     case sleep(SleepEntry)
     case diaper(DiaperEntry)
     case supplement(SupplementEntry)
+    case immunization(ImmunizationEntry)
+    case pump(PumpEntry)
 
     public var id: UUID {
         switch self {
@@ -78,6 +86,8 @@ public enum HistoryItem: @MainActor Identifiable {
         case .sleep(let entry): entry.id
         case .diaper(let entry): entry.id
         case .supplement(let entry): entry.id
+        case .immunization(let entry): entry.id
+        case .pump(let entry): entry.id
         }
     }
 
@@ -87,6 +97,8 @@ public enum HistoryItem: @MainActor Identifiable {
         case .sleep(let entry): entry.startedAt
         case .diaper(let entry): entry.startedAt
         case .supplement(let entry): entry.startedAt
+        case .immunization(let entry): entry.givenAt
+        case .pump(let entry): entry.startedAt
         }
     }
 
@@ -96,6 +108,8 @@ public enum HistoryItem: @MainActor Identifiable {
         case .sleep(let entry): entry.timeZoneID
         case .diaper(let entry): entry.timeZoneID
         case .supplement(let entry): entry.timeZoneID
+        case .immunization(let entry): entry.timeZoneID
+        case .pump(let entry): entry.timeZoneID
         }
     }
 }

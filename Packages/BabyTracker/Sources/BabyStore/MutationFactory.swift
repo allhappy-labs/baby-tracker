@@ -61,6 +61,8 @@ enum MutationFactory {
         case "SleepEntry": .sleep
         case "DiaperEntry": .diaper
         case "SupplementEntry": .supplement
+        case "ImmunizationEntry": .immunization
+        case "PumpEntry": .pump
         case "GrowthProfile": .growthProfile
         case "MeasurementCheckIn": .measurement
         default: nil

@@ -257,6 +257,12 @@ if (( expected_schema_version >= 31 )); then
   [[ $(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT bool_and(has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE')) FROM unnest(ARRAY['app.push_targets(uuid[],uuid[])','app.prune_push_tokens(integer)','app.forget_push_token(uuid,bytea)','app.ensure_audit_partitions(timestamp with time zone)','app.purge_family_step(uuid,integer)']) f") == t ]]
   [[ $(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT to_regclass('public.rate_limit_buckets') IS NULL AND to_regprocedure('app.take_rate_limits(jsonb,timestamp with time zone)') IS NULL") == t ]]
 fi
+if (( expected_schema_version >= 35 )); then
+  # Audit retention (000035, owner decision D1): the drop is a maintenance-only
+  # definer; the runtime only reads the retention anchors.
+  [[ $(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_function_privilege('baby_tracker_maintenance',f,'EXECUTE') AND NOT has_function_privilege('public',f,'EXECUTE') AND NOT has_function_privilege('baby_tracker_runtime',f,'EXECUTE') FROM (SELECT 'app.drop_expired_audit_partition(timestamp with time zone)' AS f) d") == t ]]
+  [[ $(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT has_table_privilege('baby_tracker_runtime','audit_retention_anchors','SELECT') AND NOT has_table_privilege('baby_tracker_runtime','audit_retention_anchors','INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER') AND NOT bool_or(has_table_privilege(r,'audit_retention_anchors','SELECT,INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER')) FROM unnest(ARRAY['public','baby_tracker_maintenance']) r") == t ]]
+fi
 if (( expected_schema_version >= 32 )); then
   # Live Activity push (000032): the app registers its own devices and card
   # tokens (SELECT, INSERT and UPDATE, each on its own; never DELETE) and alone

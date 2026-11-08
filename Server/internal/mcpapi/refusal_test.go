@@ -56,8 +56,18 @@ func newClockedEnvServer(t *testing.T, configure func(*Options), adjust func(*ht
 	return e, clock
 }
 
+// holdAllMCPSlots takes every global MCP slot once the requests already
+// answered have returned theirs.
+//
+// Root cause of the intermittent "setup: MCP slot unavailable" under load
+// (load average about 295): the handler releases its slot when it returns,
+// after the response bytes reached the client, so the client could finish
+// reading a 200 and call this while the server goroutine had not yet run
+// its deferred release. It now waits for the handlers to return (the
+// condition), not for a clock.
 func holdAllMCPSlots(t *testing.T, e *env) func() {
 	t.Helper()
+	e.waitReturned(t)
 	var held []func()
 	for range 4 {
 		release, ok := e.controller.TryAcquire(admission.MCP)
@@ -326,6 +336,9 @@ func TestRepeatRefusalsAreMarkedForAggregatedLogging(t *testing.T) {
 	e.post(t, listTools) // admitted
 	e.quota.decision = limits.Decision{Allowed: false, RetryAfter: 30 * time.Second}
 	e.post(t, listTools) // authenticated refusal
+	// The wrapper counts after the handler returned, which may be after the
+	// client read the response: wait for the handlers, as holdAllMCPSlots does.
+	e.waitReturned(t)
 	if marked.Load() != 0 || unmarked.Load() != 2 {
 		t.Fatalf("authenticated outcomes marked=%d unmarked=%d", marked.Load(), unmarked.Load())
 	}
@@ -336,6 +349,7 @@ func TestRepeatRefusalsAreMarkedForAggregatedLogging(t *testing.T) {
 	releaseSlots := holdAllMCPSlots(t, e)
 	e.do(t, http.MethodPost, listTools, headers) // server_busy before authentication
 	releaseSlots()
+	e.waitReturned(t)
 	if marked.Load() != 2 || unmarked.Load() != 2 {
 		t.Fatalf("repeat refusals marked=%d unmarked=%d", marked.Load(), unmarked.Load())
 	}

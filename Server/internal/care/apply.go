@@ -99,7 +99,7 @@ func ActionFor(m protocol.Mutation) (string, error) {
 		}
 	}
 	switch m.EntityKind {
-	case "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement":
+	case "feed", "sleep", "diaper", "supplement", "growth_profile", "measurement", "immunization", "pump":
 		if m.Operation == "create" || m.Operation == "update" || m.Operation == "delete" {
 			return "mutate_record", nil
 		}

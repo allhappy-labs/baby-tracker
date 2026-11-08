@@ -8,7 +8,7 @@ This is **local** evidence only:
 
 - Disposable Postgres and containers, synthetic tokens, a disposable P-256 key.
 - The identitytest recorder stands where Apple stands.
-- Simulator work ran only on the shared `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853` (iPhone 17 Pro). No simulator was created, cloned or erased.
+- Simulator work ran only on the shared `platform=iOS Simulator,id=<simulator-udid>` (iPhone 17 Pro). No simulator was created, cloned or erased.
 
 What was **not** done:
 
@@ -59,8 +59,8 @@ All gates ran through `rtk proxy`, sequentially, with raw receipts in `.superpow
 | `make server-smoke` | `0b79773` | exit 0: push-disabled composition, `contiguous schema 28`, cleanup proofs | 29 s |
 | `make server-build` | `0b79773` | exit 0: multi-arch `cacheonly` build (no image produced, by design) | 21 s |
 | `sh -c 'cd Server && go vet ./... && go vet -tags identitytest ./...'` | `0b79773`, `e974fa1` | exit 0 both times | cached |
-| `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-…'` | `0b79773` | exit 0, `** BUILD SUCCEEDED **` (compiled the changed `AppEnvironment.swift`) | 8 s, incremental |
-| `make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-…'` | `0b79773` | exit 0, `Executed 167 tests, with 0 failures`, `** TEST SUCCEEDED **`; ran with `-parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1` | 4061 s |
+| `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | `0b79773` | exit 0, `** BUILD SUCCEEDED **` (compiled the changed `AppEnvironment.swift`) | 8 s, incremental |
+| `make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | `0b79773` | exit 0, `Executed 167 tests, with 0 failures`, `** TEST SUCCEEDED **`; ran with `-parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1` | 4061 s |
 
 ### Fix round 1 gates (`a73528c`)
 
@@ -72,7 +72,7 @@ Sequential, through `task-11-fix1-gates-runner.sh.txt`, each Swift or harness ga
 | `env BT_TEST_PACKAGES='./cmd/baby-tracker-server' bash Server/scripts/test-db.sh` (race, disposable database; the only Go package changed) | exit 0, `ok babytracker/server/cmd/baby-tracker-server 467.331s` | 471 s |
 | `sh -c 'cd Server && go vet ./cmd/baby-tracker-server/ && go vet -tags identitytest ./cmd/baby-tracker-server/'` | exit 0 | cached |
 | `make server-protocol-e2e` | exit 0. Image proof `source_sha=a73528c…`, `schema=28`, `live_activity_push=true`; `✔ Test run with 15 tests in 8 suites passed`; 12 phone proof lines; ledger line derived from the phones' ledgers `registrations=2 sandbox=2 cards=3`, Postgres agrees with `delivered=9`; no APNs token in 532 server log lines; cleanup proof | 109 s |
-| `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-…'` | exit 0, `** BUILD SUCCEEDED **`, recompiled `LiveActivityController.swift` and `LiveActivityController+Push.swift` | 12 s |
+| `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0, `** BUILD SUCCEEDED **`, recompiled `LiveActivityController.swift` and `LiveActivityController+Push.swift` | 12 s |
 
 All commands ran through `rtk proxy`.
 
@@ -103,8 +103,8 @@ The complete gate set, sequential, through `final-fix-gates-runner.sh.txt`, whic
 | `make server-smoke` | exit 0 | 27 s |
 | `make server-build` | exit 0 | 17 s |
 | `sh -c 'cd Server && go vet ./... && go vet -tags identitytest ./...'` | exit 0 | 2 s, cached |
-| `make build SIMULATOR='platform=iOS Simulator,id=D17101C9-…'` | exit 0, `** BUILD SUCCEEDED **` | 11 s, incremental |
-| `make test-ui SIMULATOR='platform=iOS Simulator,id=D17101C9-…'` | exit 0, `Executed 167 tests, with 0 failures`, `** TEST SUCCEEDED **` (parallel testing disabled) | 4056 s |
+| `make build SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0, `** BUILD SUCCEEDED **` | 11 s, incremental |
+| `make test-ui SIMULATOR='platform=iOS Simulator,id=<simulator-udid>'` | exit 0, `Executed 167 tests, with 0 failures`, `** TEST SUCCEEDED **` (parallel testing disabled) | 4056 s |
 
 An earlier run of the same runner on `cf9b263` (`final-fix-gates-run1/`) passed `make test` and failed `make server-test` only in the `internal/protocol` OpenAPI tests (`yaml: line 60: mapping values are not allowed in this context`); `d7bbcea` fixed the quoting.
 
@@ -252,7 +252,7 @@ It is documentation only. Nothing in it was executed: no Apple account, profile 
 **What it covers:**
 
 - **P0 Local evidence:** clean-tree gates and a fresh local `linux/amd64` image of the final commit, with its label, binary SHA-256 and identitytest-string checks.
-- **P1 Apple provisioning:** Push Notifications on `com.olhapi.babytracker`, the regenerated development profile with `aps-environment`, and the APNs key.
+- **P1 Apple provisioning:** Push Notifications on `com.example.babytracker`, the regenerated development profile with `aps-environment`, and the APNs key.
 - **P2 Project switch:** device configurations sign with `Apps/BabyTrackerLiveActivityPush.entitlements`, and the pinning Swift test is updated.
 - **R1 Server upgrade:** schema 27 → 28 with push off, after the old binary's exact-schema check, a backup, the cutover dump plus ledger/head tar, and the roles installed by recreating db and rerunning `init-users.sh`.
 - **D Phone builds:** the `codesign` and embedded-profile check against the resolver's input.
@@ -290,7 +290,7 @@ Plan: [`docs/superpowers/plans/2026-10-04-live-activity-push-readiness.md`](../s
 
 **Key day (P1/P2), 2026-10-04:**
 
-- Apple account: Example Developer's team `TEAM123456` (the bundle IDs keep the historical `com.olhapi.*` names). Push Notifications enabled on `com.olhapi.babytracker`; the widget App ID unchanged.
+- Apple account: Example Developer's team `TEAM123456`. Push Notifications enabled on `com.example.babytracker`; the widget App ID unchanged.
 - Profile `BabyTracker Development - TEAM123456` regenerated: UUID `00000000-0000-0000-0000-000000000000`, `aps-environment = development`, 4 devices, expires 2027-10-04. Installed; the two stale copies moved aside (not deleted).
 - `scripts/live-activity-push-signing.sh check`: `result: ready`; signing identity `Apple Development: developer@example.com (CERT123456)` present and valid.
 - APNs key `KEY1234567` (stored in the operator's credentials folder, mode 0600): local sandbox preflight `RESULT: PASS` (`400 BadDeviceToken` — key, team and key ID accepted; topic not contradicted). One provider JWT minted at 19:01 CEST.

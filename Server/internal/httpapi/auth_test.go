@@ -3,6 +3,7 @@ package httpapi
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -68,6 +69,7 @@ type sessionServiceStub struct {
 	authenticate   func(context.Context, string) (access.Principal, error)
 	logout         func(context.Context, access.Principal, string) (authority.Result, error)
 	accessDigests  func(string) ([]authority.KeyedDigest, error)
+	refreshDigests func(string) ([]authority.KeyedDigest, error)
 }
 
 func (stub sessionServiceStub) Exchange(ctx context.Context, input identity.ExchangeRequest) (auth.SessionBundle, error) {
@@ -94,6 +96,18 @@ func (stub sessionServiceStub) AccessDigests(token string) ([]authority.KeyedDig
 		return stub.accessDigests(token)
 	}
 	return []authority.KeyedDigest{{KeyID: "stub"}}, nil
+}
+
+// RefreshDigests is one stand-in digest of the token (its SHA-256 under key
+// "stub") unless the stub sets its own; an empty token has none.
+func (stub sessionServiceStub) RefreshDigests(token string) ([]authority.KeyedDigest, error) {
+	if stub.refreshDigests != nil {
+		return stub.refreshDigests(token)
+	}
+	if token == "" {
+		return nil, auth.ErrSessionRevoked
+	}
+	return []authority.KeyedDigest{{KeyID: "stub", Sum: sha256.Sum256([]byte(token))}}, nil
 }
 
 type notificationServiceFunc func(context.Context, string) error
@@ -451,6 +465,42 @@ func TestAuthErrorsNeverExposeProviderText(t *testing.T) {
 	}
 	if strings.Contains(recorder.Body.String(), secret) || strings.Contains(logs.String(), secret) {
 		t.Fatalf("provider text leaked: body=%s logs=%s", recorder.Body.String(), logs.String())
+	}
+}
+
+// A request that lost a race (security_busy: a twin registration, or a
+// sign-in whose account was deleted under it) is a retryable 503 with
+// Retry-After and a WARN line, never an ERROR line: it is not a server fault.
+func TestLostRaceIsRetryableWithoutAnErrorLine(t *testing.T) {
+	var logs bytes.Buffer
+	service := sessionServiceStub{
+		refreshSubject: func(context.Context, string) (auth.RefreshSubject, error) {
+			return auth.RefreshSubject{AccountID: "30000000-0000-4000-8000-000000000001", DeviceID: "40000000-0000-4000-8000-000000000001"}, nil
+		},
+		refresh: func(context.Context, string) (auth.SessionBundle, error) {
+			return auth.SessionBundle{}, fmt.Errorf("authority: lost: %w", authority.ErrSecurityBusy)
+		},
+	}
+	options := sessionHandlerOptions(t, service, "identity_token_only")
+	options.Logger = slog.New(slog.NewJSONHandler(&logs, nil))
+	recorder := httptest.NewRecorder()
+	New(options).ServeHTTP(recorder, httptest.NewRequest(http.MethodPost, "/v1/auth/refresh",
+		strings.NewReader(`{"protocol_version":"v1","capabilities":["identity-v1"],"refresh_token":"`+strings.Repeat("a", 43)+`"}`)))
+	if recorder.Code != http.StatusServiceUnavailable || recorder.Header().Get("Retry-After") != "1" ||
+		!strings.Contains(recorder.Body.String(), `"code":"security_busy"`) || !strings.Contains(recorder.Body.String(), `"retryable":true`) {
+		t.Fatalf("status=%d retry=%q body=%s", recorder.Code, recorder.Header().Get("Retry-After"), recorder.Body.String())
+	}
+	if lines := errorLines(t, logs.String()); len(lines) != 0 {
+		t.Fatalf("ERROR lines for a lost race: %v", lines)
+	}
+	warned := 0
+	for _, line := range logLines(t, logs.String()) {
+		if line["level"] == "WARN" && line["msg"] == "request lost a race" && line["code"] == "security_busy" {
+			warned++
+		}
+	}
+	if warned != 1 {
+		t.Fatalf("lost-race WARN lines %d, want 1: %s", warned, logs.String())
 	}
 }
 

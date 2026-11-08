@@ -113,7 +113,7 @@ final class AppEnvironment {
         // The opt-in sync fixture must select its Ask namespace before any
         // identity lookup or sign-in promotion can touch real Ask state.
         let askDefaults = isolatedHomeSyncFixture
-            ? UserDefaults(suiteName: "com.olhapi.babytracker.uiTestHomeSyncAsk-\(UUID().uuidString)")!
+            ? UserDefaults(suiteName: "\(AppIdentity.identifier("uiTestHomeSyncAsk"))-\(UUID().uuidString)")!
             : UserDefaults.standard
         self.askDefaults = askDefaults
         let askRoot = isolatedHomeSyncFixture
@@ -326,6 +326,12 @@ final class AppEnvironment {
            let baby = (try? store.babies())?.first {
             selection.select(baby.id)
             UITestSupport.seedFixture(store, babyID: baby.id)
+        }
+
+        if arguments.contains("-uiTestSeedVaccines"),
+           let baby = (try? store.babies())?.first {
+            selection.select(baby.id)
+            UITestSupport.seedVaccines(store, babyID: baby.id)
         }
 
         // The read-only family seeds it itself, before the role turns viewer.

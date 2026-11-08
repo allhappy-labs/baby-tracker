@@ -23,6 +23,13 @@ struct AskLiveTimer: Equatable, Sendable {
     let completedSteps: [String]
 }
 
+/// The family's running pump, for the header. It is the parent's, not the
+/// child's, and the model is told so.
+struct AskLivePump: Equatable, Sendable {
+    let startedAt: Date
+    let side: PumpSide
+}
+
 /// What one question's session sees: instructions, the history that fits,
 /// and a header with the local time and anything running.
 enum AskSessionBuilder {
@@ -38,7 +45,7 @@ enum AskSessionBuilder {
     /// on-device model follows more closely than the prompt (it echoed a data
     /// block placed there); each question builds a new session.
     static func instructions(profile: AskProfile, now: Date, timers: [AskLiveTimer], text: AskText,
-                             memory: String?, logData: [String]) -> String {
+                             memory: String?, logData: [String], pump: AskLivePump? = nil) -> String {
         let data = logData.isEmpty
             ? "Log data for the latest question: none was read."
             : "Log data for the latest question:\n" + logData.joined(separator: "\n\n")
@@ -46,7 +53,7 @@ enum AskSessionBuilder {
             You are Ask, the assistant in a baby care log app. The selected child is \(profile.name), \(text.age(birth: profile.birthDate, now: now)) old (born \(text.date(profile.birthDate))).
 
             Right now:
-            \(header(now: now, timers: timers, text: text))
+            \(header(now: now, timers: timers, text: text, pump: pump))
             Use these lines for questions about right now, such as whether the child is asleep.
 
             \(data)
@@ -65,7 +72,7 @@ enum AskSessionBuilder {
         return result
     }
 
-    static func header(now: Date, timers: [AskLiveTimer], text: AskText) -> String {
+    static func header(now: Date, timers: [AskLiveTimer], text: AskText, pump: AskLivePump? = nil) -> String {
         var lines = ["Now: \(text.timeWithYear(now)) (today is \(text.isoDay(now)))."]
         if timers.isEmpty { lines.append("No sleep or feed timer is running.") }
         for timer in timers {
@@ -75,6 +82,11 @@ enum AskSessionBuilder {
             if let step = timer.currentStep { line += "; now \(step)" }
             if !timer.completedSteps.isEmpty { line += "; done: \(timer.completedSteps.joined(separator: ", "))" }
             lines.append(line + ".")
+        }
+        if let pump {
+            let elapsed = AskText.duration(max(0, Int(now.timeIntervalSince(pump.startedAt))))
+            let sides = pump.side == .both ? "both sides" : "\(pump.side.rawValue) side"
+            lines.append("Pumping running since \(text.time(pump.startedAt)) (\(elapsed)), \(sides); pumping is the parent's, not the child's.")
         }
         return lines.joined(separator: "\n")
     }
@@ -91,16 +103,17 @@ enum AskSessionBuilder {
     }
 
     /// Instructions for the planning call that picks the log reads.
-    static func planInstructions(profile: AskProfile, now: Date, timers: [AskLiveTimer], text: AskText) -> String {
+    static func planInstructions(profile: AskProfile, now: Date, timers: [AskLiveTimer], text: AskText,
+                                 pump: AskLivePump? = nil) -> String {
         """
         You decide which reads of a baby care log are needed to answer a parent's latest question about \(profile.name).
 
         Right now:
-        \(header(now: now, timers: timers, text: text))
+        \(header(now: now, timers: timers, text: text, pump: pump))
 
         Yesterday is \(text.isoDay(day(-1, from: now, text: text))) and the day before yesterday is \(text.isoDay(day(-2, from: now, text: text))).
 
-        Use totals for how many and how much, entries for what happened and when, and latest for when the last feed, sleep, diaper or med was. Use one read per period and never repeat a read. Use the earlier conversation to resolve follow-ups. Examples:
+        Use totals for how many and how much, entries for what happened and when, and latest for when the last feed, sleep, diaper, med, vaccine or pumping session was. For how many doses of a vaccine, read entries with kind vaccine. For how much milk was pumped, read totals. Use one read per period and never repeat a read. Use the earlier conversation to resolve follow-ups. Examples:
         - "How many feeds yesterday?" → totals, range yesterday.
         - Then "And the day before?" → totals, range date, date \(text.isoDay(day(-2, from: now, text: text))).
         - "How much did he drink this week compared with last week?" → totals, range last 7 days; totals, range previous 7 days.

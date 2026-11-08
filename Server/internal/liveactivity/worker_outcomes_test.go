@@ -646,3 +646,156 @@ func TestLiveActivityPriorityFollowsControlChanges(t *testing.T) {
 		t.Fatalf("apns-priority=%s want %s for %v", got, want, events)
 	}
 }
+
+// A phone can hold two cards of one lifecycle for a moment and end one of them
+// itself: its own provisional card gives way to the pushed one, or the app
+// replaces a card after a relaunch. That report says one card is gone, not
+// that the receiver dismissed the lifecycle: the card still registered active
+// keeps its updates and gets the end. Read as a dismissal, the surviving card
+// froze, its end was decided every second and abandoned before the send, and
+// no later lifecycle could start on that phone.
+func TestLiveActivityReplacedCardLeavesTheSurvivorLive(t *testing.T) {
+	for _, reported := range []string{"ended", "dismissed"} {
+		t.Run(reported, func(t *testing.T) {
+			h, dirty, reg := workerHarness(t)
+			baby := workerBaby(t, h)
+			if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
+				t.Fatal(err)
+			}
+			var sent []PushRequest
+			w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+				sent = append(sent, r)
+				return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
+			}))
+			pass := func() {
+				t.Helper()
+				nextWorkerSecond()
+				if err := w.RunOnce(t.Context(), 32); err != nil {
+					t.Fatal(err)
+				}
+			}
+			first := "52000000-0000-4000-8000-000000000021"
+			applyMutation(t, h, h.Owner, sleepTimerMutation(t, h, first, "timer_start", baby, 16))
+			pass()
+			if len(sent) != 1 || sent[0].Event != "start" {
+				t.Fatalf("start: %s", describePushes(sent))
+			}
+			generation := sent[0].Content.Remote.GenerationID
+			card := func(id, token string, version uint64, state string) {
+				t.Helper()
+				req := activityRequest(h, baby, id)
+				req.Scope.KindRaw, req.Token, req.TimerID, req.KnownGenerationID = "sleep", token, &first, &generation
+				req.TokenVersion, req.State = version, state
+				if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
+					t.Fatal(err)
+				}
+			}
+			// Both cards land, and the replaced one is reported gone, before the
+			// worker's next pass: it never was a duplicate the server ended.
+			card("b-survivor", "ccdd", 1, "active")
+			card("a-replaced", "eeff", 1, "active")
+			card("a-replaced", "eeff", 2, reported)
+			pass()
+			h.RenameBaby(t, baby, "after the replacement")
+			pass()
+			updates := 0
+			for _, s := range sent[1:] {
+				if s.Token != "ccdd" {
+					t.Fatalf("a push to the replaced card: %s", describePushes(sent))
+				}
+				if s.Event == "update" && s.Content.Remote.GenerationID == generation {
+					updates++
+				}
+			}
+			if updates == 0 {
+				t.Fatalf("surviving card frozen after its twin was reported %s: %s", reported, describePushes(sent))
+			}
+			applyMutation(t, h, h.Owner, sleepTimerMutation(t, h, first, "timer_stop", baby, 16))
+			pass()
+			if last := sent[len(sent)-1]; last.Event != "end" || last.Token != "ccdd" || last.Content.Remote.GenerationID != generation {
+				t.Fatalf("surviving card never ended: %s", describePushes(sent))
+			}
+			// The end is the job's last word: nothing is decided again.
+			settled, lines := len(sent), len(historyLines(t, h))
+			for i := 0; i < 3; i++ {
+				pass()
+			}
+			if len(sent) != settled || len(historyLines(t, h)) != lines {
+				t.Fatalf("the ended lifecycle kept working: sends %d→%d, history %d→%d", settled, len(sent), lines, len(historyLines(t, h)))
+			}
+			// And the next sleep starts on this phone.
+			second := "52000000-0000-4000-8000-000000000022"
+			applyMutation(t, h, h.Owner, sleepTimerMutation(t, h, second, "timer_start", baby, 18))
+			pass()
+			if last := sent[len(sent)-1]; last.Event != "start" || last.Content.Remote.GenerationID == generation {
+				t.Fatalf("the next lifecycle did not start: %s", describePushes(sent))
+			}
+		})
+	}
+}
+
+// The dismissal a pass has already saved gives way too: the phone swiped its
+// card away, then showed the lifecycle again on a new card (the app, opened
+// while the timer runs, requests one). That card is on screen; it is updated
+// and ended like any other, and the job settles.
+func TestLiveActivityCardRegisteredAfterADismissalIsLive(t *testing.T) {
+	h, dirty, reg := workerHarness(t)
+	baby := workerBaby(t, h)
+	if _, err := reg.device(t, t.Context(), h.AccessToken("caregiver"), deviceRequest()); err != nil {
+		t.Fatal(err)
+	}
+	var sent []PushRequest
+	w := newTestWorker(t, h, dirty, h.Authority, transportFunc(func(_ context.Context, r PushRequest) (PushResult, error) {
+		sent = append(sent, r)
+		return PushResult{HTTPStatus: 200, Classification: Accepted}, nil
+	}))
+	pass := func() {
+		t.Helper()
+		nextWorkerSecond()
+		if err := w.RunOnce(t.Context(), 32); err != nil {
+			t.Fatal(err)
+		}
+	}
+	timer := "52000000-0000-4000-8000-000000000031"
+	applyMutation(t, h, h.Owner, sleepTimerMutation(t, h, timer, "timer_start", baby, 16))
+	pass()
+	generation := sent[0].Content.Remote.GenerationID
+	card := func(id, token string, version uint64, state string) {
+		t.Helper()
+		req := activityRequest(h, baby, id)
+		req.Scope.KindRaw, req.Token, req.TimerID, req.KnownGenerationID = "sleep", token, &timer, &generation
+		req.TokenVersion, req.State = version, state
+		if _, err := reg.activity(t, t.Context(), h.AccessToken("caregiver"), req); err != nil {
+			t.Fatal(err)
+		}
+	}
+	card("first", "eeff", 1, "active")
+	pass()
+	card("first", "eeff", 2, "dismissed")
+	pass()
+	h.RenameBaby(t, baby, "while dismissed")
+	pass()
+	dismissed := len(sent)
+	for _, s := range sent[1:] {
+		if s.Event != "update" || s.Token != "eeff" {
+			t.Fatalf("before the dismissal: %s", describePushes(sent))
+		}
+	}
+	card("second", "ccdd", 1, "active")
+	pass()
+	if len(sent) != dismissed+1 || sent[dismissed].Event != "update" || sent[dismissed].Token != "ccdd" || sent[dismissed].Content.Remote.GenerationID != generation {
+		t.Fatalf("the card shown after the dismissal was not updated: %s", describePushes(sent))
+	}
+	applyMutation(t, h, h.Owner, sleepTimerMutation(t, h, timer, "timer_stop", baby, 16))
+	pass()
+	if last := sent[len(sent)-1]; last.Event != "end" || last.Token != "ccdd" {
+		t.Fatalf("the card shown after the dismissal never ended: %s", describePushes(sent))
+	}
+	settled, lines := len(sent), len(historyLines(t, h))
+	for i := 0; i < 3; i++ {
+		pass()
+	}
+	if len(sent) != settled || len(historyLines(t, h)) != lines {
+		t.Fatalf("the ended lifecycle kept working: sends %d→%d, history %d→%d", settled, len(sent), lines, len(historyLines(t, h)))
+	}
+}

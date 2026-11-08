@@ -177,6 +177,10 @@ func (decimal Decimal) CmpInteger(value int64) int {
 	return decimal.coefficient.Cmp(right)
 }
 
+// Scale is the number of decimal places, trailing zeros not counted:
+// 90.50 has scale 1.
+func (decimal Decimal) Scale() int32 { return decimal.scale }
+
 func NormalizeBabyName(value string) (string, error) {
 	if !utf8.ValidString(value) {
 		return "", ErrInvalidText

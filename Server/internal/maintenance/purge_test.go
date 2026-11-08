@@ -825,11 +825,12 @@ var memberTable = map[string]string{"label_history": "family_actor_label_history
 	"memberships": "memberships", "recovery_claim": "family_recovery_claims"}
 
 // The cascade-order rule: an import_baby_mappings row references its shared
-// baby's care row (NO ACTION), so deleting the family's babies while a
-// mapping names one fails with 23503; deleting import_sessions first
-// (cascading through chunks, candidates, manifests, conflicts, receipts and
-// mappings) and then the babies succeeds. The purge step deletes import
-// staging first, whatever else the family holds.
+// baby's care row, ON DELETE CASCADE since 000037, so deleting the family's
+// babies takes the mappings that name them and leaves the rest of the
+// import staging; deleting import_sessions first (cascading through chunks,
+// candidates, manifests, conflicts, receipts and mappings) and then the
+// babies succeeds too. The purge step deletes import staging first, whatever
+// else the family holds.
 func TestImportStagingIsDeletedBeforeBabies(t *testing.T) {
 	h := testkit.New(t)
 	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
@@ -846,13 +847,16 @@ func TestImportStagingIsDeletedBeforeBabies(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// The rule, as the table owner in the family's context: babies first fail.
+	// The rule, as the table owner in the family's context: babies first take
+	// the mappings that name them, and only those.
 	tx := caretest.TenantTx(t, h.Migrator, h.Owner.AccountID, h.FamilyID)
-	var pgErr *pgconn.PgError
-	// (The partition's copy of import_mappings_shared_baby_fk reports it.)
-	if _, err := tx.Exec(t.Context(), `DELETE FROM care_entities WHERE family_id=$1 AND kind=1`, h.FamilyID); !errors.As(err, &pgErr) ||
-		pgErr.Code != "23503" || pgErr.TableName != "import_baby_mappings" {
-		t.Fatalf("deleting babies a mapping names: %v, want 23503 from import_baby_mappings", err)
+	if tag, err := tx.Exec(t.Context(), `DELETE FROM care_entities WHERE family_id=$1 AND kind=1`, h.FamilyID); err != nil || tag.RowsAffected() == 0 {
+		t.Fatalf("deleting babies a mapping names: %v (%d rows)", err, tag.RowsAffected())
+	}
+	var mappings, sessions int
+	if err := tx.QueryRow(t.Context(), `SELECT (SELECT count(*) FROM import_baby_mappings WHERE family_id=$1),
+		(SELECT count(*) FROM import_sessions WHERE family_id=$1)`, h.FamilyID).Scan(&mappings, &sessions); err != nil || mappings != 0 || sessions == 0 {
+		t.Fatalf("after the babies: %d mappings, %d import sessions (%v); want the mappings gone and the sessions kept", mappings, sessions, err)
 	}
 	_ = tx.Rollback(t.Context())
 	tx = caretest.TenantTx(t, h.Migrator, h.Owner.AccountID, h.FamilyID)
@@ -900,10 +904,11 @@ func TestImportStagingIsDeletedBeforeBabies(t *testing.T) {
 	}
 }
 
-// Any delete of a family row cascades through import staging before the
-// NO ACTION check from import_baby_mappings to care_entities runs (at the end
-// of the statement): as the table owner, deleting a family with a completed
-// import mapping, care rows and receipts succeeds and leaves none of them.
+// Any delete of a family row cascades through import staging and the care
+// rows, and import_baby_mappings' key to care_entities cascades too (000037),
+// so the order the cascades fire in does not matter: as the table owner,
+// deleting a family with a completed import mapping, care rows and receipts
+// succeeds and leaves none of them.
 func TestFamilyRowDeleteCascadesThroughImportMappings(t *testing.T) {
 	h := testkit.New(t)
 	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))

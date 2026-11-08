@@ -26,6 +26,13 @@ struct HomeSyncStatusTests {
         #expect(!status.offersSignIn)
     }
 
+    @Test func serverUnreachableKeepsQueuedEntries() {
+        let status = HomeSyncStatus.resolve(.serverUnreachable, pendingDeliveryCount: 2)
+        #expect(status == .serverUnreachable(2))
+        #expect(status.showsQueuedExplanation)
+        #expect(!status.offersSignIn)
+    }
+
     @Test func unknownFailureCannotShowServerText() {
         let status = HomeSyncStatus.resolve(.failed("private server response"), pendingDeliveryCount: 1)
         #expect(status == .recoveryFailed("retry"))

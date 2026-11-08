@@ -6,7 +6,7 @@
 # The one place the package test total lives. Changing it is a deliberate act:
 # if a test was added, bump it in the same commit; if this number ever needs
 # lowering, something was deleted and that belongs in the commit message.
-EXPECTED_TESTS := 1754
+EXPECTED_TESTS := 1992
 
 SIMULATOR := platform=iOS Simulator,name=iPhone 17 Pro
 

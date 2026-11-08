@@ -80,7 +80,7 @@ write_profile() { # dir file name uuid team appid expiry [aps]
 	<dict>
 		<key>application-identifier</key><string>$appid</string>
 		$aps_xml
-		<key>com.apple.security.application-groups</key><array><string>group.com.olhapi.babytracker</string></array>
+		<key>com.apple.security.application-groups</key><array><string>group.com.example.babytracker</string></array>
 	</dict>
 </dict>
 </plist>
@@ -90,8 +90,8 @@ EOF
 APP_NAME="BabyTracker Development - TEAM123456"
 WIDGET_NAME="BabyTrackerWidgets Development - TEAM123456"
 TEAM=TEAM123456
-APP_ID="$TEAM.com.olhapi.babytracker"
-WIDGET_ID="$TEAM.com.olhapi.babytracker.widgets"
+APP_ID="$TEAM.com.example.babytracker"
+WIDGET_ID="$TEAM.com.example.babytracker.widgets"
 FUTURE=2027-09-26T04:17:56Z
 PAST=2026-01-01T00:00:00Z
 NOW=1790000000 # 2026-09-21T12:53:20Z: after PAST, before FUTURE
@@ -127,7 +127,7 @@ setup() {
   export BTLAP_PROJECT="$sandbox/BabyTracker.xcodeproj/project.pbxproj"
   export BTLAP_PINNING_TEST="$sandbox/Packages/BabyTracker/Tests/BabySyncTests/LiveActivityPushEligibilityTests.swift"
   export BTLAP_NOW="$NOW"
-  unset BTLAP_CODESIGN
+  unset BTLAP_CODESIGN BTLAP_SIMULATOR
   install_identity_stub "Apple Development: Someone Else (FG6YU6TMR6)" "$IDENTITY"
 }
 
@@ -167,7 +167,7 @@ write_app() { # dir platform [aps]; writes Info.plist and the stub entitlements
   cat >"$app/Info.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
-<key>CFBundleIdentifier</key><string>com.olhapi.babytracker</string>
+<key>CFBundleIdentifier</key><string>com.example.babytracker</string>
 <key>DTPlatformName</key><string>$platform</string>
 </dict></plist>
 EOF
@@ -178,15 +178,15 @@ EOF
 <plist version="1.0"><dict>
 $aps_xml
 <key>application-identifier</key><string>$APP_ID</string>
-<key>com.apple.security.application-groups</key><array><string>group.com.olhapi.babytracker</string></array>
-<key>keychain-access-groups</key><array><string>$TEAM.group.com.olhapi.babytracker</string></array>
+<key>com.apple.security.application-groups</key><array><string>group.com.example.babytracker</string></array>
+<key>keychain-access-groups</key><array><string>$TEAM.group.com.example.babytracker</string></array>
 </dict></plist>
 EOF
   cat >"$app/PlugIns/BabyTrackerWidgets.appex/_entitlements.plist" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
 <plist version="1.0"><dict>
 <key>application-identifier</key><string>$WIDGET_ID</string>
-<key>com.apple.security.application-groups</key><array><string>group.com.olhapi.babytracker</string></array>
+<key>com.apple.security.application-groups</key><array><string>group.com.example.babytracker</string></array>
 </dict></plist>
 EOF
 }
@@ -283,11 +283,11 @@ finish
 
 begin "check: profile for another app ID is not a match"
 setup
-write_profile "$sandbox/profiles-a" app.mobileprovision "$APP_NAME" 11111111-1111-1111-1111-111111111111 "$TEAM" "$TEAM.com.olhapi.other" "$FUTURE" development
+write_profile "$sandbox/profiles-a" app.mobileprovision "$APP_NAME" 11111111-1111-1111-1111-111111111111 "$TEAM" "$TEAM.com.example.other" "$FUTURE" development
 write_profile "$sandbox/profiles-b" widget.mobileprovision "$WIDGET_NAME" 22222222-2222-2222-2222-222222222222 "$TEAM" "$WIDGET_ID" "$FUTURE"
 run check
 expect_status 1 "$status" "$out"
-expect_contains "$out" "blocked: profile \"$APP_NAME\" (11111111-1111-1111-1111-111111111111) is for app ID $TEAM.com.olhapi.other, not $APP_ID"
+expect_contains "$out" "blocked: profile \"$APP_NAME\" (11111111-1111-1111-1111-111111111111) is for app ID $TEAM.com.example.other, not $APP_ID"
 finish
 
 begin "check: a profile with the wrong aps-environment value is not ready"
@@ -325,8 +325,8 @@ cp "$sandbox/profiles-a/app.mobileprovision" "$sandbox/BabyTracker.app/embedded.
 run check --app "$sandbox/BabyTracker.app"
 expect_status 0 "$status" "$out"
 expect_contains "$out" "codesign aps-environment: development"
-expect_contains "$out" "application-groups: group.com.olhapi.babytracker"
-expect_contains "$out" "keychain-access-groups: $TEAM.group.com.olhapi.babytracker"
+expect_contains "$out" "application-groups: group.com.example.babytracker"
+expect_contains "$out" "keychain-access-groups: $TEAM.group.com.example.babytracker"
 expect_contains "$out" "embedded profile: \"$APP_NAME\" (11111111-1111-1111-1111-111111111111)"
 expect_contains "$out" "resolver: sandbox"
 expect_contains "$out" "widget aps-environment: none (expected"
@@ -355,10 +355,10 @@ finish
 begin "check --app: an embedded profile that is not the app target's specifier is a blocker"
 setup; ready_profiles; install_codesign_stub
 write_app "$sandbox/BabyTracker.app" iphoneos development
-write_profile "$sandbox/BabyTracker.app" embedded.mobileprovision "iOS Team Provisioning Profile: com.olhapi.babytracker" 55555555-5555-5555-5555-555555555555 "$TEAM" "$APP_ID" "$FUTURE" development
+write_profile "$sandbox/BabyTracker.app" embedded.mobileprovision "iOS Team Provisioning Profile: com.example.babytracker" 55555555-5555-5555-5555-555555555555 "$TEAM" "$APP_ID" "$FUTURE" development
 run check --app "$sandbox/BabyTracker.app"
 expect_status 1 "$status" "$out"
-expect_contains "$out" "blocked: embedded profile \"iOS Team Provisioning Profile: com.olhapi.babytracker\" (55555555-5555-5555-5555-555555555555) is not the app target's profile \"$APP_NAME\""
+expect_contains "$out" "blocked: embedded profile \"iOS Team Provisioning Profile: com.example.babytracker\" (55555555-5555-5555-5555-555555555555) is not the app target's profile \"$APP_NAME\""
 finish
 
 begin "check --app: simulator build has no profile and resolves sandbox"
@@ -431,7 +431,7 @@ run enable
 expect_status 0 "$status" "$out"
 expect_contains "$out" "enabled: 2 configuration(s) of BabyTracker now sign with Apps/BabyTrackerLiveActivityPush.entitlements"
 expect_contains "$out" "make test"
-expect_contains "$out" "platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853"
+expect_contains "$out" "platform=iOS Simulator,name=iPhone 17 Pro"
 expect_contains "$out" "check --app"
 project_after=$(cat "$BTLAP_PROJECT")
 swift_after=$(cat "$BTLAP_PINNING_TEST")

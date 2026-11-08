@@ -55,23 +55,39 @@ const pruneBegin = `BEGIN ISOLATION LEVEL READ COMMITTED READ WRITE; ` +
 // parent it consumes (locked, so skipped here, and refused past
 // refresh_expires_at, which a refresh-expired candidate is a day past) and
 // the child it inserts.
+//
+// Consumed and revoked sessions are deleted by row address: the locked
+// selection hands its rows' ctids to the DELETE, a TID scan, so a batch
+// reads each row's heap page once instead of probing sessions_id_key (a
+// random leaf of an index over every session) once per row. That is the
+// same rows only because no statement updates a consumed or revoked
+// session (every UPDATE of sessions names status = 'active'): the version
+// the selection locks is the version the statement's snapshot sees, so the
+// TID scan finds and deletes each locked row. Active sessions are updated
+// (role, scope, consumption, revocation), and a TID scan cannot see a
+// version committed after the statement's snapshot that the lock followed
+// to, so refresh-expired sessions stay deleted by key: a concurrently
+// updated one still eligible is deleted now, not left locked and undeleted.
 const (
-	pruneConsumedSQL = `DELETE FROM sessions WHERE id IN (SELECT s.id FROM sessions s WHERE s.status = 'consumed' AND s.consumed_at < $1
+	pruneConsumedSQL = `DELETE FROM sessions WHERE ctid = ANY(ARRAY(SELECT s.ctid FROM sessions s WHERE s.status = 'consumed' AND s.consumed_at < $1
   AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.parent_id = s.id)
   AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.child_id = s.id)
-  ORDER BY s.consumed_at LIMIT $2 FOR UPDATE SKIP LOCKED)`
-	pruneRevokedSQL = `DELETE FROM sessions WHERE id IN (SELECT s.id FROM sessions s WHERE s.status = 'revoked' AND s.revoked_at < $1
+  ORDER BY s.consumed_at LIMIT $2 FOR UPDATE SKIP LOCKED))`
+	pruneRevokedSQL = `DELETE FROM sessions WHERE ctid = ANY(ARRAY(SELECT s.ctid FROM sessions s WHERE s.status = 'revoked' AND s.revoked_at < $1
   AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.parent_id = s.id)
   AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.child_id = s.id)
-  ORDER BY s.revoked_at LIMIT $2 FOR UPDATE SKIP LOCKED)`
+  ORDER BY s.revoked_at LIMIT $2 FOR UPDATE SKIP LOCKED))`
 	pruneExpiredSQL = `DELETE FROM sessions WHERE id IN (SELECT s.id FROM sessions s WHERE s.status = 'active' AND s.refresh_expires_at < $1
   AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.parent_id = s.id)
   AND NOT EXISTS (SELECT 1 FROM refresh_receipts r WHERE r.child_id = s.id)
   ORDER BY s.refresh_expires_at LIMIT $2 FOR UPDATE SKIP LOCKED)`
 	// A challenge is consumable only while expires_at > now
-	// (ConsumeChallenge), so one at or past its expiry is dead.
-	pruneChallengesSQL = `DELETE FROM auth_challenges WHERE token_digest IN (SELECT token_digest FROM auth_challenges WHERE expires_at <= $1
-  ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED)`
+	// (ConsumeChallenge), so one at or past its expiry is dead. The batch is
+	// an array the delete probes auth_challenges_pkey with: as a semi-join,
+	// the planner may hash it against a scan of the whole table, which the
+	// inlined authority_context() filter (000037) makes look cheap.
+	pruneChallengesSQL = `DELETE FROM auth_challenges WHERE token_digest = ANY(ARRAY(SELECT token_digest FROM auth_challenges WHERE expires_at <= $1
+  ORDER BY expires_at LIMIT $2 FOR UPDATE SKIP LOCKED))`
 	// A receipt recovers only while now is before its child's refresh
 	// expiry and before its effective deadline (restore, validateChild):
 	// at LEAST of the two it is dead.

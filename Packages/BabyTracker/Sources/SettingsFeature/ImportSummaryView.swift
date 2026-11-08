@@ -36,29 +36,22 @@ public struct ImportSummaryView: View {
     }
 
     public var body: some View {
-        Form {
-            Section {
+        SettingsPage {
+            CardSection(ImportSummaryCopy.header) {
                 ForEach(Array(summary.babyNames.enumerated()), id: \.offset) { index, name in
-                    LabeledContent(name, value: summary.displayedBirthDates.indices.contains(index)
+                    ListRow(name, value: summary.displayedBirthDates.indices.contains(index)
                         ? summary.displayedBirthDates[index] : "")
-                        .frame(minHeight: 44)
-                        .accessibilityElement(children: .combine)
                 }
-                LabeledContent(ImportSummaryCopy.records, value: "\(summary.recordCount)")
+                ListRow(ImportSummaryCopy.records, value: "\(summary.recordCount)")
                     .accessibilityIdentifier("import.recordCount")
-            } header: {
-                Text(ImportSummaryCopy.header)
             } footer: {
                 Text(summary.isEmpty ? ImportSummaryCopy.emptyFooter : ImportSummaryCopy.footer)
             }
 
-            Section {
-                Button(ImportSummaryCopy.continueLabel, action: onContinue)
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("import.continue")
-                Button(ImportSummaryCopy.cancel, role: .cancel, action: onCancel)
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("import.cancel")
+            CardSection {
+                ActionRow(ImportSummaryCopy.continueLabel, identifier: "import.continue", action: onContinue)
+                // Secondary: "Not now" beside the action it declines.
+                ActionRow(ImportSummaryCopy.cancel, identifier: "import.cancel", tint: Palette.secondaryText, action: onCancel)
             }
         }
         .navigationTitle(ImportSummaryCopy.title)

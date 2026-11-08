@@ -12,64 +12,69 @@ struct HistoryExportSheet: View {
     let onDone: () -> Void
 
     var body: some View {
-        NavigationStack {
-            Form {
-                Section {
-                    Picker(ExportCopy.range, selection: Binding(get: { model.preset }, set: { model.select($0) })) {
-                        ForEach(HistoryExportPreset.allCases) { Text(ExportCopy.name($0)).tag($0) }
-                    }
-                    .pickerStyle(.segmented)
-                    .accessibilityIdentifier("history.export.preset")
-                    if model.preset == .custom {
-                        DatePicker(ExportCopy.from, selection: Binding(get: { model.from }, set: { model.setFrom($0) }),
-                                   in: model.earliest...model.latest, displayedComponents: .date)
-                            .accessibilityIdentifier("history.export.from")
-                        DatePicker(ExportCopy.to, selection: Binding(get: { model.to }, set: { model.setTo($0) }),
-                                   in: model.earliest...model.latest, displayedComponents: .date)
-                            .accessibilityIdentifier("history.export.to")
-                    }
+        SheetScaffold(
+            HistoryCopy.exportPDF,
+            closeTitle: ExportCopy.cancel,
+            closeIdentifier: "history.export.cancel",
+            onClose: onDone,
+            primary: SheetAction(ExportCopy.create, identifier: "history.export.create",
+                                 isEnabled: model.state != .working) { Task { await model.create() } }
+        ) {
+            CardSection {
+                Picker(ExportCopy.range, selection: Binding(get: { model.preset }, set: { model.select($0) })) {
+                    ForEach(HistoryExportPreset.allCases) { Text(ExportCopy.name($0)).tag($0) }
                 }
-                Section {
-                    Button { Task { await model.create() } } label: {
-                        HStack {
-                            Text(ExportCopy.create)
-                            Spacer()
-                            if model.state == .working { ProgressView() }
-                        }
-                    }
-                    .disabled(model.state == .working)
-                    .accessibilityIdentifier("history.export.create")
-                    switch model.state {
-                    case .nothingToExport:
-                        Text(ExportCopy.nothing)
-                            .foregroundStyle(Palette.secondaryText)
-                            .accessibilityIdentifier("history.export.empty")
-                    case .failed:
-                        Text(ExportCopy.failed)
-                            .foregroundStyle(Palette.destructive)
-                            .accessibilityIdentifier("history.export.failed")
-                    default:
-                        EmptyView()
-                    }
-                }
+                .pickerStyle(.segmented)
+                .accessibilityIdentifier("history.export.preset")
             }
-            .navigationTitle(HistoryCopy.exportPDF)
-            #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
-            #endif
-            .toolbar {
-                ToolbarItem(placement: .cancellationAction) {
-                    Button(ExportCopy.cancel, action: onDone)
-                        .accessibilityIdentifier("history.export.cancel")
-                }
+            // Always in the tree, collapsed until Custom: a compact date picker
+            // inserted into a fitted sheet already on screen keeps a stale
+            // layout, its pill drawn off to the side.
+            CardSection {
+                dateRow(ExportCopy.from, identifier: "history.export.from",
+                        selection: Binding(get: { model.from }, set: { model.setFrom($0) }))
+                dateRow(ExportCopy.to, identifier: "history.export.to",
+                        selection: Binding(get: { model.to }, set: { model.setTo($0) }))
+            }
+            .frame(maxHeight: model.preset == .custom ? nil : 0, alignment: .top)
+            .clipped()
+            .opacity(model.preset == .custom ? 1 : 0)
+            .accessibilityHidden(model.preset != .custom)
+            switch model.state {
+            case .working:
+                ProgressView().frame(maxWidth: .infinity)
+            case .nothingToExport:
+                Text(ExportCopy.nothing)
+                    .textRole(.caption)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .accessibilityIdentifier("history.export.empty")
+            case .failed:
+                InlineError(ExportCopy.failed)
+                    .accessibilityIdentifier("history.export.failed")
+            default:
+                EmptyView()
             }
         }
-        .presentationDetents([.medium, .large])
         #if os(iOS)
         .sheet(item: shareItem, onDismiss: { model.shareDidFinish() }) { item in
             ActivityShareSheet(file: item.url)
         }
         #endif
+        // A fitted sheet does not inherit RootView's tint.
+        .tint(Palette.feed)
+    }
+
+    /// A date row: the label beside the picker, over it at the accessibility
+    /// sizes. The picker is offered the row's leftover width and pinned to the
+    /// trailing edge; a fitted sheet otherwise measures it wider than the row.
+    private func dateRow(_ title: String, identifier: String, selection: Binding<Date>) -> some View {
+        LabeledRow(title) {
+            DatePicker(title, selection: selection, in: model.earliest...model.latest, displayedComponents: .date)
+                .datePickerStyle(.compact)
+                .labelsHidden()
+                .accessibilityLabel(title)
+                .accessibilityIdentifier(identifier)
+        }
     }
 
     #if os(iOS)

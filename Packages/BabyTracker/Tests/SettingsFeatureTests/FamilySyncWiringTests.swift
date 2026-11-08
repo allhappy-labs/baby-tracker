@@ -509,6 +509,15 @@ struct FamilySyncWiringTests {
         #expect(!line.isProblem)
     }
 
+    /// The phone has internet but not the server: plain "Offline" would
+    /// point the parent at the wrong thing.
+    @Test func serverUnreachableSaysTheServerIsOutOfReach() throws {
+        let line = try #require(FamilySyncStatusCopy.line(for: .serverUnreachable))
+        #expect(line.text == "Can't reach the family server")
+        #expect(line.isProblem)
+        #expect(!line.offersSignIn)
+    }
+
     @Test func needsSignInOffersTheButton() throws {
         let line = try #require(FamilySyncStatusCopy.line(for: .needsSignIn))
         #expect(line.text == "Sign in again to keep syncing")

@@ -31,7 +31,7 @@ var liveActivityRuntimeFunctions = []string{
 }
 
 // liveActivityWorkerFunctions are the worker definers the maintenance group
-// alone executes.
+// alone executes (the work sweep's page since 000037).
 var liveActivityWorkerFunctions = []string{
 	"app.abandon_live_activity_start(jsonb,text,text,boolean,boolean)",
 	"app.claim_live_activity_work(timestamp with time zone,integer)",
@@ -42,18 +42,19 @@ var liveActivityWorkerFunctions = []string{
 	"app.retain_live_activity_work()",
 	"app.sweep_live_activity_registrations(boolean,integer)",
 	"app.sweep_live_activity_work()",
+	"app.sweep_live_activity_work_page(uuid,integer)",
 }
 
 func TestSchemaIsVersionThirtyTwo(t *testing.T) {
 	f := testpg.New(t)
 	var v int64
-	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 32 {
+	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 37 {
 		t.Fatalf("version=%d err=%v", v, err)
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 37); err != nil {
 		t.Fatal(err)
 	}
-	if err := database.VerifyMaintenanceRole(t.Context(), f.Runtime, f.Maintenance, 32); err != nil {
+	if err := database.VerifyMaintenanceRole(t.Context(), f.Runtime, f.Maintenance, 37); err != nil {
 		t.Fatal(err)
 	}
 	for _, c := range []struct {

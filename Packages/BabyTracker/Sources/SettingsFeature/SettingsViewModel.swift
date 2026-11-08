@@ -27,6 +27,11 @@ public final class SettingsViewModel {
     private var storedFeedBreakMinutes: Int
     private var storedSleepBreakMinutes: Int
 
+    /// The observation seam for the Home orders, as `storedUnit` is for
+    /// the unit: the orders live in `TrackingPreferences`, which a view
+    /// cannot watch. Reading an order reads this; writing one bumps it.
+    private var homeOrderRevision = 0
+
     public init(defaults: UserDefaults? = nil) {
         let defaults = defaults
             ?? UserDefaults(suiteName: BabySchema.appGroupID)
@@ -72,6 +77,33 @@ public final class SettingsViewModel {
             tracking.sleepMinutes = newValue
             storedSleepBreakMinutes = tracking.sleepMinutes
         }
+    }
+
+    // MARK: - Home buttons
+
+    public func homeOrder(for babyID: UUID) -> [HomeActionKind] {
+        _ = homeOrderRevision
+        return tracking.homeOrder(for: babyID)
+    }
+
+    public func setHomeOrder(_ order: [HomeActionKind], for babyID: UUID) {
+        tracking.setHomeOrder(order, for: babyID)
+        homeOrderRevision += 1
+    }
+
+    /// One step up (`-1`) or down (`1`): VoiceOver's way to reorder.
+    public func moveHomeAction(at index: Int, by offset: Int, for babyID: UUID) {
+        var order = tracking.homeOrder(for: babyID)
+        let target = index + offset
+        guard order.indices.contains(index), order.indices.contains(target) else { return }
+        order.swapAt(index, target)
+        setHomeOrder(order, for: babyID)
+    }
+
+    /// Also what a deleted baby's order becomes: nothing.
+    public func resetHomeOrder(for babyID: UUID) {
+        tracking.resetHomeOrder(for: babyID)
+        homeOrderRevision += 1
     }
 
     // MARK: - Copy

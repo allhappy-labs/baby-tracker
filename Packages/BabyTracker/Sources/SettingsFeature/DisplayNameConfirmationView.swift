@@ -24,40 +24,49 @@ public struct DisplayNameConfirmationView<Model: FamilySyncSettingsModel>: View 
         _name = State(initialValue: model.profile.displayName)
     }
 
+    /// Pushed from the Caregivers screen: the system bar keeps the title and
+    /// the back button; the confirm action sits in a footer under the field.
     public var body: some View {
-        Form {
-            Section {
-                TextField(DisplayNameCopy.field, text: $name)
-                    .textContentType(.name)
-                    .frame(minHeight: 44)
-                    .accessibilityIdentifier("displayName.field")
-            } header: {
-                Text(DisplayNameCopy.header)
-            } footer: {
-                Text(DisplayNameCopy.footer)
-            }
-
-            Section {
-                Button(DisplayNameCopy.confirm) {
-                    isSaving = true
-                    Task {
-                        defer { isSaving = false }
-                        do {
-                            try await model.confirmDisplayName(name)
-                            onConfirmed()
-                        } catch {
-                            errorReporter.report(DisplayNameCopy.failed, error: error, category: AppLog.store)
-                        }
-                    }
+        VStack(spacing: 0) {
+            ScrollView {
+                CardSection(DisplayNameCopy.header) {
+                    TextField(DisplayNameCopy.field, text: $name)
+                        .textContentType(.name)
+                        .frame(minHeight: 44)
+                        .accessibilityIdentifier("displayName.field")
+                } footer: {
+                    Text(DisplayNameCopy.footer)
                 }
-                .frame(minHeight: 44)
-                .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty || isSaving)
-                .accessibilityIdentifier("displayName.confirm")
+                .padding(.horizontal, Spacing.l)
+                .padding(.vertical, Spacing.m)
             }
+            .scrollBounceBehavior(.basedOnSize)
+
+            SheetFooter(primary: SheetAction(
+                DisplayNameCopy.confirm, identifier: "displayName.confirm",
+                isEnabled: !name.trimmingCharacters(in: .whitespaces).isEmpty && !isSaving, action: confirm))
         }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .background(Palette.ground.ignoresSafeArea())
         .navigationTitle(DisplayNameCopy.title)
+        #if os(iOS)
+        .navigationBarTitleDisplayMode(.inline)
+        .toolbarBackground(.hidden)
+        #endif
     }
 
+    private func confirm() {
+        isSaving = true
+        Task {
+            defer { isSaving = false }
+            do {
+                try await model.confirmDisplayName(name)
+                onConfirmed()
+            } catch {
+                errorReporter.report(DisplayNameCopy.failed, error: error, category: AppLog.store)
+            }
+        }
+    }
 }
 
 enum DisplayNameCopy {

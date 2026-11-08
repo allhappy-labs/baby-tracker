@@ -341,11 +341,12 @@ func (s *Service) DeleteAccount(ctx context.Context, in DeleteAccount) (Result, 
 				return Result{}, "", ErrSessionRevoked
 			}
 			// Memberships, slots and claims of the account change only under
-			// its account lock, which is held: this set is stable.
-			rows, err := c.tx.Query(ctx, `SELECT family_id::text FROM memberships WHERE account_id=$1 AND status<>'removed'
-				UNION SELECT family_id::text FROM family_slots WHERE account_id=$1
-				UNION SELECT family_id::text FROM family_recovery_claims WHERE account_id=$1 AND status='active'
-				UNION SELECT id::text FROM families WHERE owner_account_id=$1 AND status='active'`, in.AccountID)
+			// its account lock, which is held: this set is stable. It is
+			// listed in ID order, the order lockFamilies locks it in.
+			rows, err := c.tx.Query(ctx, `SELECT id::text FROM (SELECT family_id AS id FROM memberships WHERE account_id=$1 AND status<>'removed'
+				UNION SELECT family_id FROM family_slots WHERE account_id=$1
+				UNION SELECT family_id FROM family_recovery_claims WHERE account_id=$1 AND status='active'
+				UNION SELECT id FROM families WHERE owner_account_id=$1 AND status='active') AS account_families ORDER BY account_families.id`, in.AccountID)
 			if err != nil {
 				return Result{}, "", unavailable("read account families", err)
 			}

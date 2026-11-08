@@ -20,6 +20,11 @@ final class CaregiversScreenUITests: XCTestCase {
         "Olena", "You · Owner", "View-only invitation", "Expires in 6 days", "Invite someone",
         "Each invitation works once and expires after 7 days. Revoking it disables the code.",
         "Disconnect this device",
+        // The members' avatar initials (Olena, Grandma, Marta). Hidden from
+        // VoiceOver, but in a List cell the probe still reads them, and they
+        // are capped on purpose: `MemberAvatar` stops growing at 1.5× and
+        // shrinks its initials to fit, so a name beside it is never hyphenated.
+        "O", "G", "M",
     ]
     private static let detailKnownIssues: Set<String> = ["Make owner"]
 

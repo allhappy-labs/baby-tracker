@@ -74,10 +74,40 @@ func openRuntimeSide(ctx context.Context, databaseURL string, max int32) (*pgxpo
 // when the DSN sets no connect_timeout.
 const sideConnectTimeout = 2 * time.Second
 
+// requestConnectTimeout bounds a request, maintenance, MCP or command pool's
+// connection attempt when the DSN sets no connect_timeout (the side pools
+// set their shorter bound before they get here): pgxpool finishes an attempt
+// after its Acquire is cancelled, and an unbounded one stalled by an
+// unresponsive server would hold a pool slot indefinitely.
+const requestConnectTimeout = 5 * time.Second
+
+// connLifetimeJitterDivisor spreads a connection's expiry over a quarter of
+// its lifetime (15 m of pgxpool's 1 h default) when the DSN sets no
+// pool_max_conn_lifetime_jitter. pgxpool's default jitter is 0, so the
+// connections of a reconnect burst, or of a pool that grew at once, all
+// expired in the same health check an hour later and were replaced together
+// by cold backends: on the load VM that stalled the runtime pool for 4 s
+// exactly 1 h and 2 h after a restart (5,305 server_busy, 30 backends
+// waiting on the lock manager while each re-planned the partitioned pull).
+const connLifetimeJitterDivisor = 4
+
 // openConfigured applies what every pool shares and constructs it lazily:
-// the acquire ping only after a minute idle, and the per-connection
-// statement cache, so every statement is prepared once per connection.
+// the acquire ping only after a minute idle, the connect bound, the spread
+// of connection expiry, and the per-connection statement cache, so every
+// statement is prepared once per connection.
 func openConfigured(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error) {
+	// An explicit connect_timeout=0 (libpq: wait indefinitely) cannot be told
+	// from an unset one once parsed, so it becomes the bound too, as it
+	// does for the side pools.
+	if cfg.ConnConfig.ConnectTimeout == 0 {
+		cfg.ConnConfig.ConnectTimeout = requestConnectTimeout
+	}
+	// The lifetime is pgxpool's 1 h default or the DSN's
+	// pool_max_conn_lifetime. An explicit jitter of 0 cannot be told from an
+	// unset one once parsed, so it gets the spread too.
+	if cfg.MaxConnLifetimeJitter == 0 {
+		cfg.MaxConnLifetimeJitter = cfg.MaxConnLifetime / connLifetimeJitterDivisor
+	}
 	cfg.ShouldPing = func(_ context.Context, p pgxpool.ShouldPingParams) bool { return p.IdleDuration > idlePingAfter }
 	// pgx parses default_query_exec_mode and statement_cache_capacity out of
 	// the DSN into the config; its defaults are the per-connection statement

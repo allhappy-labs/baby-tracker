@@ -1,6 +1,7 @@
 package httpapi
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -26,9 +27,9 @@ import (
 	"babytracker/server/internal/testkit"
 )
 
-// The routes that read a request body before the credential is checked
-// (I1): an unauthenticated client reaches their body read with any
-// well-formed bearer.
+// The routes that read a request body before their request transaction
+// (I1). Since Phase 5 Task 19 a bearer they have not seen authenticate is
+// checked before that read.
 var unauthenticatedBodyRoutes = []struct{ method, target, capabilities string }{
 	{http.MethodPost, "/v1/sync", "records-v1"},
 	{http.MethodPost, "/v1/family/import/resolve", "records-v1,import-resolver-v1"},
@@ -60,7 +61,7 @@ func abuseStack(t *testing.T, h *testkit.Harness, gate *admission.Controller) *s
 	return &stack{h: h, wire: wire, handler: New(Options{Admission: gate, Readiness: stackReady{}, InstanceID: h.Info.InstanceID,
 		RecoveryEpoch: h.Info.RecoveryEpoch, CanonicalOrigin: h.Info.CanonicalOrigin, SyncLimits: &h.Limits, SessionService: h.Auth,
 		AppleAuthorizationMode: "identity_token_only", SyncService: testkit.SyncServiceOn(t, h, guard), ImportService: h.ImporterOn(guard),
-		RequestAuthorizer: guard, PushTokens: pushtoken.New(guard, func() time.Time { return h.Now }), Limiter: limiter, ClientIPResolver: resolver,
+		RequestAuthorizer: guard, BearerAuthenticator: guard, PushTokens: pushtoken.New(guard, func() time.Time { return h.Now }), Limiter: limiter, ClientIPResolver: resolver,
 		SyncMutationDevicePolicy: policies[limits.ScopeSyncMutationDevice], SyncMutationAccountPolicy: policies[limits.ScopeSyncMutationAccount],
 		SyncMutationFamilyPolicy: policies[limits.ScopeSyncMutationFamily], SyncPullDevicePolicy: policies[limits.ScopeSyncPullDevice],
 		SyncPullAccountPolicy: policies[limits.ScopeSyncPullAccount], PushTokenDevicePolicy: policies[limits.ScopePushTokenDevice],
@@ -164,10 +165,11 @@ func (b countingBody) Read(p []byte) (int, error) {
 	return n, err
 }
 
-// I1: made-up bearers with full-size bodies cost a body read and a decode
-// each only until their address has failed the failed-bearer budget; after
-// that the address is refused before its body is read or any statement
-// runs, on every route that reads a body before the credential.
+// I1, then Phase 5 Task 19: a made-up bearer is refused 401 by the one
+// credential check made before its body is read, so no byte of a body is
+// read, and spends a unit of its address's failed-bearer budget; once the
+// budget is spent the address is refused 429 before that check, with no
+// statement run, on every route that reads a body before the credential.
 func TestFakeBearerBodiesAreBoundedByTheFailedBearerIPLimit(t *testing.T) {
 	h := testkit.New(t)
 	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
@@ -198,8 +200,12 @@ func TestFakeBearerBodiesAreBoundedByTheFailedBearerIPLimit(t *testing.T) {
 		rec, n, trips := send(attacker, "/v1/sync", http.MethodPost, fakeBearer(t), "records-v1", full)
 		read += n
 		if i < budget {
-			if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "session_revoked" {
+			if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "session_revoked" || rec.Header().Get("Connection") != "close" {
 				t.Fatalf("fake bearer %d within the budget: %d %s", i, rec.Code, rec.Body.String())
+			}
+			if n != 0 || i > 0 && trips != 1 { // the first also prepares the statement
+
+				t.Fatalf("fake bearer %d within the budget: read %d body bytes and ran %d round trips, want 0 and the one check", i, n, trips)
 			}
 			continue
 		}
@@ -211,10 +217,10 @@ func TestFakeBearerBodiesAreBoundedByTheFailedBearerIPLimit(t *testing.T) {
 			t.Fatalf("fake bearer %d past the budget: read %d body bytes and ran %d round trips before refusing", i, n, trips)
 		}
 	}
-	if want := int64(budget) * int64(len(full)); read != want {
-		t.Fatalf("read %d body bytes for %d fake bearers, want %d (the budget's bodies only)", read, budget+20, want)
+	if read != 0 {
+		t.Fatalf("read %d body bytes for %d fake bearers, want none", read, budget+20)
 	}
-	t.Logf("%d fake-bearer requests of %d bytes from one address: %d bodies read, %v in all", budget+20, len(full), budget, time.Since(started))
+	t.Logf("%d fake-bearer requests of %d bytes from one address: no body read, %v in all", budget+20, len(full), time.Since(started))
 
 	// The refused address is refused on every body route before its body.
 	for _, route := range unauthenticatedBodyRoutes {
@@ -238,7 +244,7 @@ func TestFakeBearerBodiesAreBoundedByTheFailedBearerIPLimit(t *testing.T) {
 
 	// Another address keeps its own budget, and a real client there syncs.
 	const neighbour = "203.0.113.10"
-	if rec, n, _ := send(neighbour, "/v1/sync", http.MethodPost, fakeBearer(t), "records-v1", full); rec.Code != http.StatusUnauthorized || n != int64(len(full)) {
+	if rec, n, _ := send(neighbour, "/v1/sync", http.MethodPost, fakeBearer(t), "records-v1", full); rec.Code != http.StatusUnauthorized || n != 0 {
 		t.Fatalf("another address's fake bearer: %d, read %d", rec.Code, n)
 	}
 	raw, err := json.Marshal(h.SyncRequest(h.Cursor(h.FamilySequence(t)), nil))
@@ -296,5 +302,137 @@ func TestOnlyUnknownBearersCountAgainstTheAddress(t *testing.T) {
 	}
 	if rec := send(owner, "v1", raw); rec.Code != http.StatusTooManyRequests {
 		t.Fatalf("the address past its budget: %d %s", rec.Code, rec.Body.String())
+	}
+}
+
+// Phase 5 Task 19: a bearer this node has not seen authenticate is checked
+// (one pooled statement, under an admission slot) before its body is read;
+// one that passed is remembered, so its next requests skip the check and
+// cost what they cost before. A remembered bearer whose session was since
+// revoked is refused by its request transaction, after its body, as before,
+// and forgotten: its next request is refused by the check, its body unread.
+func TestOnlyUnseenBearersAreCheckedBeforeTheirBody(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	s := abuseStack(t, h, nil)
+	raw, err := json.Marshal(h.SyncRequest(nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	send := func(subject string) (*httptest.ResponseRecorder, int64, int) {
+		var read atomic.Int64
+		req := httptest.NewRequest(http.MethodPost, "/v1/sync", countingBody{bytes.NewReader(raw), &read})
+		req.RemoteAddr = "203.0.113.40:1"
+		for name, value := range s.headers(subject, "/v1/sync") {
+			req.Header.Set(name, value)
+		}
+		rec := httptest.NewRecorder()
+		s.wire.Reset()
+		s.handler.ServeHTTP(rec, req)
+		return rec, read.Load(), s.wire.Trips()
+	}
+	if warm, _, _ := send("owner"); warm.Code != http.StatusOK { // prepares the statements
+		t.Fatalf("warm-up: %d %s", warm.Code, warm.Body.String())
+	}
+	first, n, firstTrips := send("caregiver")
+	if first.Code != http.StatusOK || n != int64(len(raw)) {
+		t.Fatalf("a real client's first sync: %d, read %d: %s", first.Code, n, first.Body.String())
+	}
+	second, _, secondTrips := send("caregiver")
+	if second.Code != http.StatusOK || firstTrips != secondTrips+1 {
+		t.Fatalf("a real client's syncs: %d, %d then %d round trips, want the first one more (the check)", second.Code, firstTrips, secondTrips)
+	}
+	if _, err := h.Family.Remove(t.Context(), h.Owner, h.CommandID(), h.Caregiver.AccountID); err != nil {
+		t.Fatal(err)
+	}
+	revoked, n, _ := send("caregiver")
+	if revoked.Code != http.StatusUnauthorized || errorCode(t, revoked) != "session_revoked" || n != int64(len(raw)) {
+		t.Fatalf("a remembered bearer since revoked: %d, read %d: %s", revoked.Code, n, revoked.Body.String())
+	}
+	forgotten, n, trips := send("caregiver")
+	if forgotten.Code != http.StatusUnauthorized || errorCode(t, forgotten) != "session_revoked" || n != 0 || trips != 1 {
+		t.Fatalf("the revoked bearer again: %d, read %d, %d round trips: %s", forgotten.Code, n, trips, forgotten.Body.String())
+	}
+}
+
+// Phase 5 Task 19: a made-up bearer is refused 401 by the credential check
+// before the body-read bound and the body read, with the connection
+// closed: its body stalling, it answers at once, where before the read ran
+// into its deadline and answered 503 service_unavailable; from an address
+// holding all its body reads, it answers 401, where before it answered 503
+// server_busy. A known bearer there still meets the bound (503
+// server_busy), as before.
+func TestFakeBearersAreRefusedBeforeTheBodyReadBounds(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	s := abuseStack(t, h, nil)
+	server := httptest.NewUnstartedServer(s.handler)
+	server.Config.ReadTimeout = 15 * time.Second
+	server.Start()
+	t.Cleanup(server.Close) // after the stalled connections close (cleanups run last first)
+	owner := h.AccessToken("owner")
+	// stall sends a sync request's headers and the first byte of its body
+	// from the loopback address and returns the open connection.
+	stall := func(bearer string) net.Conn {
+		conn, err := net.Dial("tcp", server.Listener.Addr().String())
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.Close() })
+		fmt.Fprintf(conn, "POST /v1/sync HTTP/1.1\r\nHost: test\r\nAuthorization: Bearer %s\r\nX-Baby-Tracker-Protocol: v1\r\n"+
+			"X-Baby-Tracker-Capabilities: records-v1\r\nContent-Length: 100000\r\n\r\n{", bearer)
+		return conn
+	}
+	answer := func(conn net.Conn, label string) (*http.Response, string) {
+		if err := conn.SetReadDeadline(time.Now().Add(3 * time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		response, err := http.ReadResponse(bufio.NewReader(conn), nil)
+		if err != nil {
+			t.Fatalf("%s: no answer within 3 s: %v", label, err)
+		}
+		body, _ := io.ReadAll(response.Body)
+		response.Body.Close()
+		return response, string(body)
+	}
+
+	started := time.Now()
+	response, body := answer(stall(fakeBearer(t)), "a stalled fake-bearer body")
+	if response.StatusCode != http.StatusUnauthorized || !strings.Contains(body, `"code":"session_revoked"`) || !response.Close {
+		t.Fatalf("a stalled fake-bearer body: %d (close %v) %s", response.StatusCode, response.Close, body)
+	}
+	if elapsed := time.Since(started); elapsed > time.Second {
+		t.Fatalf("answered after %v, want well before the 5 s body-read deadline", elapsed)
+	}
+
+	// The owner's bearer becomes known, then holds every body read of the
+	// address.
+	raw, err := json.Marshal(h.SyncRequest(nil, nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	request, err := http.NewRequest(http.MethodPost, server.URL+"/v1/sync", bytes.NewReader(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range s.headers("owner", "/v1/sync") {
+		request.Header.Set(name, value)
+	}
+	if response, err := server.Client().Do(request); err != nil || response.StatusCode != http.StatusOK {
+		t.Fatalf("the owner's sync: %v %v", response, err)
+	} else {
+		response.Body.Close()
+	}
+	for range defaultBodyReadsPerClient {
+		stall(owner)
+	}
+	time.Sleep(200 * time.Millisecond) // every stalled request is in its body read
+	response, body = answer(stall(fakeBearer(t)), "a fake bearer from a full address")
+	if response.StatusCode != http.StatusUnauthorized || !strings.Contains(body, `"code":"session_revoked"`) {
+		t.Fatalf("a fake bearer from an address holding its body reads: %d %s", response.StatusCode, body)
+	}
+	response, body = answer(stall(owner), "a known bearer from a full address")
+	if response.StatusCode != http.StatusServiceUnavailable || !strings.Contains(body, `"code":"server_busy"`) {
+		t.Fatalf("a known bearer from an address holding its body reads: %d %s", response.StatusCode, body)
 	}
 }

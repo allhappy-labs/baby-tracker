@@ -32,6 +32,18 @@ struct ContentHashTests {
             sha256: "ada019a1605551c30b8a3926f283b062b0939f229fbc3be9f1133df9ad5307c9"
         ),
         Vector(
+            name: "immunization fixture",
+            mutationJSON: fixture("immunization.json"),
+            canonicalJSON: #"{"entity_kind":"immunization","payload":{"dose":2,"given_at":"2026-09-20T09:30:00.000000Z","note":null,"time_zone_id":"Europe/Zurich","vaccine":"Prevenar 13"},"payload_version":1}"#,
+            sha256: "463b3c456f76db16d2621074d6faff332dd64c13b1d77705f313faff9111f552"
+        ),
+        Vector(
+            name: "pump fixture",
+            mutationJSON: fixture("pump.json"),
+            canonicalJSON: #"{"entity_kind":"pump","payload":{"ended_at":"2026-09-20T14:30:00.000000Z","note":null,"side":"both","started_at":"2026-09-20T14:10:00.000000Z","time_zone_id":"Europe/Zurich","volume_ml":90.5},"payload_version":1}"#,
+            sha256: "337fa8f308f7605672a8f1e8aa228b18feb0f4518c44f42a61eea93fb9aac9aa"
+        ),
+        Vector(
             name: "sleep fixture",
             mutationJSON: fixture("sleep.json"),
             canonicalJSON: #"{"entity_kind":"sleep","payload":{"ended_at":"2026-09-20T14:00:00.000000Z","kind_override":"nap","note":null,"sleep_session_id":null,"started_at":"2026-09-20T13:00:00.000000Z","time_zone_id":"Europe/Zurich"},"payload_version":1}"#,

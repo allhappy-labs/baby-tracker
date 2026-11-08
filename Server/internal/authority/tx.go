@@ -36,3 +36,21 @@ func (s *Service) beginReadOnly(ctx context.Context) (pgx.Tx, error) {
 	}
 	return tx, nil
 }
+
+// verifierBeginReadOnly is authorityBeginReadOnly with the audit table
+// locked (ACCESS SHARE, the parent only) before the snapshot: LOCK takes no
+// snapshot, so the snapshot is the SELECT's, taken once the lock is held. A
+// retention drop (app.drop_expired_audit_partition, which detaches under
+// ACCESS EXCLUSIVE) therefore commits either before the snapshot, which then
+// sees the new anchor and no partition, or after the transaction: never
+// between the anchor a walk reads and the rows it reads.
+const verifierBeginReadOnly = `BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY; LOCK TABLE ONLY public.security_audit_events IN ACCESS SHARE MODE; SELECT set_config('app.authority','1',true)`
+
+// beginVerifierRead opens the verifier's read-only authority transaction.
+func (s *Service) beginVerifierRead(ctx context.Context) (pgx.Tx, error) {
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{BeginQuery: verifierBeginReadOnly})
+	if err != nil {
+		return nil, fmt.Errorf("authority: begin verifier read: %w", err)
+	}
+	return tx, nil
+}

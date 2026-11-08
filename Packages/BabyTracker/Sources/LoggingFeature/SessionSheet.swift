@@ -18,6 +18,8 @@ public struct SessionSheet: View {
     /// the push finished, so its Save and Delete popped in late and the sheet
     /// jumped.
     @State private var editing: PartEditTarget?
+    /// Solids being added from Add part, in the Solids panel over this sheet.
+    @State private var addingSolids: SolidsLogModel?
     @State private var isConfirmingDelete = false
     /// `onDone` runs once even when a delete is followed by the revision
     /// bump that marks the session gone.
@@ -25,6 +27,7 @@ public struct SessionSheet: View {
     private let unit: VolumeUnit
     private let onDone: () -> Void
     @Environment(\.errorReporter) private var errorReporter
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     public init(model: SessionSheetModel, unit: VolumeUnit, onDone: @escaping () -> Void) {
         _model = State(initialValue: model)
@@ -34,63 +37,87 @@ public struct SessionSheet: View {
 
     public var body: some View {
         NavigationStack {
-            List {
-                if model.canEdit, model.join.previous != nil {
-                    Section { JoinRow(model: model.join) }
-                }
+            VStack(spacing: 0) {
+                header
+                List {
+                    if model.canEdit, model.join.previous != nil {
+                        Section { JoinRow(model: model.join) }
+                    }
 
-                Section {
-                    ForEach(Array(model.parts.enumerated()), id: \.element.id) { index, part in
-                        if showsGapRow(part) {
-                            gapRow(part, index: index)
+                    Section {
+                        ForEach(Array(model.parts.enumerated()), id: \.element.id) { index, part in
+                            if showsGapRow(part) {
+                                gapRow(part, index: index)
+                            }
+                            partRow(part, index: index)
                         }
-                        partRow(part, index: index)
+                    }
+
+                    if model.canEdit {
+                        Section { addPart }
                     }
                 }
-
+                // Full height: a session holds a varying number of parts, and a
+                // sheet resized to each of them jumped.
+                .fullHeightSheet()
+                // The list's own bottom margin would stack on the footer's padding.
+                .contentMargins(.bottom, 8, for: .scrollContent)
+                // Gap rows are a line of small text, not a full row.
+                .environment(\.defaultMinListRowHeight, 24)
+                #if os(iOS)
+                .listSectionSpacing(.compact)
+                // The header is drawn below, with Done beside the time, as in the
+                // mockup; a bar above it would only leave an empty band.
+                .toolbar(.hidden, for: .navigationBar)
+                #endif
+                .navigationTitle(model.title)
+                // The kit's footer, pinned under the list: Delete as text on its own row.
                 if model.canEdit {
-                    Section { addPart }
-                    Section { deleteSessionButton }
+                    SheetFooter(destructive: SheetAction(
+                        model.kind == .feed ? SessionSheetCopy.deleteFeed : SessionSheetCopy.deleteSleep,
+                        identifier: "sessionSheet.delete") { isConfirmingDelete = true })
                 }
             }
-            // Full height: a session holds a varying number of parts, and a
-            // sheet resized to each of them jumped.
-            .fullHeightSheet()
-            // The default bottom margin left a band of empty sheet under
-            // Delete.
-            .contentMargins(.bottom, 8, for: .scrollContent)
-            // Gap rows are a line of small text, not a full row.
-            .environment(\.defaultMinListRowHeight, 24)
-            #if os(iOS)
-            .listSectionSpacing(.compact)
-            // The header is drawn below, with Done beside the time, as in the
-            // mockup; a bar above it would only leave an empty band.
-            .toolbar(.hidden, for: .navigationBar)
-            #endif
-            .navigationTitle(model.title)
-            .safeAreaInset(edge: .top, spacing: 0) { header }
             .fittedSheet(item: $editing) { target in
-                PartEditSheet(model: model.editorModel(for: target), showsJoinRow: false) {
-                    if editing == target { editing = nil }
+                Group {
+                    if case let .solids(feedID, _) = target {
+                        SolidsSheet(store: model.store, babyID: model.babyID, editing: feedID) {
+                            if editing == target { editing = nil }
+                        }
+                    } else {
+                        PartEditSheet(model: model.editorModel(for: target), showsJoinRow: false) {
+                            if editing == target { editing = nil }
+                        }
+                    }
                 }
                 // A fitted sheet does not inherit custom environment values.
                 .environment(\.errorReporter, errorReporter)
             }
-            .deleteConfirmation(isPresented: $isConfirmingDelete, title: deleteConfirmTitle,
-                                identifierPrefix: "sessionSheet", onDelete: deleteSession)
+            .fittedSheet(item: $addingSolids) { solids in
+                SolidsSheet(store: model.store, babyID: model.babyID, adding: solids) {
+                    if addingSolids === solids { addingSolids = nil }
+                }
+                .environment(\.errorReporter, errorReporter)
+            }
+            .confirmDelete(isPresented: $isConfirmingDelete, title: deleteConfirmTitle,
+                           deleteTitle: EditChromeCopy.delete, keepTitle: EditChromeCopy.keep,
+                           identifierPrefix: "sessionSheet", onDelete: deleteSession)
         }
+        // Split here and the other system controls in the session's colour, not the system blue.
+        .tint(tint)
         .editLifecycle(revision: model.store.revision, isGone: model.isGone, reload: model.reload, onGone: finish)
     }
 
     // MARK: - Header
 
     private var header: some View {
-        HStack(alignment: .top, spacing: 12) {
+        HStack(alignment: .top, spacing: Spacing.m) {
+            // The ✕ keeps the old text title ("Done") as its label.
+            SheetCloseButton(title: SessionSheetCopy.done, identifier: "sessionSheet.done", action: finish)
             VStack(alignment: .leading, spacing: 2) {
                 Text(model.title)
-                    .font(.title3.weight(.bold))
+                    .textRole(.sheetTitle)
                     .monospacedDigit()
-                    .foregroundStyle(Palette.primaryText)
                     .accessibilityAddTraits(.isHeader)
                     .accessibilityIdentifier("sessionSheet.title")
                 if !model.totals.isEmpty {
@@ -102,36 +129,36 @@ public struct SessionSheet: View {
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
-
-            // The 44-point frame inside the label: outside it, it only
-            // padded the layout, and the hit area stayed the word's own size
-            // (the accessibility audit's hitRegion finding).
-            Button(action: finish) {
-                Text(SessionSheetCopy.done)
-                    .font(.body.weight(.semibold))
-                    .frame(minWidth: 44, minHeight: 44)
-                    .contentShape(.rect)
-            }
-            .accessibilityIdentifier("sessionSheet.done")
         }
-        .padding(.horizontal, 20)
-        .padding(.top, 16)
-        .padding(.bottom, 4)
+        .padding(.horizontal, Spacing.l)
+        .padding(.top, Spacing.l)
+        .padding(.bottom, Spacing.xs)
     }
 
     // MARK: - Parts
 
     private func partRow(_ part: SessionPart, index: Int) -> some View {
-        let content = HStack(spacing: 12) {
-            BabyIconView(part.icon, size: 22)
-                .foregroundStyle(tint)
-            Text(part.label)
-                .foregroundStyle(Palette.primaryText)
-                .frame(maxWidth: .infinity, alignment: .leading)
-            Text(part.detail)
-                .font(.subheadline)
-                .monospacedDigit()
-                .foregroundStyle(Palette.secondaryText)
+        let label = Text(part.label).foregroundStyle(Palette.primaryText)
+        let detail = Text(part.detail)
+            .font(.subheadline)
+            .monospacedDigit()
+            .foregroundStyle(Palette.secondaryText)
+            .fixedSize(horizontal: true, vertical: false)
+        let content = Group {
+            if typeSize.isAccessibilitySize {
+                // The time range stays on one line; it goes under the label.
+                HStack(alignment: .top, spacing: 12) {
+                    BabyIconView(part.icon, size: 22).foregroundStyle(tint)
+                    VStack(alignment: .leading, spacing: Spacing.xs) { label; detail }
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            } else {
+                HStack(spacing: 12) {
+                    BabyIconView(part.icon, size: 22).foregroundStyle(tint)
+                    label.frame(maxWidth: .infinity, alignment: .leading)
+                    detail
+                }
+            }
         }
         .frame(minHeight: 44)
         .accessibilityElement(children: .combine)
@@ -170,8 +197,8 @@ public struct SessionSheet: View {
 
     /// Part rows sit close; the gap line between two of them is a line of
     /// small text, not another full row (mockup G2).
-    private static let partInsets = EdgeInsets(top: 2, leading: 20, bottom: 2, trailing: 20)
-    private static let gapInsets = EdgeInsets(top: 0, leading: 20, bottom: 0, trailing: 20)
+    private static let partInsets = EdgeInsets(top: 2, leading: Spacing.xl, bottom: 2, trailing: Spacing.xl)
+    private static let gapInsets = EdgeInsets(top: 0, leading: Spacing.xl, bottom: 0, trailing: Spacing.xl)
 
     /// The line between two parts: the gap in small grey text on the left
     /// and Split here on the right, only where Split can cut (ruling H-R2).
@@ -213,7 +240,7 @@ public struct SessionSheet: View {
 
     // MARK: - Add and Delete
 
-    /// Left, Right and Bottle for a feed; a sleep has the one kind, so its
+    /// Left, Right, Bottle and Solids for a feed; a sleep has the one kind, so its
     /// Add part adds a sleep at once rather than opening a one-item menu.
     /// A kind that would end in the future is off (ruling H-R18) until the
     /// session ended long enough ago; while one is off, the row re-checks
@@ -253,22 +280,10 @@ public struct SessionSheet: View {
     /// ever in the screenshots).
     private func addPartLabel(isEnabled: Bool) -> some View {
         Label(SessionSheetCopy.addPart, systemImage: "plus")
-            .foregroundStyle(isEnabled ? tint : tint.opacity(0.4))
+            .foregroundStyle(tint)
+            .opacity(PrimaryButtonStyle.opacity(isEnabled: isEnabled))
             .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
             .contentShape(.rect)
-    }
-
-    private var deleteSessionButton: some View {
-        Button(role: .destructive) {
-            isConfirmingDelete = true
-        } label: {
-            Text(model.kind == .feed ? SessionSheetCopy.deleteFeed : SessionSheetCopy.deleteSleep)
-                .font(.body.weight(.semibold))
-                .foregroundStyle(Palette.destructive)
-                .frame(maxWidth: .infinity, minHeight: 44)
-                .contentShape(.rect)
-        }
-        .accessibilityIdentifier("sessionSheet.delete")
     }
 
     private var deleteConfirmTitle: String {
@@ -289,6 +304,12 @@ public struct SessionSheet: View {
     }
 
     private func add(_ kind: AddPartKind) {
+        // Solids are their foods: the panel opens first, and they are
+        // written once named.
+        if kind == .solids {
+            addingSolids = model.newSolidsModel()
+            return
+        }
         var added: PartEditTarget?
         if performEdit({ added = try model.addPart(kind) }, failure: ErrorBannerCopy.saveFailed(what: subject),
                        reporter: errorReporter), let added {

@@ -119,16 +119,25 @@ func TestASettleWithoutAWorkerSlotIsReplayed(t *testing.T) {
 	if pusher.count(refused) != 1 || pusher.count(unsent) != 0 {
 		t.Fatalf("pushes %v, want the first alone", pusher.sent)
 	}
+	if totals := w.Totals(); totals.SettlesPending != 2 || totals.SettlesFailed != 1 {
+		t.Fatalf("totals %+v, want both rows kept and one failed settle", totals)
+	}
 	// A later tick, the slot still held: it fails too, and keeps the settle.
 	advance(sentAt.Add(30 * time.Second))
 	if err := tickWithin(w, 500*time.Millisecond); !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("a tick with the slot still held: %v, want it to fail", err)
+	}
+	if totals := w.Totals(); totals.SettlesPending != 2 || totals.SettlesFailed != 2 {
+		t.Fatalf("totals %+v, want both rows still kept and two failed settles", totals)
 	}
 	pusher.free()
 	advance(sentAt.Add(time.Minute))
 	pushTick(t, w)
 	if pusher.count(unsent) != 1 || pusher.count(refused) != 1 {
 		t.Fatalf("a minute later, the slot free: pushes %v, want the push never started sent (and no second push inside the refused one's window)", pusher.sent)
+	}
+	if totals := w.Totals(); totals.SettlesPending != 0 || totals.SettlesFailed != 2 {
+		t.Fatalf("totals %+v, want the kept settle applied", totals)
 	}
 	for _, at := range []time.Duration{2 * time.Minute, wake.APNsInterval - time.Second} {
 		advance(sentAt.Add(at))
@@ -193,6 +202,9 @@ func TestAKeptSettleRescansItsFamilyOnceItApplies(t *testing.T) {
 	clock = sentAt.Add(30 * time.Second)
 	if stats, err := w.Tick(t.Context()); err == nil || stats.Pushed != 0 {
 		t.Fatalf("a tick with the rows still held: %+v %v, want the settle failed and nothing pushed", stats, err)
+	}
+	if totals := w.Totals(); totals.SettlesFailed != 2 || totals.SettlesPending != 2 {
+		t.Fatalf("totals %+v, want two failed settles and both rows kept", totals)
 	}
 	if err := holder.Rollback(t.Context()); err != nil {
 		t.Fatal(err)
@@ -282,6 +294,118 @@ func TestKeptSettlesOfTwoTicksApplyTogether(t *testing.T) {
 		if rows[device].Pushed != before[device].Pushed {
 			t.Fatalf("row %s %+v, want its sequence given back (%d)", device, rows[device], before[device].Pushed)
 		}
+	}
+}
+
+// Settles apply one by one (C35): three kept settles, the second's UPDATE
+// fails (its row is held past the lock timeout), and settles 1 and 3 still
+// apply; the second stays kept, counted once in SettlesFailed, and applies
+// once its row is free.
+func TestOneFailingSettleDoesNotBlockTheOthers(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	tracker, pusher := wake.NewTracker(0), newFakePusher()
+	clock := h.Now
+	w := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: discardSender{}, Pusher: pusher,
+		Connected: func(string) bool { return false }, Now: func() time.Time { return clock }}
+	var devices []string
+	for i := range 3 {
+		devices = append(devices, backgrounded(t, h, tracker, token(byte(0x81+i)), clock).DeviceID)
+	}
+	write(t, h, tracker, 1)
+	if stats := pushTick(t, w); stats.Pushed != 3 {
+		t.Fatalf("%+v, want the three devices pushed (reserved)", stats)
+	}
+	sequence := uint64(h.FamilySequence(t))
+	for _, device := range devices {
+		if row := pushRows(t, h, h.FamilyID)[device]; row.Pushed != int64(sequence) || row.PushedAt == nil || !row.PushedAt.Equal(clock) {
+			t.Fatalf("row %s %+v, want reserved at %d", device, row, sequence)
+		}
+		w.KeepReleaseForTest(h.FamilyID, []string{device}, sequence, clock)
+	}
+	holder, err := h.Maintenance.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.Background())
+	if _, err := holder.Exec(t.Context(), `SELECT 1 FROM device_sync_cursors WHERE family_id = $1 AND device_id = $2 FOR UPDATE`, h.FamilyID, devices[1]); err != nil {
+		t.Fatal(err)
+	}
+	applied, err := w.ApplySettlesForTest(t.Context())
+	if err == nil || applied != 2 {
+		t.Fatalf("applied %d (%v), want settles 1 and 3 applied and the second's failure", applied, err)
+	}
+	rows := pushRows(t, h, h.FamilyID)
+	for i, device := range devices {
+		released := rows[device].Pushed == 0 && rows[device].PushedAt == nil
+		if released != (i != 1) {
+			t.Fatalf("settle %d: row %+v, want only the second still reserved", i+1, rows[device])
+		}
+	}
+	if totals := w.Totals(); totals.SettlesFailed != 1 || totals.SettlesPending != 1 {
+		t.Fatalf("totals %+v, want one failed settle and its one row kept", totals)
+	}
+	if err := holder.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := w.ApplySettlesForTest(t.Context()); err != nil || applied != 1 {
+		t.Fatalf("once its row is free: applied %d (%v), want the kept settle", applied, err)
+	}
+	if row := pushRows(t, h, h.FamilyID)[devices[1]]; row.Pushed != 0 || row.PushedAt != nil {
+		t.Fatalf("row %+v, want the second settle applied", row)
+	}
+	if totals := w.Totals(); totals.SettlesFailed != 1 || totals.SettlesPending != 0 {
+		t.Fatalf("totals %+v, want nothing kept", totals)
+	}
+}
+
+// SettlesFailed counts the settles that were tried and failed, not those
+// left untried: the first settle waits on its held row until the context
+// ends, so the second is kept without being tried. Both stay kept; one
+// failure is counted.
+func TestUntriedSettlesAreNotCountedAsFailed(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	tracker, pusher := wake.NewTracker(0), newFakePusher()
+	clock := h.Now
+	w := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: discardSender{}, Pusher: pusher,
+		Connected: func(string) bool { return false }, Now: func() time.Time { return clock }}
+	var devices []string
+	for i := range 2 {
+		devices = append(devices, backgrounded(t, h, tracker, token(byte(0x8a+i)), clock).DeviceID)
+	}
+	write(t, h, tracker, 1)
+	if stats := pushTick(t, w); stats.Pushed != 2 {
+		t.Fatalf("%+v, want both devices pushed (reserved)", stats)
+	}
+	sequence := uint64(h.FamilySequence(t))
+	for _, device := range devices {
+		w.KeepReleaseForTest(h.FamilyID, []string{device}, sequence, clock)
+	}
+	holder, err := h.Maintenance.Begin(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer holder.Rollback(context.Background())
+	if _, err := holder.Exec(t.Context(), `SELECT 1 FROM device_sync_cursors WHERE family_id = $1 AND device_id = $2 FOR UPDATE`, h.FamilyID, devices[0]); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 500*time.Millisecond)
+	defer cancel()
+	if applied, err := w.ApplySettlesForTest(ctx); err == nil || applied != 0 {
+		t.Fatalf("applied %d (%v), want the first settle failed at the context's end and the second untried", applied, err)
+	}
+	if totals := w.Totals(); totals.SettlesFailed != 1 || totals.SettlesPending != 2 {
+		t.Fatalf("totals %+v, want one failure counted and both settles kept", totals)
+	}
+	if err := holder.Rollback(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	if applied, err := w.ApplySettlesForTest(t.Context()); err != nil || applied != 2 {
+		t.Fatalf("once the row is free: applied %d (%v), want both", applied, err)
+	}
+	if totals := w.Totals(); totals.SettlesFailed != 1 || totals.SettlesPending != 0 {
+		t.Fatalf("totals %+v, want nothing kept and still one failure", totals)
 	}
 }
 

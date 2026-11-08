@@ -85,7 +85,8 @@ func TestImportHTTPRoundTrips(t *testing.T) {
 	if got.authority != 2 || got.begins != 1 || got.commits != 1 || got.familyRead {
 		t.Errorf("resolve: %+v, want the authority statement, then one guarded transaction", got)
 	}
-	if want := 29; got.trips != want {
+	// 28: a resolve reads its mappings once (C14; 29 read them twice).
+	if want := 28; got.trips != want {
 		t.Errorf("resolve: %d round trips, want %d", got.trips, want)
 	}
 	malformed := func() *httptest.ResponseRecorder {

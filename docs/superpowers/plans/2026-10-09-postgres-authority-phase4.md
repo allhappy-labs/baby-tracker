@@ -295,7 +295,7 @@ A carried registration stays authorized: `lineage_root_session_id` and `authorit
   - Prefix every shell command with `rtk`.
   - Each agent runs one `test-db.sh` at a time, with a private `GOCACHE=$(mktemp -d)`, after `df -h /` shows at least 5 GB free (30 GB for Task 22), and removes its own temporary copies.
   - Subagents run on opus or sonnet only.
-  - Any `xcodebuild` uses only `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`, runs one at a time after `pgrep -fl xcodebuild` prints nothing, and never creates, resets or erases a simulator.
+  - Any `xcodebuild` uses only `platform=iOS Simulator,id=<simulator-udid>`, runs one at a time after `pgrep -fl xcodebuild` prints nothing, and never creates, resets or erases a simulator.
   - Parallel tasks run in isolated worktrees; the controller cherry-picks them in task order.
 
 ## Review Focus
@@ -4774,7 +4774,7 @@ func TestLegacyRolesDropCleanlyAfterAnImport(t *testing.T) { // Review Focus 2
   - `rtk proxy env GOCACHE=$(mktemp -d) BT_TEST_PACKAGES='-v ./internal/legacyimport/...' BT_TEST_RUN='TestDetect|TestCaptured|TestImported|TestDryRun|TestImportIs|TestCarriedCard|TestLiveActivityRows' bash Server/scripts/test-db.sh`, with the PASS lines in the report. The importer now applies the baseline (C1), and `TestDetect` still refuses the `998501b` 28 and accepts only `homelab_29`.
   - `rtk proxy env GOCACHE=$(mktemp -d) BT_TEST_PACKAGES='./internal/protocol ./internal/care ./internal/sync ./internal/httpapi' BT_TEST_RUN='Icon' bash Server/scripts/test-db.sh` (Review Focus 6, on the final tree).
   - **The homelab has not moved.** `git show main:docs/verification/` lists no rollout after `2026-10-09-baby-icons-rollout.md` that changed the homelab's source, and `main` is still `7040ca2d` or differs from it only outside `Server/`. Otherwise the D2 re-pin rule applies before any R-step.
-- [ ] **Step 3: iOS.** With `pgrep -fl xcodebuild` printing nothing, `rtk make test` (the expected count). Then, on the shared simulator only, `rtk proxy xcodebuild -project BabyTracker.xcodeproj -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' -derivedDataPath /tmp/bt-p4-gates-dd build` succeeds; remove `/tmp/bt-p4-gates-dd` afterwards. Never create, reset or erase a simulator.
+- [ ] **Step 3: iOS.** With `pgrep -fl xcodebuild` printing nothing, `rtk make test` (the expected count). Then, on the shared simulator only, `rtk proxy xcodebuild -project BabyTracker.xcodeproj -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' -derivedDataPath /tmp/bt-p4-gates-dd build` succeeds; remove `/tmp/bt-p4-gates-dd` afterwards. Never create, reset or erase a simulator.
 - [ ] **Step 4: Protocol E2E.** `rtk make server-protocol-e2e` and `rtk env BT_RECOVERY_E2E_MODE=self_hosted make server-protocol-e2e`. Both exit 0 with every proof line:
   - `two-caregiver proof:`, `owner-reinstall proof:`, `running-timer snapshot proof:`;
   - `wake proof:`, `background-push proof:`;

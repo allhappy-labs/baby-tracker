@@ -99,56 +99,55 @@ struct JoinConfirmationView<Model: FamilySyncSettingsModel>: View {
     }
 
     var body: some View {
-        ScrollView {
-            VStack(spacing: 20) {
-                switch confirmation.state {
-                case .loading:
-                    ProgressView(JoinConfirmationCopy.checking)
-                        .accessibilityIdentifier("joinConfirmation.loading")
-                case .ready(let familyName), .joining(let familyName):
-                    Text(JoinConfirmationCopy.title(familyName: familyName))
-                        .font(.title2.bold())
-                        .multilineTextAlignment(.center)
-                        .accessibilityAddTraits(.isHeader)
-                        .accessibilityIdentifier("joinConfirmation.title")
-                    Button {
-                        Task { await confirmation.join() }
-                    } label: {
-                        Text(JoinConfirmationCopy.join).frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.borderedProminent)
-                    .disabled(confirmation.state != .ready(familyName: familyName))
-                    .accessibilityIdentifier("joinConfirmation.join")
-                    cancelButton(JoinConfirmationCopy.cancel)
-                case .failed(let message):
-                    Text(message)
-                        .multilineTextAlignment(.center)
-                        .foregroundStyle(Palette.destructive)
-                        .accessibilityIdentifier("joinConfirmation.problem")
-                    cancelButton(JoinConfirmationCopy.close)
-                case .joined:
-                    EmptyView()
-                }
-            }
-            .padding(24)
-            .frame(maxWidth: .infinity)
-        }
         // Presented with `fittedSheet`: as tall as what it says in each
         // state — a spinner, a question with two buttons, or a reason with one.
-        .scrollBounceBehavior(.basedOnSize)
-        .interactiveDismissDisabled(confirmation.state.isJoining)
-        .task { await confirmation.load() }
-        .onChange(of: confirmation.state) { _, state in
-            if state == .joined { onFinish() }
-        }
+        content
+            .interactiveDismissDisabled(confirmation.state.isJoining)
+            .task { await confirmation.load() }
+            .onChange(of: confirmation.state) { _, state in
+                if state == .joined { onFinish() }
+            }
     }
 
-    private func cancelButton(_ title: String) -> some View {
-        Button(action: onFinish) {
-            Text(title).frame(maxWidth: .infinity, minHeight: 44)
+    @ViewBuilder private var content: some View {
+        switch confirmation.state {
+        case .loading:
+            ProgressView(JoinConfirmationCopy.checking)
+                .accessibilityIdentifier("joinConfirmation.loading")
+                .frame(maxWidth: .infinity)
+                .padding(Spacing.xl + Spacing.s)
+        case .ready(let familyName), .joining(let familyName):
+            ConfirmSheet(
+                systemImage: "person.2.fill",
+                tint: Palette.sleep,
+                title: JoinConfirmationCopy.title(familyName: familyName),
+                message: "",
+                confirm: SheetAction(
+                    JoinConfirmationCopy.join, identifier: "joinConfirmation.join",
+                    isEnabled: confirmation.state == .ready(familyName: familyName)
+                ) { Task { await confirmation.join() } },
+                isDestructive: false,
+                cancel: SheetAction(
+                    JoinConfirmationCopy.cancel, identifier: "joinConfirmation.cancel",
+                    isEnabled: !confirmation.state.isJoining, action: onFinish),
+                titleIdentifier: "joinConfirmation.title"
+            )
+        case .failed(let message):
+            VStack(spacing: 0) {
+                ScrollView {
+                    InlineError(message)
+                        .font(.callout)
+                        .padding(.horizontal, Spacing.xl)
+                        .padding(.vertical, Spacing.xl + Spacing.s)
+                        .accessibilityIdentifier("joinConfirmation.problem")
+                }
+                .scrollBounceBehavior(.basedOnSize)
+                SheetFooter(secondary: SheetAction(
+                    JoinConfirmationCopy.close, identifier: "joinConfirmation.cancel", action: onFinish))
+            }
+        case .joined:
+            EmptyView()
         }
-        .disabled(confirmation.state.isJoining)
-        .accessibilityIdentifier("joinConfirmation.cancel")
     }
 }
 

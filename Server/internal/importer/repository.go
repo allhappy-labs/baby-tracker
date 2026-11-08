@@ -88,7 +88,9 @@ func (s *Service) resume(p access.Principal, family string, v session, token str
 	return last, nil
 }
 
-func (s *Service) response(ctx context.Context, tx pgx.Tx, p access.Principal, family string, v session, page *string, pending []conflict) (protocol.ImportResolveResponse, error) {
+// response is the import's status page. mappings are the import's
+// mappings when the caller has read them (nil: response reads them).
+func (s *Service) response(ctx context.Context, tx pgx.Tx, p access.Principal, family string, v session, page *string, pending []conflict, mappings []protocol.BabyMapping) (protocol.ImportResolveResponse, error) {
 	out := protocol.ImportResolveResponse{ImportID: v.id, ResolverRevision: v.revision, NormalizationVersion: v.normalization, Mappings: []protocol.BabyMapping{}, Conflicts: []protocol.ImportConflict{}, MappingComplete: v.mapped, ManifestComplete: v.complete, NextChunkIndex: v.next, ConflictsComplete: true}
 	last := ""
 	if page != nil {
@@ -98,25 +100,13 @@ func (s *Service) response(ctx context.Context, tx pgx.Tx, p access.Principal, f
 			return out, e
 		}
 	}
-	if v.mapped {
-		rows, e := tx.Query(ctx, `SELECT local_baby_id::text,shared_baby_id::text FROM import_baby_mappings WHERE family_id=$1 AND import_id=$2 ORDER BY import_baby_mappings.local_baby_id`, family, v.id)
-		if e != nil {
-			return out, e
-		}
-		for rows.Next() {
-			var m protocol.BabyMapping
-			if e = rows.Scan(&m.LocalBabyID, &m.SharedBabyID); e != nil {
-				rows.Close()
-				return out, e
-			}
-			out.Mappings = append(out.Mappings, m)
-		}
-		e = rows.Err()
-		rows.Close()
-		if e != nil {
+	if mappings == nil {
+		var e error
+		if mappings, e = s.mappings(ctx, tx, family, v); e != nil {
 			return out, e
 		}
 	}
+	out.Mappings = append(out.Mappings, mappings...)
 	var count uint64
 	e := tx.QueryRow(ctx, `SELECT count(*) FROM import_conflicts WHERE family_id=$1 AND import_id=$2 AND decision_choice IS NULL AND (NOT $3 OR record_id IS NOT NULL)`, family, v.id, v.mapped).Scan(&count)
 	if e != nil {

@@ -49,6 +49,9 @@ final class AskCareLog {
     /// Sized for the on-device model's ~4K-token window.
     static let logLines = 15
     static let dayLines = 14
+    /// A vaccine read lists the whole booklet: its lines are short and its
+    /// point is counting doses, which a cut-off list would get wrong.
+    static let vaccineLines = 40
 
     let record: AskToolRecord
     private let store: BabyStore
@@ -69,24 +72,40 @@ final class AskCareLog {
 
     func log(range: String, date: String, kind: String) -> String {
         guard record.begin("careLog") else { return Self.limitReached }
-        guard ["feed", "sleep", "diaper", "med", "all"].contains(kind) else {
-            return "Use kind feed, sleep, diaper, med or all."
+        guard ["feed", "sleep", "diaper", "med", "vaccine", "pump", "all"].contains(kind) else {
+            return "Use kind feed, sleep, diaper, med, vaccine, pump or all."
         }
+        // Shots are months apart and the ranges stop at 30 days, so a vaccine
+        // read is the baby's whole booklet whatever range the model named:
+        // every shot the store holds, a birth dose and one dated before a
+        // corrected birth date included.
+        let booklet: [HistoryItem]?
         let window: AskWindow
-        switch resolve(range: range, date: date) {
-        case .success(let value): window = value
-        case .failure(let correction): return correction.message
+        if kind == "vaccine" {
+            guard let shots = try? store.immunizations(for: babyID) else { return Self.unreadable }
+            let birth = (try? store.baby(babyID))?.birthDate ?? now
+            booklet = shots.map(HistoryItem.immunization)
+            window = AskWindow(start: min(birth, shots.last?.givenAt ?? now, now), end: now)
+        } else {
+            booklet = nil
+            switch resolve(range: range, date: date) {
+            case .success(let value): window = value
+            case .failure(let correction): return correction.message
+            }
         }
         do {
-            let items = try store.entries(for: babyID, from: window.start, to: window.end)
+            let items = try booklet ?? store.entries(for: babyID, from: window.start, to: window.end)
                 .filter { kind == "all" || Self.kind(of: $0) == kind }
             record.read(window)
+            // A booklet spans months, so its ends are named with their year.
+            let wholeLife = booklet != nil
+            func stamp(_ date: Date) -> String { wholeLife ? text.timeWithYear(date) : text.time(date) }
             guard !items.isEmpty else {
                 let what = kind == "all" ? "" : "\(kind) "
-                return "No \(what)entries logged from \(text.time(window.start)) to \(text.time(window.end))."
+                return "No \(what)entries logged from \(stamp(window.start)) to \(stamp(window.end))."
             }
-            let shown = items.prefix(Self.logLines)
-            var lines = ["Logged entries from \(text.time(window.start)) to \(text.time(window.end)):",
+            let shown = items.prefix(kind == "vaccine" ? Self.vaccineLines : Self.logLines)
+            var lines = ["Logged entries from \(stamp(window.start)) to \(stamp(window.end)):",
                          entrySummary(items)]
             lines += shown.map { item in
                 record.shown(Self.source(of: item))
@@ -135,14 +154,25 @@ final class AskCareLog {
         guard record.begin("lastEntries") else { return Self.limitReached }
         do {
             let items = try store.entries(for: babyID, from: now.addingTimeInterval(-365 * 86_400), to: now)
-            return ["feed", "sleep", "diaper", "med"].map { kind in
+            let recent = ["feed", "sleep", "diaper", "med", "pump"].map { kind in
                 guard let item = items.first(where: { Self.kind(of: $0) == kind }) else {
                     return "\(kind): none logged in the past year"
                 }
                 record.shown(Self.source(of: item))
                 let ago = AskText.ago(Int(now.timeIntervalSince(item.startedAt)))
                 return "\(kind), \(ago) ago: \(line(for: item))"
-            }.joined(separator: "\n")
+            }
+            // The last vaccination is found however old it is: shots are
+            // often more than a year apart.
+            let vaccine: String
+            if let shot = try store.lastImmunization(for: babyID) {
+                let item = HistoryItem.immunization(shot)
+                record.shown(Self.source(of: item))
+                vaccine = "vaccine, \(AskText.ago(Int(now.timeIntervalSince(shot.givenAt)))) ago: \(line(for: item))"
+            } else {
+                vaccine = "vaccine: none logged"
+            }
+            return (recent + [vaccine]).joined(separator: "\n")
         } catch {
             return Self.unreadable
         }
@@ -200,6 +230,14 @@ final class AskCareLog {
         if let newest = meds.first {
             parts.append("meds \(meds.count), newest \(text.time(newest.startedAt))")
         }
+        let vaccines = items.filter { Self.kind(of: $0) == "vaccine" }
+        if let newest = vaccines.first {
+            parts.append("vaccines \(vaccines.count), newest \(text.time(newest.startedAt))")
+        }
+        let pumps = items.filter { Self.kind(of: $0) == "pump" }
+        if let newest = pumps.first {
+            parts.append("pumping sessions \(pumps.count), newest \(text.time(newest.startedAt))")
+        }
         return "Summary: \(parts.joined(separator: "; "))."
     }
 
@@ -216,6 +254,14 @@ final class AskCareLog {
             return "\(text.time(entry.startedAt)) · diaper · \(entry.contents.rawValue)\(Self.note(entry.note))"
         case .supplement(let entry):
             return "\(text.time(entry.startedAt)) · med · \(entry.name)\(Self.note(entry.note))"
+        case .immunization(let entry):
+            let dose = entry.dose.map { " · dose \($0)" } ?? ""
+            // With its year: shots are months apart, and a read lists them all.
+            return "\(text.timeWithYear(entry.givenAt)) · vaccine · \(entry.vaccine)\(dose)\(Self.note(entry.note))"
+        case .pump(let entry):
+            let amount = entry.volumeML.map { volume($0) } ?? "no amount"
+            let length = entry.endedAt.map { AskText.duration(Int($0.timeIntervalSince(entry.startedAt))) } ?? "running"
+            return "\(text.span(entry.startedAt, entry.endedAt)) · pump · \(entry.side.rawValue) · \(length) · \(amount)\(Self.note(entry.note))"
         }
     }
 
@@ -244,6 +290,8 @@ final class AskCareLog {
         case .sleep: "sleep"
         case .diaper: "diaper"
         case .supplement: "med"
+        case .immunization: "vaccine"
+        case .pump: "pump"
         }
     }
 
@@ -253,6 +301,8 @@ final class AskCareLog {
         case .sleep: "sleep"
         case .diaper: "diaper"
         case .supplement: "supplement"
+        case .immunization: "immunization"
+        case .pump: "pump"
         }
         return .entry(kind: kind, id: item.id)
     }
@@ -353,6 +403,9 @@ final class AskCareLog {
         var breastSeconds = 0
         var diapers: [DiaperContents: Int] = [:]
         var meds: [String] = []
+        var vaccines: [String] = []
+        var pumped = 0.0
+        var pumpSessions = 0
         for item in data.items {
             switch item {
             case .feed(let entry):
@@ -368,6 +421,14 @@ final class AskCareLog {
                 if inside(entry.startedAt) { diapers[entry.contents, default: 0] += 1 }
             case .supplement(let entry):
                 if inside(entry.startedAt) { meds.append(entry.name) }
+            case .immunization(let entry):
+                if inside(entry.givenAt) { vaccines.append(entry.vaccine) }
+            case .pump(let entry):
+                // Finished sessions only; one without an amount still counts.
+                if inside(entry.startedAt), entry.endedAt != nil {
+                    pumpSessions += 1
+                    pumped += entry.volumeML ?? 0
+                }
             }
         }
         let feeds = data.feedSessions.filter { inside($0.startedAt) }.count
@@ -396,6 +457,16 @@ final class AskCareLog {
         var names: [String] = []
         for name in meds where !names.contains(name) { names.append(name) }
         parts.append(Self.count(meds.count, "med") + (names.isEmpty ? "" : " (\(names.joined(separator: ", ")))"))
+        // Named only when there is one: most periods have none.
+        if !vaccines.isEmpty {
+            var given: [String] = []
+            for name in vaccines where !given.contains(name) { given.append(name) }
+            parts.append(Self.count(vaccines.count, "vaccine") + " (\(given.joined(separator: ", ")))")
+        }
+        // Named only when there is one, as vaccines are.
+        if pumpSessions > 0 {
+            parts.append(Self.count(pumpSessions, "pumping session") + (pumped > 0 ? " \(volume(pumped)) pumped" : ""))
+        }
         return parts.joined(separator: ", ")
     }
 

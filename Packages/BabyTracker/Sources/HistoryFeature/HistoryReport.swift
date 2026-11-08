@@ -10,7 +10,7 @@ public struct HistoryReport: Equatable {
     public struct Entry: Equatable {
         /// "10:23", or "10:23–11:05" for an entry with a length.
         public let time: String
-        /// The tracker's name: "Feed", "Sleep", "Diaper", "Meds", "Growth".
+        /// The tracker's name: "Feed", "Sleep", "Diaper", "Meds", "Growth", "Vaccine", "Pump".
         public let type: String
         /// History's own words for the entry: its chips joined with " · ",
         /// or its text.
@@ -32,6 +32,12 @@ public struct HistoryReport: Equatable {
     public let rangeText: String
     public let generatedText: String
     public let days: [Day]
+
+    /// Whether any entry carries a note. A report without one prints no
+    /// Note column.
+    var hasNotes: Bool {
+        days.contains { $0.entries.contains { $0.note != nil } }
+    }
 }
 
 @MainActor

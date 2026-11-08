@@ -81,6 +81,21 @@ private func report(_ store: BabyStore, _ baby: UUID, from: Int, through: Int,
     #expect(day.totalsLine == "1 feed · 1h 30m sleep · 60 ml bottle · 1 diaper")
 }
 
+/// A vaccination prints as a line of its day, with its dose and its note.
+@MainActor
+@Test func aReportListsAVaccinationWithItsDoseAndNote() throws {
+    let (store, baby, _) = try makeStore()
+    _ = try store.logDiaper(.wet, for: baby, at: localTime(9, 0))
+    _ = try store.logImmunization(vaccine: "Prevenar 13", dose: 2, for: baby, at: localTime(10, 15), note: "left thigh")
+
+    let day = try #require(try report(store, baby, from: 0, through: 0)?.days.first)
+
+    #expect(day.entries.map(\.type) == [Tracker.diaper.title, Tracker.vaccine.title])
+    #expect(day.entries[1].details == "Prevenar 13 · dose 2")
+    #expect(day.entries[1].note == "left thigh")
+    #expect(day.totalsLine == "1 diaper")
+}
+
 /// The export ignores History's filter: it is built with every tracker.
 @MainActor
 @Test func aFilteredHistoryStillExportsEveryTracker() throws {
@@ -181,6 +196,20 @@ private func sampleReport(name: String = "Mira", note: String? = nil, days: Int 
     #expect(html.contains("1–7 Oct 2026"))
 }
 
+/// A report with no notes prints no Note column; one note anywhere brings
+/// it back for every day.
+@Test func theNoteColumnPrintsOnlyWhenThereIsANote() {
+    let without = HistoryReportHTML.render(sampleReport(days: 2, entriesPerDay: 2))
+    #expect(!without.contains("<th>Note</th>"))
+    #expect(!without.contains("class=\"note\""))
+    #expect(without.components(separatedBy: "<col ").count - 1 == 2 * 3)
+
+    let with = HistoryReportHTML.render(sampleReport(note: "Fussy", days: 2, entriesPerDay: 2))
+    #expect(with.contains("<th>Note</th>"))
+    #expect(with.components(separatedBy: "<col ").count - 1 == 2 * 4)
+    #expect(with.components(separatedBy: "<td class=\"note\">Fussy</td>").count - 1 == 4)
+}
+
 // MARK: - Files and paper
 
 @Test func paperFollowsTheMeasurementSystem() {
@@ -229,7 +258,7 @@ private func sampleReport(name: String = "Mira", note: String? = nil, days: Int 
 /// repetition, so the printer draws them as a running header.
 @MainActor
 @Test func laterPagesRepeatTheColumnHeadings() throws {
-    let report = sampleReport(name: "Mira", days: 1, entriesPerDay: 80)
+    let report = sampleReport(name: "Mira", note: "Fussy", days: 1, entriesPerDay: 80)
     let data = HistoryPDFPrinter.pdf(report: report, paper: .a4)
     let document = try #require(PDFDocument(data: data))
     #expect(document.pageCount > 1)

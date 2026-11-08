@@ -12,6 +12,7 @@ import (
 
 	"babytracker/server/internal/apns"
 	"babytracker/server/internal/database"
+	"babytracker/server/internal/diagnostics"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -23,8 +24,11 @@ const (
 	defaultMaxWakesPerTick    = 500
 	defaultMaxFamiliesPerTick = 1000
 	// tickTimeout bounds one Run tick: the slot wait, the transaction and
-	// the sends.
+	// the start of the sends (each send in flight then finishes within the
+	// send budget).
 	tickTimeout = 15 * time.Second
+	// defaultSendBudget bounds a tick's pushes once started.
+	defaultSendBudget = 10 * time.Second
 	// seenAtStep: seen_at (indexed for the 35-day device sweep) advances at
 	// most once a day, so the flush's updates stay heap-only.
 	seenAtStep = "1 day"
@@ -49,6 +53,93 @@ type Sender interface {
 // pushes that failed: those Apple did not accept, and those never sent.
 type Stats struct{ Flushed, Woken, Pushed, PushFailed int }
 
+// Totals are the worker's counts since it was built, for the resource
+// sampler (and TicksSucceeded for the identitytest wake route): Ticks every
+// Tick that ran (an idle one and a failed one included); TicksSucceeded
+// those whose work returned no error, the only ones that prove they scanned
+// and sent what was committed before they began; Flushed,
+// Woken, Pushed and PushFailed the sums of the ticks' Stats; NotSent the
+// pushes the client never put on the wire and Ambiguous those whose answer
+// was lost (both within PushFailed); SettlesFailed the failed attempts to
+// apply a kept settle, one per settle per attempt: a settle whose own
+// statements failed, or every kept settle when the attempt found no worker
+// slot (each stays kept, quarantined, while the others apply). Settles left
+// untried because the context ended after an earlier failure are not
+// counted. SettlesPending alone is not a sum: it is the device rows of the
+// settles kept now.
+//
+// For capacity runs: TickDurationNS is the duration of each tick that had
+// work (drained progress or families, or a backstop page; an idle tick is
+// left out), from its start to its return, the sends and their settle
+// included, as a capacity histogram (diagnostics.Histogram.Observe; its
+// Count is those ticks); Families sums the families those ticks drained,
+// and FamiliesPeak is the most one tick drained.
+type Totals struct {
+	Ticks, TicksSucceeded, Flushed, Woken, Pushed, PushFailed, NotSent, Ambiguous, SettlesPending, SettlesFailed uint64
+
+	Families, FamiliesPeak uint64
+	TickDurationNS         diagnostics.Histogram
+}
+
+// totalCounters back Totals under their own mutex (never w.mu, so Totals
+// never waits on a running tick). A tick's counts are added together, once
+// it returned, so a copy never shows NotSent or Ambiguous ahead of
+// PushFailed.
+type totalCounters struct {
+	mu     sync.Mutex
+	totals Totals
+}
+
+// addTick adds one tick's counts, all at once; succeeded reports that its
+// work returned no error, and took is how long it ran.
+func (c *totalCounters) addTick(stats Stats, counts tickCounts, succeeded bool, took time.Duration) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.totals.Ticks++
+	if succeeded {
+		c.totals.TicksSucceeded++
+	}
+	c.totals.Flushed += uint64(stats.Flushed)
+	c.totals.Woken += uint64(stats.Woken)
+	c.totals.Pushed += uint64(stats.Pushed)
+	c.totals.PushFailed += uint64(stats.PushFailed)
+	c.totals.NotSent += uint64(counts.notSent)
+	c.totals.Ambiguous += uint64(counts.ambiguous)
+	if counts.worked {
+		c.totals.TickDurationNS.Observe(took)
+		c.totals.Families += uint64(counts.families)
+		c.totals.FamiliesPeak = max(c.totals.FamiliesPeak, uint64(counts.families))
+	}
+}
+
+// settled records the settle rows kept now and the settles that just
+// failed to apply (each kept for a later attempt).
+func (c *totalCounters) settled(pendingRows, failed int) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.totals.SettlesPending = uint64(pendingRows)
+	c.totals.SettlesFailed += uint64(failed)
+}
+
+// tickCounts are what one tick did beyond its Stats: the pushes the client
+// never put on the wire and those whose answer was lost (both within its
+// Stats.PushFailed), whether it had work, and the families it drained.
+type tickCounts struct {
+	notSent, ambiguous int
+	worked             bool
+	families           int
+}
+
+// Totals copies the worker's counts (zero for a nil worker).
+func (w *Worker) Totals() Totals {
+	if w == nil {
+		return Totals{}
+	}
+	w.totals.mu.Lock()
+	defer w.totals.mu.Unlock()
+	return w.totals.totals
+}
+
 // Worker flushes the tracker's progress and wakes devices behind their
 // family: through the live hub when the device holds a connection, through
 // an APNs background push otherwise. One tick is one maintenance
@@ -69,7 +160,8 @@ type Stats struct{ Flushed, Woken, Pushed, PushFailed int }
 //  4. decide (the hub, the pushes, the marks) and one mark of woken_* and
 //     the push reservation pushed_*, then COMMIT;
 //  5. after the commit, outside the slot: one Sender.Wake with one Wake per
-//     family, then the pushes, at most 8 at a time.
+//     family, then the pushes, at most 8 at a time, under SendBudget (the
+//     tick's deadline stops new pushes, never one in flight).
 //
 // A failed tick restores what it drained. A device is woken at most once
 // per MinWakeInterval and once per sequence, and pushed at most once per
@@ -83,8 +175,9 @@ type Stats struct{ Flushed, Woken, Pushed, PushFailed int }
 // settles (and the tokens Apple refused) are kept until they apply: a
 // settle that cannot run in its tick (no worker slot before the tick's
 // deadline, a lost connection) is applied by the next tick, before its
-// scans, or when Run stops; each statement is guarded by the reservation it
-// gives back, so a replay changes nothing twice. The kept settles are
+// scans, or when Run stops; each settle applies on its own, so one that
+// cannot apply never holds back the others; each statement is guarded by
+// the reservation it gives back, so a replay changes nothing twice. The kept settles are
 // bounded (maxSettleRows; the oldest dropped, logged); a crash loses them,
 // like a crash between a mark and its send. One phone registered on several
 // device rows gets one push for all of them.
@@ -113,6 +206,11 @@ type Worker struct {
 	MinWakeInterval    time.Duration // 0 means 60s
 	MaxWakesPerTick    int           // 0 means 500 (at most 1000)
 	MaxFamiliesPerTick int           // 0 means 1000
+	// SendBudget bounds a tick's APNs sends, apart from the tick's own
+	// context: the tick's deadline (or Run's stop) stops new pushes from
+	// starting but never cancels one in flight, whose answer would then be
+	// lost (Ambiguous) though Apple had it (C25). 0 means 10s.
+	SendBudget time.Duration
 
 	mu sync.Mutex
 	// The startup backstop: device_sync_cursors in key order, one page a
@@ -126,6 +224,8 @@ type Worker struct {
 	// maxSettleRows device rows), oldest first.
 	settles    []pendingSettle
 	settleRows int
+	settleSeq  uint64 // the last kept settle's id
+	totals     totalCounters
 }
 
 const (
@@ -247,6 +347,13 @@ func (w *Worker) maxFamilies() int {
 	return defaultMaxFamiliesPerTick
 }
 
+func (w *Worker) sendBudget() time.Duration {
+	if w.SendBudget > 0 {
+		return w.SendBudget
+	}
+	return defaultSendBudget
+}
+
 func (w *Worker) interval() time.Duration {
 	if w.Interval > 0 {
 		return w.Interval
@@ -260,11 +367,21 @@ var errNotComposed = errors.New("wake worker needs a pool, a tracker and a sende
 // the mark, COMMIT), 5 with push candidates (app.push_targets), none when
 // there is nothing to do; then, after the commit, the sends and their
 // settle (one more). Settles kept from an earlier tick cost one round trip
-// first.
+// each first.
 func (w *Worker) Tick(ctx context.Context) (Stats, error) {
 	if w == nil || w.Pool == nil || w.Tracker == nil || w.Sender == nil || (w.Pusher != nil && w.Connected == nil) {
 		return Stats{}, errNotComposed
 	}
+	started := time.Now()
+	var counts tickCounts
+	stats, err := w.tick(ctx, &counts)
+	w.totals.addTick(stats, counts, err == nil, time.Since(started))
+	return stats, err
+}
+
+// tick is Tick's work; push receives what it did that Stats does not
+// carry.
+func (w *Worker) tick(ctx context.Context, push *tickCounts) (Stats, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	now := w.now()
@@ -278,6 +395,7 @@ func (w *Worker) Tick(ctx context.Context) (Stats, error) {
 	if len(work.devices) == 0 && len(work.families) == 0 && w.backstopDone {
 		return Stats{}, replayErr
 	}
+	push.worked, push.families = true, len(work.families)
 	paused := w.Pusher != nil && w.pause.paused(now)
 	outcome, err := w.transact(ctx, now, work, paused)
 	if err != nil {
@@ -306,21 +424,23 @@ func (w *Worker) Tick(ctx context.Context) (Stats, error) {
 	if len(outcome.pushes) == 0 {
 		return stats, errors.Join(replayErr, sendErr)
 	}
-	report := w.sendPushes(ctx, outcome.pushes)
+	// The sends' own context: the tick's end stops new pushes from starting
+	// (sendPushes watches ctx) but never cancels one in flight.
+	sendCtx, cancelSends := context.WithTimeout(context.WithoutCancel(ctx), w.sendBudget())
+	report := w.sendPushes(ctx, sendCtx, outcome.pushes)
+	cancelSends()
 	stats.Pushed, stats.PushFailed = report.sent, report.failed
+	push.notSent, push.ambiguous = report.notSentCount, report.ambiguous
 	w.applyAnswers(report, w.now())
-	// The settle is kept until it applies: now, or on a later tick (with
-	// any earlier settle still kept, in the same statements).
+	// The settle is kept until it applies: now, or on a later tick (after
+	// any earlier settle still kept, each in its own transaction).
 	settle := pendingSettle{reservedAt: now, forget: rowsOf(report.forget), undelivered: rowsOf(report.undelivered), unsent: rowsOf(report.unsent)}
-	w.keepSettle(settle)
+	own := w.keepSettle(settle)
 	applied, settleErr := w.applySettles(ctx)
-	if settle.rows() > 0 && len(applied) > 0 {
-		// This tick's settle is the last one applied (its families are
-		// scheduled below).
-		applied = applied[:len(applied)-1]
-	}
 	for _, earlier := range applied {
-		w.rescanSettled(earlier)
+		if earlier.id != own { // this tick's families are scheduled below
+			w.rescanSettled(earlier)
+		}
 	}
 	if settleErr == nil {
 		replayErr = nil // whatever the replay left kept has applied since
@@ -685,6 +805,81 @@ func (w *Worker) applySettlesOnStop(ctx context.Context) {
 	}
 }
 
+// stopFlushTimeout bounds the flush when Run stops.
+const stopFlushTimeout = 2 * time.Second
+
+// FlushTracker writes the progress the tracker recorded since the last tick
+// or flush: Tick's flush statement alone (no scan, no send), inside a
+// worker slot, within 2 s of its own (detached from ctx's cancellation), so
+// a graceful restart loses no device's progress (C42). Run calls it once
+// its context ended, after the kept settles; the server calls it once more
+// after the HTTP drain, for the progress requests recorded while they
+// drained. It logs one line at Info with the devices drained and the rows
+// written (nothing when there is nothing to write); what it cannot write is
+// logged at Warn and lost with the process, as after a crash. Safe on a nil
+// worker.
+func (w *Worker) FlushTracker(ctx context.Context) {
+	if w == nil || w.Pool == nil || w.Tracker == nil {
+		return
+	}
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	work := w.Tracker.drain(w.now(), 0)
+	// The families are scanned by a later Run, if any: put them back.
+	w.Tracker.requeue(work.families)
+	if len(work.devices) == 0 {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), stopFlushTimeout)
+	defer cancel()
+	flushed, err := w.flushOnly(ctx, work.devices)
+	if err != nil {
+		w.Tracker.restore(drained{devices: work.devices})
+		if w.Logger != nil {
+			w.Logger.Warn("wake progress lost at stop", slog.Int("devices", len(work.devices)),
+				slog.Bool("timeout", errors.Is(err, context.DeadlineExceeded)))
+		}
+		return
+	}
+	if w.Logger != nil {
+		w.Logger.Info("wake progress flushed at stop", slog.Int("devices", len(work.devices)), slog.Int("rows", flushed))
+	}
+}
+
+// flushOnly runs the timeouts and Tick's flush in one implicit transaction
+// inside a worker slot, and returns the rows written.
+func (w *Worker) flushOnly(ctx context.Context, devices []deviceProgress) (int, error) {
+	if w.Slots != nil {
+		release, err := w.Slots.Acquire(ctx)
+		if err != nil {
+			return 0, err
+		}
+		defer release()
+	}
+	families, ids := make([]string, len(devices)), make([]string, len(devices))
+	acked, delivered := make([]int64, len(devices)), make([]int64, len(devices))
+	seen := make([]time.Time, len(devices))
+	for i, d := range devices {
+		families[i], ids[i], acked[i], delivered[i], seen[i] = d.FamilyID, d.DeviceID, int64(d.Acked), int64(d.Delivered), d.Seen
+	}
+	batch := &pgx.Batch{}
+	batch.Queue(sqlTimeouts)
+	batch.Queue(sqlFlush, families, ids, acked, delivered, seen)
+	results := w.Pool.SendBatch(ctx, batch)
+	_, err := results.Exec()
+	var tag pgconn.CommandTag
+	if err == nil {
+		tag, err = results.Exec()
+	}
+	if closeErr := results.Close(); err == nil {
+		err = closeErr
+	}
+	if err != nil {
+		return 0, fmt.Errorf("wake: flush at stop: %w", err)
+	}
+	return int(tag.RowsAffected()), nil
+}
+
 // droppedLogInterval rate-limits the tracker-dropped warning.
 const droppedLogInterval = time.Minute
 
@@ -693,13 +888,17 @@ const droppedLogInterval = time.Minute
 // database failure, which carries its SQLSTATE but never the database's
 // text); its work waits in the tracker for the next one. Progress the
 // tracker dropped (past its bound, or invalid) is logged at most once a
-// minute.
+// minute. When ctx ends it applies the kept settles, then flushes the
+// tracker's progress once more (each within 2 s), before it returns.
 func (w *Worker) Run(ctx context.Context, ready func(context.Context) error) {
 	ticker := time.NewTicker(w.interval())
 	defer ticker.Stop()
 	var reported uint64
 	var reportedAt time.Time
-	defer w.applySettlesOnStop(ctx)
+	defer func() {
+		w.applySettlesOnStop(ctx)
+		w.FlushTracker(ctx)
+	}()
 	for {
 		select {
 		case <-ctx.Done():

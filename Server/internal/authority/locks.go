@@ -64,16 +64,25 @@ func selectAccounts(ctx context.Context, tx pgx.Tx, lock string, ids []string) (
 	if err != nil || len(sorted) == 0 {
 		return map[string]accountRow{}, err
 	}
-	// ORDER BY under a row lock: LockRows sits above the ordered scan, so
-	// rows are locked one at a time in ID order.
-	rows, err := tx.Query(ctx, `SELECT id::text, status::text, lifecycle_generation, audit_seq, audit_hash, chain_failed
-		FROM accounts WHERE id = ANY($1::uuid[]) ORDER BY accounts.id`+lock, sorted)
+	rows, err := tx.Query(ctx, selectAccountsSQL+lock, sorted)
 	if err != nil {
 		return nil, fmt.Errorf("authority: lock accounts: %w", err)
 	}
+	return scanAccounts(rows, len(sorted))
+}
+
+// selectAccountsSQL reads the accounts whose IDs are $1 (sorted) in ID
+// order; lockAccounts appends rowLock. ORDER BY under a row lock: LockRows
+// sits above the ordered scan, so rows are locked one at a time in ID order.
+const selectAccountsSQL = `SELECT id::text, status::text, lifecycle_generation, audit_seq, audit_hash, chain_failed
+		FROM accounts WHERE id = ANY($1::uuid[]) ORDER BY accounts.id`
+
+// scanAccounts reads selectAccountsSQL's rows keyed by ID and closes them.
+func scanAccounts(rows pgx.Rows, n int) (map[string]accountRow, error) {
 	defer rows.Close()
-	out := make(map[string]accountRow, len(sorted))
+	out := make(map[string]accountRow, n)
 	for rows.Next() {
+		var err error
 		var row accountRow
 		var seq uint64
 		var hash []byte

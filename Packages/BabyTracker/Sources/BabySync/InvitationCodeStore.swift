@@ -1,4 +1,5 @@
 import BabyStore
+import BabyCore
 import Foundation
 
 /// Keeps this phone's own copy of each invitation's shareable link.
@@ -22,7 +23,7 @@ public struct InvitationCodeStore: Sendable {
         self.realm = realm
     }
 
-    private static let service = "com.olhapi.babytracker.invitationCodes"
+    private static let service = AppIdentity.identifier("invitationCodes")
 
     public func save(_ shareURL: URL, for id: UUID) throws {
         try backend.write(Data(shareURL.absoluteString.utf8), service: Self.service, account: itemAccount(for: id))

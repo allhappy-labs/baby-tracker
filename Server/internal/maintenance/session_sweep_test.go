@@ -2,6 +2,7 @@ package maintenance_test
 
 import (
 	"log/slog"
+	"strconv"
 	"testing"
 	"time"
 
@@ -156,7 +157,7 @@ func TestSessionSweepDrainsABacklogInBoundedBatches(t *testing.T) {
 	if got := before - consumedSessions(t, h); got != maintenance.SessionPassCap {
 		t.Fatalf("one pass removed %d consumed sessions, want the %d cap", got, maintenance.SessionPassCap)
 	}
-	backlog := log.at(slog.LevelInfo)
+	backlog := named(log.at(slog.LevelInfo), backlogMessage)
 	if len(backlog) != 1 || attr(backlog[0], "kind") != "sessions" {
 		t.Fatalf("logged %v at Info, want one backlog record for sessions", backlog)
 	}
@@ -166,9 +167,46 @@ func TestSessionSweepDrainsABacklogInBoundedBatches(t *testing.T) {
 	if got := consumedSessions(t, h); got != 0 {
 		t.Fatalf("%d consumed sessions left after the second pass", got)
 	}
-	if n := len(log.at(slog.LevelInfo)); n != 1 {
+	if n := len(named(log.at(slog.LevelInfo), backlogMessage)); n != 1 {
 		t.Fatalf("%d backlog records after a pass under the cap, want still 1", n)
 	}
+	// Each pass logged its line at Info (it removed rows): the rows per
+	// kind, the duration and the batch sizes.
+	passes := named(log.at(slog.LevelInfo), "session sweep pass")
+	if len(passes) != 2 {
+		t.Fatalf("pass lines %v, want one per pass", passes)
+	}
+	for i, want := range []string{strconv.Itoa(maintenance.SessionPassCap), strconv.Itoa(before - maintenance.SessionPassCap)} {
+		if got := attr(passes[i], "sessions"); got != want {
+			t.Fatalf("pass %d removed %s sessions, want %s", i+1, got, want)
+		}
+		if attr(passes[i], "sessions_batch") != "1000" || attr(passes[i], "duration_ms") == "" || attr(passes[i], "failed") != "false" {
+			t.Fatalf("pass %d line %v", i+1, passes[i])
+		}
+	}
+	// A pass with nothing to remove logs its line at Debug only.
+	if _, err := sweep.Run(t.Context(), later); err != nil {
+		t.Fatal(err)
+	}
+	if n := len(named(log.at(slog.LevelInfo), "session sweep pass")); n != 2 {
+		t.Fatalf("an idle pass logged at Info (%d pass lines)", n)
+	}
+	if idle := named(log.at(slog.LevelDebug), "session sweep pass"); len(idle) != 3 || idle[2].Level != slog.LevelDebug || attr(idle[2], "sessions") != "0" {
+		t.Fatalf("pass lines %v, want the idle pass at Debug", idle)
+	}
+}
+
+const backlogMessage = "retention backlog: the pass reached its cap; the next pass continues"
+
+// named keeps the records with message.
+func named(records []slog.Record, message string) []slog.Record {
+	var out []slog.Record
+	for _, record := range records {
+		if record.Message == message {
+			out = append(out, record)
+		}
+	}
+	return out
 }
 
 // consumedSessions counts consumed sessions as an authority transaction does.

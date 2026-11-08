@@ -163,17 +163,24 @@ func (s *ReceiptSweep) Run(ctx context.Context, now time.Time) (int, error) {
 
 // containedBatch runs one batch; a batch that rolls back because of one
 // family quarantines that family and runs again at once without it, at most
-// maxQuarantinesPerBatch times.
+// maxQuarantinesPerBatch families (and a final run after the last).
 func (s *ReceiptSweep) containedBatch(ctx context.Context, now, cutoff time.Time, limit int) (int, error) {
-	for range maxQuarantinesPerBatch {
+	// One more try than quarantines: after the 16th quarantine the batch
+	// runs once more without them, so exactly 16 failing families converge
+	// in one pass. A 17th failure in the pass is not quarantined (the pass
+	// quarantines 16 at most) and the next pass takes it first.
+	for attempt := 0; attempt <= maxQuarantinesPerBatch; attempt++ {
 		n, err := s.sweepBatch(ctx, cutoff, limit, s.quarantine(now))
 		var failure *familyFailure
 		if !errors.As(err, &failure) {
 			return n, err
 		}
+		if attempt == maxQuarantinesPerBatch {
+			break
+		}
 		s.quarantineFamily(now, failure)
 	}
-	return 0, fmt.Errorf("maintenance: receipt sweep: %d families failed in one batch", maxQuarantinesPerBatch)
+	return 0, fmt.Errorf("maintenance: receipt sweep: more than %d families failed in one batch", maxQuarantinesPerBatch)
 }
 
 // quarantine is the families quarantined at now, for the selection's

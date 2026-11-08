@@ -110,9 +110,12 @@ func (f *Fixture) Family(t *testing.T, owner string) string {
 // returns its ID and raw bearer tokens. scope is "account" (family and role
 // empty), "family" or "family_recovery". The digests are
 // HMAC-SHA256(TokenKeys.Current, class || 0x00 || token), class "access" or
-// "refresh", as the auth service derives them.
+// "refresh", as the auth service derives them. An account with an empty audit
+// chain first gets the genesis row a sign-in appends (grantOnce), and the
+// session is issued at the account's head.
 func (f *Fixture) Session(t *testing.T, account, device, scope, family, role string) (sessionID, rawAccess, rawRefresh string) {
 	t.Helper()
+	f.grantOnce(t, account)
 	sessionID, rawAccess, rawRefresh = NewID(t), newToken(t), newToken(t)
 	key := f.TokenKeys.Current
 	access, refresh := TokenDigest(key, "access", rawAccess), TokenDigest(key, "refresh", rawRefresh)
@@ -186,6 +189,60 @@ func (f *Fixture) run(t *testing.T, statement string, args ...any) int64 {
 		t.Fatal(err)
 	}
 	return tag.RowsAffected()
+}
+
+// grantOnce gives account, when its audit chain is empty, the genesis row a
+// real sign-in appends before it issues a session (a session_granted row,
+// payload {}, at f.Now), so a seeded session is issued at a real security
+// revision as in production: a rotation refuses an account with no chain
+// (owner decision D1 issues children at the account's head). The row hash is
+// authority's audit row hash; the chain verifies like any other.
+func (f *Fixture) grantOnce(t *testing.T, account string) {
+	t.Helper()
+	ctx := context.Background()
+	tx, err := f.DB.Owner.Begin(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer tx.Rollback(ctx)
+	if _, err := tx.Exec(ctx, `SELECT set_config('app.authority','1',true)`); err != nil {
+		t.Fatal(err)
+	}
+	var seq int64
+	if err := tx.QueryRow(ctx, `SELECT audit_seq FROM accounts WHERE id=$1 FOR UPDATE`, account).Scan(&seq); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 0 {
+		return
+	}
+	command := NewID(t)
+	at := f.Now.UTC().Truncate(time.Microsecond)
+	hash := genesisRowHash(account, string(authority.KindSessionGranted), command, account, at, []byte("{}"))
+	if _, err := tx.Exec(ctx, `INSERT INTO security_audit_events(scope,scope_id,seq,prev_hash,hash,kind,command_id,actor_account_id,at,payload)
+		VALUES ('account',$1,1,$2,$3,'session_granted',$4,$1,$5,'{}')`, account, make([]byte, 32), hash[:], command, at); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tx.Exec(ctx, `UPDATE accounts SET audit_seq=1, audit_hash=$2 WHERE id=$1`, account, hash[:]); err != nil {
+		t.Fatal(err)
+	}
+	if err := tx.Commit(ctx); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// genesisRowHash is authority's audit row hash (chain.go auditRowHash) for an
+// account chain's seq 1, whose prev_hash is 32 zero bytes.
+func genesisRowHash(account, kind, command, actor string, at time.Time, payload []byte) [32]byte {
+	digest := sha256.New()
+	var seq [8]byte
+	seq[7] = 1
+	for _, part := range [][]byte{[]byte("account"), {0}, []byte(account), {0}, seq[:], make([]byte, 32), []byte(kind), {0}, []byte(command), {0},
+		[]byte(actor), {0}, []byte(at.UTC().Format(time.RFC3339Nano)), {0}, payload} {
+		digest.Write(part)
+	}
+	var sum [32]byte
+	copy(sum[:], digest.Sum(nil))
+	return sum
 }
 
 func newToken(t *testing.T) string {

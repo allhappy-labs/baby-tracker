@@ -27,18 +27,13 @@ struct InvitationScannerView: View {
     @State private var hasScanned = false
 
     var body: some View {
-        NavigationStack {
+        SheetScaffold(
+            InvitationScannerCopy.title,
+            closeTitle: InvitationScannerCopy.close,
+            closeIdentifier: "scanner.close",
+            onClose: onClose
+        ) {
             content
-                .navigationTitle(InvitationScannerCopy.title)
-                #if os(iOS)
-                .navigationBarTitleDisplayMode(.inline)
-                #endif
-                .toolbar {
-                    ToolbarItem(placement: .cancellationAction) {
-                        Button(InvitationScannerCopy.close, action: onClose)
-                            .accessibilityIdentifier("scanner.close")
-                    }
-                }
         }
     }
 
@@ -47,17 +42,19 @@ struct InvitationScannerView: View {
         #if os(iOS)
         ZStack(alignment: .bottom) {
             InvitationDataScanner(onPayloads: handle, onStartFailed: onUnavailable)
-                .ignoresSafeArea()
             if let hint {
                 Text(hint)
                     .font(.callout)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 12)
-                    .background(.regularMaterial, in: Capsule())
-                    .padding(24)
+                    .foregroundStyle(Palette.primaryText)
+                    .padding(.horizontal, Spacing.l)
+                    .padding(.vertical, Spacing.m)
+                    .background(Palette.ground, in: Capsule())
+                    .padding(Spacing.l)
                     .accessibilityIdentifier("scanner.hint")
             }
         }
+        .aspectRatio(3 / 4, contentMode: .fit)
+        .clipShape(RoundedRectangle(cornerRadius: Radius.card, style: .continuous))
         #else
         Color.clear.onAppear(perform: onUnavailable)
         #endif

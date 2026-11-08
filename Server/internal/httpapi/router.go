@@ -48,12 +48,20 @@ type SessionService interface {
 	// AccessDigests is a bearer access token's lookup digests, with no
 	// database work (the one-transaction sync and snapshot routes).
 	AccessDigests(string) ([]authority.KeyedDigest, error)
+	// RefreshDigests is a refresh token's lookup digests, with no database
+	// work (KnownRefreshes tells a known session's refresh apart by them).
+	RefreshDigests(string) ([]authority.KeyedDigest, error)
 }
 
 type RecoverySessionService interface {
 	ResolveRecoverableRefreshSubject(context.Context, auth.RecoverableRefreshInput) (auth.RefreshSubject, error)
+	// RefreshRecoverable rotates the input's refresh token; the handler
+	// passes the subject ResolveRecoverableRefreshSubject returned in
+	// input.Subject.
 	RefreshRecoverable(context.Context, auth.RecoverableRefreshInput) (auth.RecoveredSessionBundle, error)
-	AcknowledgeRefresh(context.Context, access.Principal, string, identity.DeviceContinuityClaim) error
+	// AcknowledgeRefreshToken authenticates the bearer access token and
+	// acknowledges the attempt for its principal, in one transaction.
+	AcknowledgeRefreshToken(context.Context, string, string, identity.DeviceContinuityClaim) error
 }
 
 type AppleNotificationService interface {
@@ -101,6 +109,13 @@ type RequestAuthorizer interface {
 	AuthorizeRequest(context.Context, authority.Request, string) (access.Principal, access.Grant, error)
 }
 
+// BearerAuthenticator authenticates an access token's digests with one
+// pooled statement and no transaction (authority.Service.Authenticate): the
+// session checks every request transaction repeats, and nothing more.
+type BearerAuthenticator interface {
+	Authenticate(context.Context, []authority.KeyedDigest) (access.Principal, error)
+}
+
 type FamilyService interface {
 	Account(context.Context, access.Principal) (family.AccountView, error)
 	UpdateProfile(context.Context, access.Principal, string, string, bool) (family.AccountView, error)
@@ -130,6 +145,10 @@ type Options struct {
 	// checked, per client address and in all (nil: the defaults); see
 	// admitAfterBody.
 	BodyReads *admission.PerKey
+	// AuthBodyReads bounds the refresh bodies read before admission, per
+	// client address and in all, apart from BodyReads (nil: the defaults);
+	// see refreshAdmission.
+	AuthBodyReads *admission.PerKey
 	// BodyReadTimeout bounds one such body read (0: 5 s).
 	BodyReadTimeout        time.Duration
 	AdmissionMetrics       *diagnostics.CapacityCollector
@@ -160,8 +179,20 @@ type Options struct {
 	// PushTokens, when non-nil, serves PUT and DELETE
 	// /v1/devices/push-token and advertises push-token-v1 (a server with
 	// APNs wakes configured). Nil: the routes are not registered (404).
-	PushTokens                    PushTokenService
-	RequestAuthorizer             RequestAuthorizer
+	PushTokens        PushTokenService
+	RequestAuthorizer RequestAuthorizer
+	// BearerAuthenticator checks a body-first route's bearer before its
+	// body is read (authority.Service.Authenticate); see admitAfterBody.
+	// Nil: the body is read first and the credential checked only by the
+	// route's request transaction.
+	BearerAuthenticator BearerAuthenticator
+	// knownBearers is the bearers that passed BearerAuthenticator's check
+	// (New sets it).
+	knownBearers *knownBearers
+	// KnownRefreshes is the live sessions' refresh tokens this node knows:
+	// the ones it issued and, warmed before serving, the database's (see
+	// KnownRefreshes.Warm). Nil: New makes an empty one.
+	KnownRefreshes                *KnownRefreshes
 	LiveHub                       *realtime.Hub
 	Limiter                       limits.Limiter
 	ClientIPResolver              *limits.ClientIPResolver
@@ -302,8 +333,9 @@ var routes = []Route{
 	{Method: http.MethodDelete, Pattern: liveActivityUnregistrationRoute},
 }
 
-// bodyFirstRoutes read their whole body before their credential is checked;
-// each takes its own admission slot after the body (admitAfterBody).
+// bodyFirstRoutes read their whole body before their request transaction
+// (an unseen bearer is checked first); each takes its own admission slot
+// after the body (admitAfterBody).
 var bodyFirstRoutes = map[Route]bool{
 	{Method: http.MethodPost, Pattern: "/v1/sync"}:                                       true,
 	{Method: http.MethodPost, Pattern: "/v1/family/import/resolve"}:                      true,
@@ -312,6 +344,25 @@ var bodyFirstRoutes = map[Route]bool{
 	{Method: http.MethodDelete, Pattern: pushTokenRoute}:                                 true,
 	{Method: http.MethodPut, Pattern: liveActivityDeviceRoute}:                           true,
 	{Method: http.MethodPut, Pattern: liveActivityActivityRoute}:                         true,
+}
+
+// authLaneRoutes run before a caller is identified (sign-in and Apple's
+// server notifications): they take the auth lane (admission.Auth), alongside
+// the shared total, so a flood of them cannot take the slots of requests
+// from known callers, nor those requests theirs. /v1/server and /invite
+// identify no caller either, but do no database work, so their Sync slot is
+// held for microseconds; they stay in Sync.
+var authLaneRoutes = map[Route]bool{
+	{Method: http.MethodPost, Pattern: "/v1/auth/challenge"}:           true,
+	{Method: http.MethodPost, Pattern: "/v1/auth/apple"}:               true,
+	{Method: http.MethodPost, Pattern: "/v1/auth/apple/notifications"}: true,
+}
+
+// refreshRoutes take a Sync slot for a refresh token this node issued and
+// the auth lane for any other (refreshAdmission).
+var refreshRoutes = map[Route]bool{
+	{Method: http.MethodPost, Pattern: "/v1/auth/refresh"}:             true,
+	{Method: http.MethodPost, Pattern: "/v1/auth/refresh-recoverable"}: true,
 }
 
 func Routes() []Route {
@@ -335,6 +386,13 @@ func New(options Options) http.Handler {
 	}
 	if options.BodyReads == nil {
 		options.BodyReads, _ = admission.NewPerKey(defaultBodyReadTotal, defaultBodyReadsPerClient)
+	}
+	if options.AuthBodyReads == nil {
+		options.AuthBodyReads, _ = admission.NewPerKey(defaultAuthBodyReadTotal, defaultAuthBodyReadsPerClient)
+	}
+	options.knownBearers = newKnownBearers(knownBearerLimit, time.Now, options.Logger)
+	if options.KnownRefreshes == nil {
+		options.KnownRefreshes = NewKnownRefreshes(options.Logger)
 	}
 	if options.BodyReadTimeout <= 0 {
 		options.BodyReadTimeout = defaultBodyReadTimeout
@@ -422,7 +480,13 @@ func New(options Options) http.Handler {
 		// routes that read their body before their credential take their
 		// slot themselves, once the body is read (admitAfterBody). Route-level
 		// classification leaves an independent single-acquisition seam for MCP.
-		if route.Pattern != "/healthz" && route.Pattern != "/readyz" && !bodyFirstRoutes[route] {
+		switch {
+		case route.Pattern == "/healthz" || route.Pattern == "/readyz" || bodyFirstRoutes[route]:
+		case authLaneRoutes[route]:
+			handler = WithAdmission(options.Admission, admission.Auth, options.AdmissionMetrics, handler)
+		case refreshRoutes[route]:
+			handler = refreshAdmission(options, handler)
+		default:
 			handler = WithAdmission(options.Admission, admission.Sync, options.AdmissionMetrics, handler)
 		}
 		mux.Handle(route.Method+" "+route.Pattern, handler)

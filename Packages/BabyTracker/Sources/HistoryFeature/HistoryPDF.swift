@@ -30,7 +30,7 @@ enum HistoryPDFPrinter {
 
     static func pdf(report: HistoryReport, paper: PaperSize) -> Data {
         let page = CGRect(origin: .zero, size: paper.size)
-        let renderer = ReportPageRenderer(title: report.babyName + " · " + report.rangeText)
+        let renderer = ReportPageRenderer(title: report.babyName + " · " + report.rangeText, hasNotes: report.hasNotes)
         renderer.addPrintFormatter(UIMarkupTextPrintFormatter(markupText: HistoryReportHTML.render(report)), startingAtPageAt: 0)
         // UIPrintPageRenderer reads its page from these two read-only
         // properties; key-value coding is the documented way to set them
@@ -55,9 +55,11 @@ enum HistoryPDFPrinter {
 /// mid-day would otherwise be rows with no headings.
 private final class ReportPageRenderer: UIPrintPageRenderer {
     private let title: String
+    private let hasNotes: Bool
 
-    init(title: String) {
+    init(title: String, hasNotes: Bool) {
         self.title = title
+        self.hasNotes = hasNotes
         super.init()
         headerHeight = 30
     }
@@ -82,7 +84,7 @@ private final class ReportPageRenderer: UIPrintPageRenderer {
             .font: UIFont.systemFont(ofSize: 10.5, weight: .semibold), .foregroundColor: UIColor(white: 0.27, alpha: 1),
         ]
         var x = headerRect.minX
-        for (name, share) in zip(HistoryReportHTML.columns, HistoryReportHTML.columnWidths) {
+        for (name, share) in zip(HistoryReportHTML.columns(hasNotes: hasNotes), HistoryReportHTML.columnWidths(hasNotes: hasNotes)) {
             (name as NSString).draw(at: CGPoint(x: x + HistoryReportHTML.cellPadding, y: headerRect.minY + 13),
                                     withAttributes: heading)
             x += headerRect.width * share

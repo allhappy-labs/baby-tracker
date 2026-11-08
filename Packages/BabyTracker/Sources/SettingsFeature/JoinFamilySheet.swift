@@ -25,15 +25,18 @@ public struct JoinFamilySheet<Model: FamilySyncSettingsModel>: View {
     }
 
     public var body: some View {
+        // A navigation stack, unlike the other sheets: the Caregivers screen
+        // pushes server selection and the display name, so it needs one.
         NavigationStack {
             FamilySettingsView(model: model, invitation: prefilled)
                 .toolbar {
                     ToolbarItem(placement: .cancellationAction) {
-                        Button(JoinFamilyCopy.close, action: onClose)
-                            .accessibilityIdentifier("joinFamily.close")
+                        SheetCloseButton(title: JoinFamilyCopy.close, identifier: "joinFamily.close", action: onClose)
                     }
+                    .sharedBackgroundVisibility(.hidden)
                 }
         }
+        .tint(Palette.feed)
     }
 }
 

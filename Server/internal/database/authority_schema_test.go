@@ -20,7 +20,7 @@ import (
 func TestAuthoritySchemaHoldsAtVersionThirty(t *testing.T) {
 	f := testpg.New(t)
 	var v int64
-	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 32 {
+	if err := f.Runtime.QueryRow(t.Context(), `SELECT current_version FROM schema_compatibility WHERE singleton`).Scan(&v); err != nil || v != 37 {
 		t.Fatalf("version=%d err=%v", v, err)
 	}
 	// Catalog checks run against the migrated test database (the Admin pool
@@ -48,7 +48,7 @@ func TestAuthoritySchemaHoldsAtVersionThirty(t *testing.T) {
 	if projector {
 		t.Fatal("projector function survived")
 	}
-	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 32); err != nil {
+	if err := database.VerifyRuntimeRole(t.Context(), f.Runtime, 37); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -200,6 +200,7 @@ func TestAppSchemaKeepsOnlyAuthorityFunctions(t *testing.T) {
 		"app.list_family_actor_labels(uuid,bigint,uuid,integer)":                true,
 		"app.membership_may_write(uuid,uuid)":                                   true,
 		"app.ensure_audit_partitions(timestamp with time zone)":                 true,
+		"app.drop_expired_audit_partition(timestamp with time zone)":            true,
 		"app.push_targets(uuid[],uuid[])":                                       true,
 		"app.prune_push_tokens(integer)":                                        true,
 		"app.forget_push_token(uuid,bytea)":                                     true,
@@ -227,6 +228,9 @@ func TestAppSchemaKeepsOnlyAuthorityFunctions(t *testing.T) {
 		"app.retire_stale_live_activity_registrations()":                                                                true,
 		"app.sweep_live_activity_registrations(boolean,integer)":                                                        true,
 		"app.sweep_live_activity_work()":                                                                                true,
+		// 000037: the work sweep in pages, and the pull's high water.
+		"app.sweep_live_activity_work_page(uuid,integer)": true,
+		"app.family_high_water(uuid)":                     true,
 	}
 	for rows.Next() {
 		var name string

@@ -28,7 +28,9 @@ func accountDeleteHandler(options Options) http.HandlerFunc {
 		}
 		result, err := options.AccountService.Delete(request.Context(), principal, input.CommandID, input.Confirmed)
 		if err != nil {
-			writeFamilyCode(w, request, account.Code(err))
+			// The code is the account service's; a 5xx's fault line
+			// carries err.
+			writeFamilyFault(w, request, account.Code(err), err)
 			return
 		}
 		// The account service reports the Apple revocation state; Phase 1

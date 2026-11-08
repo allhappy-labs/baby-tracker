@@ -38,8 +38,23 @@ func readAccount(ctx context.Context, a *authority.Service, principal access.Pri
 // Profile command receipts are endpoint-local presentation receipts. Authority
 // receipts are checked by Service before this function; this table prevents an
 // accepted profile command from mutating presentation again with changed input.
+//
+// The account row is locked first and its status read under the lock: the
+// session check ran before it, so an account deletion that held the row then
+// has committed by now, and the caller is refused as a request after the
+// deletion would be (session_revoked) rather than meeting the profile
+// write's own check (account unavailable, a 503). The lock is the one the
+// profile write takes anyway, and the first the write takes, so the command's
+// lock order (account, then its family's label) is unchanged.
 func updateProfile(ctx context.Context, a *authority.Service, principal access.Principal, commandID, displayName string, now time.Time) error {
 	return a.WithAccountTx(ctx, principal, func(tx pgx.Tx) error {
+		var status string
+		if err := tx.QueryRow(ctx, `SELECT status::text FROM accounts WHERE id=$1 FOR NO KEY UPDATE`, principal.AccountID).Scan(&status); err != nil {
+			return err
+		}
+		if status != "active" {
+			return authority.ErrSessionRevoked
+		}
 		_, err := tx.Exec(ctx, `SELECT app.update_own_profile($1::uuid,$2::uuid,$3::text,$4::timestamptz)`, principal.AccountID, commandID, displayName, now)
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == "BT002" {

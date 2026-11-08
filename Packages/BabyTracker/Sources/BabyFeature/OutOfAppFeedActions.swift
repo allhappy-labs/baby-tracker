@@ -9,7 +9,7 @@ import BabyStore
 /// A timed bottle needs its amount, and these taps cannot ask for one: they
 /// must work on a locked phone. Whenever one of them ends a running bottle —
 /// Stop, or L/R stopping it through the store's safety net — the bottle is
-/// saved at the baby's usual amount and the app is asked to offer "Set
+/// saved at the previous bottle's amount and the app is asked to offer "Set
 /// amount" for it the next time it is on screen.
 @MainActor
 public enum OutOfAppFeedActions {
@@ -67,7 +67,7 @@ public enum OutOfAppFeedActions {
             }
             return
         }
-        let volumeML = try LogDefaults(store: store).mostUsedBottleVolumeML(for: babyID)
+        let volumeML = try LogDefaults(store: store).lastBottleVolumeML(for: babyID)
         let entry = try await LiveActivityController.stopping(timer, in: store) {
             try store.stopBottle(timer, volumeML: volumeML, expectedWriteContext: expectedWriteContext)
         }

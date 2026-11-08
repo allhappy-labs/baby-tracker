@@ -128,7 +128,63 @@ func testGate() *admission.Keyed {
 	return gate
 }
 
+// handlerTracker knows when every request handler of a server has returned.
+// The handler releases its admission slot and credential gate when it
+// returns, which is after the response bytes reached the client: a client
+// holding a complete response does not prove the slot is free yet.
+type handlerTracker struct {
+	mu      sync.Mutex
+	running int
+	idle    chan struct{} // closed while no handler runs
+}
+
+func newHandlerTracker() *handlerTracker {
+	idle := make(chan struct{})
+	close(idle)
+	return &handlerTracker{idle: idle}
+}
+
+func (h *handlerTracker) wrap(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		if h.running == 0 {
+			h.idle = make(chan struct{})
+		}
+		h.running++
+		h.mu.Unlock()
+		defer func() {
+			h.mu.Lock()
+			h.running--
+			if h.running == 0 {
+				close(h.idle)
+			}
+			h.mu.Unlock()
+		}()
+		next.ServeHTTP(w, r)
+	})
+}
+
+// waitReturned waits until no handler runs, so every request already
+// answered has also returned its slots.
+func (e *env) waitReturned(t *testing.T) {
+	t.Helper()
+	if e.handlers == nil {
+		return
+	}
+	e.handlers.mu.Lock()
+	idle := e.handlers.idle
+	e.handlers.mu.Unlock()
+	ctx, cancel := context.WithTimeout(t.Context(), 10*time.Second)
+	defer cancel()
+	select {
+	case <-idle:
+	case <-ctx.Done():
+		t.Fatal("a request handler is still running")
+	}
+}
+
 type env struct {
+	handlers   *handlerTracker
 	server     *httptest.Server
 	url        string
 	origin     string
@@ -180,6 +236,9 @@ func newEnvServer(t *testing.T, configure func(*Options), adjust func(*http.Serv
 	if adjust != nil {
 		adjust(e.server.Config)
 	}
+	// Outermost, so a test's own handler wrapper has returned too.
+	e.handlers = newHandlerTracker()
+	e.server.Config.Handler = e.handlers.wrap(e.server.Config.Handler)
 	e.server.Start()
 	t.Cleanup(e.server.Close)
 	e.url = e.server.URL + "/mcp"
@@ -189,6 +248,11 @@ func newEnvServer(t *testing.T, configure func(*Options), adjust func(*http.Serv
 // assertIdle proves every admission slot was returned.
 func (e *env) assertIdle(t *testing.T) {
 	t.Helper()
+	// Every handler has returned, so every slot it took is released or
+	// leaked; the probe below then passes at once unless one leaked. (The
+	// database fixture's env tracks no handlers and relies on the probe's
+	// own deadline.)
+	e.waitReturned(t)
 	deadline := time.Now().Add(2 * time.Second)
 	for {
 		var releases []func()

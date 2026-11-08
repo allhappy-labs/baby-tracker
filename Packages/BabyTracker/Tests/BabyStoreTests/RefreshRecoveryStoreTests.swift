@@ -219,7 +219,7 @@ struct RefreshRecoveryStoreTests {
     @Test func freshSignInSQLiteFailureAfterKeychainKeepsGateClosedUntilSuccessfulSignIn() throws {
         let (h, _, binding) = try prepared()
         try h.store.markAccountSignedOut(h.accountKey)
-        let schema = Schema(versionedSchema: SchemaV10.self)
+        let schema = Schema(versionedSchema: SchemaV12.self)
         let container = try BabySchema.makeContainer(schema: schema, configurations: [ModelConfiguration(schema: schema, url: h.storeURL, allowsSave: false)])
         let readOnly = BabyStore(container: container, dateProvider: TestDateProvider(now), deviceID: "read-only-signin", coordinationLockURL: h.lockURL)
         let credentialFile = h.storeURL.deletingLastPathComponent().appending(path: "synthetic-fresh-credential")
@@ -240,7 +240,7 @@ struct RefreshRecoveryStoreTests {
 
     @Test func sqliteFailureAfterKeychainInstallRetainsSafeCheckpoint() throws {
         let (h, token, binding) = try prepared()
-        let schema = Schema(versionedSchema: SchemaV10.self)
+        let schema = Schema(versionedSchema: SchemaV12.self)
         let container = try BabySchema.makeContainer(schema: schema, configurations: [ModelConfiguration(schema: schema, url: h.storeURL, allowsSave: false)])
         let readOnly = BabyStore(container: container, dateProvider: TestDateProvider(now), deviceID: "read-only-test", coordinationLockURL: h.lockURL)
         var installed = false

@@ -109,6 +109,17 @@ func (t *Tracker) Dropped() uint64 {
 	return t.dropped
 }
 
+// Len is the number of entries held until the next drain: devices' progress,
+// changed families and deferred families.
+func (t *Tracker) Len() int {
+	if t == nil {
+		return 0
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return len(t.devices) + len(t.families) + len(t.deferred)
+}
+
 func merged(a, b progress) progress {
 	result := progress{acked: max(a.acked, b.acked), delivered: max(a.delivered, b.delivered), seen: a.seen}
 	if b.seen.After(result.seen) {

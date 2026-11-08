@@ -833,8 +833,10 @@ func TestPushReservationSurvivesACrash(t *testing.T) {
 		devices[string(value)] = backgrounded(t, h, tracker, value, clock)
 	}
 	blocked := &blockingPusher{started: make(chan struct{})}
+	// The cancelled tick stops new pushes; the one in flight ends with its
+	// send budget, its answer lost.
 	crashed := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: discardSender{}, Pusher: blocked,
-		Connected: func(string) bool { return false }, Now: now}
+		Connected: func(string) bool { return false }, Now: now, SendBudget: 200 * time.Millisecond}
 	write(t, h, tracker, 1)
 	ctx, cancel := context.WithCancel(t.Context())
 	done := make(chan error, 1)
@@ -1004,5 +1006,75 @@ func TestWorkerPushesThroughTheRealClient(t *testing.T) {
 			t.Fatalf("request %s %v %q", r.path, r.headers, r.body)
 		}
 		delete(tokens, r.path)
+	}
+}
+
+// patientPusher answers Accepted after delay unless its context ends first:
+// then Ambiguous, as the client reports a request it wrote but whose answer
+// it never read. onStart runs as each push starts.
+type patientPusher struct {
+	delay   time.Duration
+	onStart func()
+}
+
+func (p *patientPusher) Wake(ctx context.Context, _ apns.Environment, _ []byte) (apns.Result, error) {
+	if p.onStart != nil {
+		p.onStart()
+	}
+	timer := time.NewTimer(p.delay)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		return apns.Result{Status: 200, Class: apns.Accepted}, nil
+	case <-ctx.Done():
+		return apns.Result{Class: apns.Ambiguous}, fmt.Errorf("%w: %w", apns.ErrOutcomeUnknown, apns.ErrCauseCanceled)
+	}
+}
+
+// The tick's context ends 50 ms into a push Apple answers after 200 ms: the
+// push completes and settles as delivered (its reservation kept, nothing
+// failed), not Ambiguous (C25). Sends run under their own budget instead,
+// which still bounds a push that never answers.
+func TestTickDeadlineDoesNotCancelAnInFlightPush(t *testing.T) {
+	h := testkit.New(t)
+	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
+	tracker := wake.NewTracker(0)
+	clock := h.Now
+	pusher := &patientPusher{delay: 200 * time.Millisecond}
+	w := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: discardSender{}, Pusher: pusher,
+		Connected: func(string) bool { return false }, Now: func() time.Time { return clock }}
+	device := backgrounded(t, h, tracker, token(0x91), clock)
+	write(t, h, tracker, 1)
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	pusher.onStart = func() { time.AfterFunc(50*time.Millisecond, cancel) }
+	stats, err := w.Tick(ctx)
+	if err != nil || stats.Pushed != 1 || stats.PushFailed != 0 {
+		t.Fatalf("a push the tick's deadline ended under: %+v %v, want it delivered", stats, err)
+	}
+	if ctx.Err() == nil {
+		t.Fatal("the tick's context did not end during the push")
+	}
+	if totals := w.Totals(); totals.Ambiguous != 0 || totals.PushFailed != 0 {
+		t.Fatalf("totals %+v, want no ambiguous push", totals)
+	}
+	row := pushRows(t, h, h.FamilyID)[device.DeviceID]
+	if row.PushedAt == nil || !row.PushedAt.Equal(clock) || row.Pushed != int64(h.FamilySequence(t)) {
+		t.Fatalf("reservation %+v, want it kept at the pushed sequence", row)
+	}
+
+	// The budget bounds a push Apple never answers.
+	bounded := &wake.Worker{Pool: h.Maintenance, Tracker: tracker, Sender: discardSender{}, Pusher: &blockingPusher{started: make(chan struct{})},
+		Connected: func(string) bool { return false }, Now: func() time.Time { return clock }, SendBudget: 100 * time.Millisecond}
+	backgrounded(t, h, tracker, token(0x92), clock)
+	clock = clock.Add(time.Minute)
+	write(t, h, tracker, 2)
+	started := time.Now()
+	stats, err = bounded.Tick(t.Context())
+	if err != nil || stats.Pushed != 1 || stats.PushFailed != 1 || bounded.Totals().Ambiguous != 1 {
+		t.Fatalf("a push never answered: %+v %v (totals %+v), want one ambiguous send", stats, err, bounded.Totals())
+	}
+	if elapsed := time.Since(started); elapsed > 5*time.Second {
+		t.Fatalf("the tick took %v: the send budget did not bound the push", elapsed)
 	}
 }

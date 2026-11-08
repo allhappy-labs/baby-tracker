@@ -1,6 +1,6 @@
 # Baby icons — end-to-end check (2026-10-08)
 
-Branch `feat/baby-icons` at c55cb3d3, shared simulator `D17101C9-01EB-488D-AFE1-58E6C089B853`.
+Branch `feat/baby-icons` at c55cb3d3, shared simulator `<simulator-udid>`.
 
 Three babies added through the Add baby sheet: Max (Boys), Leo (Boys), Sophia (Girls).
 

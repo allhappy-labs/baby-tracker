@@ -27,7 +27,7 @@ func TestEncodeArchiveFixedOrderAndEmptyArrays(t *testing.T) {
 	if !strings.Contains(s, `"members":[{"account_id":"a"`) {
 		t.Fatal(s)
 	}
-	for _, name := range []string{"babies", "feeds", "sleeps", "diapers", "supplements", "growth_profiles", "measurements", "active_timers", "journal", "audit"} {
+	for _, name := range []string{"babies", "feeds", "sleeps", "diapers", "supplements", "growth_profiles", "measurements", "immunizations", "pumps", "active_timers", "journal", "audit"} {
 		if !strings.Contains(s, `"`+name+`":[]`) {
 			t.Fatalf("missing empty %s: %s", name, s)
 		}
@@ -37,6 +37,40 @@ func TestEncodeArchiveFixedOrderAndEmptyArrays(t *testing.T) {
 	}
 	if !json.Valid(out.Bytes()) {
 		t.Fatal("invalid JSON")
+	}
+}
+
+// immunizations sits between measurements and active_timers.
+func TestEncodeArchiveKeepsImmunizationEntity(t *testing.T) {
+	a := ArchiveV1{Immunizations: []protocol.CanonicalEntity{{EntityKind: "immunization"}}}
+	var out bytes.Buffer
+	if _, err := EncodeArchive(context.Background(), &out, a); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, `"immunizations":[{"entity_kind":"immunization"`) {
+		t.Fatal(s)
+	}
+	measurements, shots, timers := strings.Index(s, `"measurements":`), strings.Index(s, `"immunizations":`), strings.Index(s, `"active_timers":`)
+	if !(measurements < shots && shots < timers) {
+		t.Fatalf("section order: measurements %d, immunizations %d, active_timers %d", measurements, shots, timers)
+	}
+}
+
+// pumps sits between immunizations and active_timers.
+func TestEncodeArchiveKeepsPumpEntity(t *testing.T) {
+	a := ArchiveV1{Pumps: []protocol.CanonicalEntity{{EntityKind: "pump"}}}
+	var out bytes.Buffer
+	if _, err := EncodeArchive(context.Background(), &out, a); err != nil {
+		t.Fatal(err)
+	}
+	s := out.String()
+	if !strings.Contains(s, `"pumps":[{"entity_kind":"pump"`) {
+		t.Fatal(s)
+	}
+	shots, pumps, timers := strings.Index(s, `"immunizations":`), strings.Index(s, `"pumps":`), strings.Index(s, `"active_timers":`)
+	if !(shots < pumps && pumps < timers) {
+		t.Fatalf("section order: immunizations %d, pumps %d, active_timers %d", shots, pumps, timers)
 	}
 }
 

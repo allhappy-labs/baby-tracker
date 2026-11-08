@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"slices"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -50,9 +51,10 @@ func TestKnownAdditiveMigrationOverlap(t *testing.T) {
 }
 
 // 000001–000032 were squashed into 000032_baseline.sql before the homelab
-// cutover (Phase 4 Task 26): the binary embeds that one file, its manifest
-// knows only it, and a history from before it is never adopted.
-func TestOnlyTheBaselineIsEmbedded(t *testing.T) {
+// cutover (Phase 4 Task 26): the binary embeds that file and the migrations
+// after it, its manifest knows exactly those, and a history from before the
+// baseline is never adopted.
+func TestTheBaselineAndItsSuccessorsAreEmbedded(t *testing.T) {
 	entries, err := fs.ReadDir(migrations.Files, ".")
 	if err != nil {
 		t.Fatal(err)
@@ -61,30 +63,61 @@ func TestOnlyTheBaselineIsEmbedded(t *testing.T) {
 	for _, entry := range entries {
 		names = append(names, entry.Name())
 	}
-	if len(names) != 1 || names[0] != "000032_baseline.sql" {
-		t.Fatalf("embedded migrations %v; want exactly 000032_baseline.sql", names)
+	if !slices.Equal(names, []string{"000032_baseline.sql", "000033_immunizations.sql", "000034_pumping.sql", "000035_audit_retention.sql",
+		"000036_request_authority_family_key.sql", "000037_family_delete_cascade.sql"}) {
+		t.Fatalf("embedded migrations %v; want the baseline, 000033_immunizations.sql, 000034_pumping.sql, 000035_audit_retention.sql, "+
+			"000036_request_authority_family_key.sql and 000037_family_delete_cascade.sql", names)
 	}
-	raw, err := fs.ReadFile(migrations.Files, "000032_baseline.sql")
-	if err != nil {
-		t.Fatal(err)
+	digestOf := func(version int64, name string) MigrationDigest {
+		raw, err := fs.ReadFile(migrations.Files, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return MigrationDigest{Version: version, Name: name, SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
 	}
 	c, err := EmbeddedCompatibility()
 	if err != nil {
 		t.Fatal(err)
 	}
-	baseline := MigrationDigest{Version: 32, Name: "000032_baseline.sql", SHA256: fmt.Sprintf("%x", sha256.Sum256(raw))}
-	if c.Min != 32 || c.Max != 32 || len(c.Known) != 1 || c.Known[0] != baseline {
-		t.Fatalf("compatibility %+v; want min 32 max 32 known [%+v]", c, baseline)
+	baseline, immunizations := digestOf(32, "000032_baseline.sql"), digestOf(33, "000033_immunizations.sql")
+	pumping, retention := digestOf(34, "000034_pumping.sql"), digestOf(35, "000035_audit_retention.sql")
+	familyKey, cascade := digestOf(36, "000036_request_authority_family_key.sql"), digestOf(37, "000037_family_delete_cascade.sql")
+	if baseline.SHA256 != "c157a7e3e8df3d98ce57ca557ca5282872eedd4355b35707db3ecc8cfe31da8b" {
+		t.Fatalf("the frozen baseline changed: %s", baseline.SHA256)
+	}
+	if immunizations.SHA256 != "40380fddef9683b640b825ffc7e5afa2b990554f978afb8b26053e8e6bf59b82" {
+		t.Fatalf("the frozen 000033 changed: %s", immunizations.SHA256)
+	}
+	if pumping.SHA256 != "47f5ed52e73a915db7cb07f2ce66dd9522bc87e74d3a0d35aa746402066f245d" {
+		t.Fatalf("the frozen 000034 changed: %s", pumping.SHA256)
+	}
+	if retention.SHA256 != "d2f260885db3d56e6aa396482cddc6ca1fdea32d30097089bc5b6df23dad6c65" {
+		t.Fatalf("the frozen 000035 changed: %s", retention.SHA256)
+	}
+	if familyKey.SHA256 != "8c116b63d0fef8bb623c5117d83084bea126f05b514efda5e68b367dea414a5d" {
+		t.Fatalf("the frozen 000036 changed: %s", familyKey.SHA256)
+	}
+	if c.Min != 37 || c.Max != 37 || len(c.Known) != 6 || c.Known[0] != baseline || c.Known[1] != immunizations || c.Known[2] != pumping ||
+		c.Known[3] != retention || c.Known[4] != familyKey || c.Known[5] != cascade {
+		t.Fatalf("compatibility %+v; want min 37 max 37 known [%+v %+v %+v %+v %+v %+v]", c, baseline, immunizations, pumping, retention, familyKey, cascade)
 	}
 	loaded, err := New(migrations.Files).loadMigrations()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(loaded) != 1 || loaded[0].version != 32 || loaded[0].name != baseline.Name || loaded[0].checksum != baseline.SHA256 {
+	if len(loaded) != 6 || loaded[0].version != 32 || loaded[0].name != baseline.Name || loaded[0].checksum != baseline.SHA256 ||
+		loaded[1].version != 33 || loaded[1].name != immunizations.Name || loaded[1].checksum != immunizations.SHA256 ||
+		loaded[2].version != 34 || loaded[2].name != pumping.Name || loaded[2].checksum != pumping.SHA256 ||
+		loaded[3].version != 35 || loaded[3].name != retention.Name || loaded[3].checksum != retention.SHA256 ||
+		loaded[4].version != 36 || loaded[4].name != familyKey.Name || loaded[4].checksum != familyKey.SHA256 ||
+		loaded[5].version != 37 || loaded[5].name != cascade.Name || loaded[5].checksum != cascade.SHA256 {
 		t.Fatalf("runner loads %+v", loaded)
 	}
 	if err := ValidateCompatibility(c.Known, c); err != nil {
-		t.Fatalf("the baseline install is refused: %v", err)
+		t.Fatalf("the current install is refused: %v", err)
+	}
+	if err := ValidateCompatibility(c.Known[:5], c); err == nil {
+		t.Fatal("a database still at schema 36 is accepted by the schema-37 binary")
 	}
 
 	// The chain's history, the homelab's legacy history: none is this binary's.

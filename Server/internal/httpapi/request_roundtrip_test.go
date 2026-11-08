@@ -115,7 +115,7 @@ func newStackWith(t *testing.T, h *testkit.Harness, config stackConfig) *stack {
 	}
 	policies := limits.DefaultPolicies()
 	options := Options{Readiness: config.readiness, InstanceID: h.Info.InstanceID, RecoveryEpoch: h.Info.RecoveryEpoch,
-		CanonicalOrigin: h.Info.CanonicalOrigin, SyncLimits: &h.Limits, SessionService: h.Auth, SyncService: service, Limiter: limiter,
+		CanonicalOrigin: h.Info.CanonicalOrigin, SyncLimits: &h.Limits, SessionService: h.Auth, SyncService: service, BearerAuthenticator: guard, Limiter: limiter,
 		SyncMutationDevicePolicy: policies[limits.ScopeSyncMutationDevice], SyncMutationAccountPolicy: policies[limits.ScopeSyncMutationAccount],
 		SyncMutationFamilyPolicy: policies[limits.ScopeSyncMutationFamily], SyncPullDevicePolicy: config.pullPolicy,
 		SyncPullAccountPolicy: policies[limits.ScopeSyncPullAccount]}
@@ -223,6 +223,32 @@ func (s *stack) assertRefusalRollsBack(t *testing.T, label string) {
 	}
 }
 
+// assertRefusedBeforeBody is a refusal by a body-first route's credential
+// check (Phase 5 Task 19): the one authority statement, outside any
+// transaction, so nothing to roll back.
+func (s *stack) assertRefusedBeforeBody(t *testing.T, label string) {
+	t.Helper()
+	statements := s.wire.Statements()
+	if len(statements) != 1 || !strings.Contains(statements[0], "app.request_authority") {
+		t.Errorf("%s: %q, want only the credential check's authority statement", label, statements)
+	}
+}
+
+// assertRefusalStatements is a precedence row's statements by its round
+// trips: none (0) before any database work; the credential check alone (1)
+// for a bearer refused before its body; otherwise a request transaction
+// (2), or the check and then one (3), that ends in one rollback.
+func (s *stack) assertRefusalStatements(t *testing.T, label string, trips int) {
+	t.Helper()
+	switch trips {
+	case 0:
+	case 1:
+		s.assertRefusedBeforeBody(t, label)
+	default:
+		s.assertRefusalRollsBack(t, label)
+	}
+}
+
 func TestSyncHTTPRoundTrips(t *testing.T) {
 	h := testkit.New(t)
 	caretest.Seed(t, h, caretest.Baby(caretest.BabyA))
@@ -230,8 +256,10 @@ func TestSyncHTTPRoundTrips(t *testing.T) {
 	pull := func() *httptest.ResponseRecorder {
 		return s.send(t, "owner", http.MethodPost, "/v1/sync", h.SyncRequest(h.Cursor(h.FamilySequence(t)), nil))
 	}
-	if got := s.trips(t, "pull-only", pull, pull, http.StatusOK); got != 3 {
-		t.Errorf("pull-only: %d round trips, want 3: %q", got, s.wire.Statements())
+	// The pull goes with the COMMIT: BEGIN with the authority read, then
+	// the read-only check, the pull and the COMMIT.
+	if got := s.trips(t, "pull-only", pull, pull, http.StatusOK); got != 2 {
+		t.Errorf("pull-only: %d round trips, want 2: %q", got, s.wire.Statements())
 	}
 	if s.reported() != 2 {
 		t.Errorf("pull-only: %d requests reported progress, want the warm-up and the measured pull", s.reported())
@@ -269,10 +297,13 @@ func TestSyncHTTPRoundTrips(t *testing.T) {
 	revoked := func() *httptest.ResponseRecorder {
 		return s.send(t, "caregiver", http.MethodPost, "/v1/sync", h.SyncRequest(nil, nil))
 	}
-	if got := s.trips(t, "revoked", revoked, revoked, http.StatusUnauthorized); got != 2 {
-		t.Errorf("a revoked session: %d round trips, want 2", got)
+	// The caregiver never synced on this stack, so its bearer is checked
+	// before its body (Phase 5 Task 19): refused by that one statement,
+	// with no transaction.
+	if got := s.trips(t, "revoked", revoked, revoked, http.StatusUnauthorized); got != 1 {
+		t.Errorf("a revoked session: %d round trips, want 1", got)
 	}
-	s.assertRefusalRollsBack(t, "revoked")
+	s.assertRefusedBeforeBody(t, "revoked")
 	if s.reported() != reportedBeforeRefusals {
 		t.Errorf("refused requests reported progress: %d, want %d", s.reported(), reportedBeforeRefusals)
 	}
@@ -286,8 +317,57 @@ func TestSyncHTTPRoundTrips(t *testing.T) {
 	limited.assertRefusalRollsBack(t, "rate limited")
 }
 
+// Review M2: a known bearer is forgotten only when its session's own state
+// refuses it. An account session that never refreshed into its family
+// (Admit's 401 access_expired) keeps its bearer known, so its retries are
+// not checked before their body again: 3 round trips the first time (the
+// check, then the transaction), 2 after.
+func TestARouteRefusalKeepsTheBearerKnown(t *testing.T) {
+	h := testkit.NewWithUnrefreshedCaregiver(t)
+	s := newStack(t, h, limits.Policy{})
+	s.send(t, "owner", http.MethodPost, "/v1/sync", h.SyncRequest(nil, nil)) // prepares the statements
+	for i, want := range []int{3, 2, 2} {
+		s.wire.Reset()
+		rec := s.send(t, "caregiver", http.MethodPost, "/v1/sync", h.SyncRequest(nil, nil))
+		if rec.Code != http.StatusUnauthorized || errorCode(t, rec) != "access_expired" || s.wire.Trips() != want {
+			t.Errorf("unrefreshed sync %d: %d %s, %d round trips, want 401 access_expired and %d: %q", i, rec.Code, rec.Body.String(),
+				s.wire.Trips(), want, s.wire.Statements())
+		}
+	}
+}
+
+// sessionStateRefusal is the authority's refusal of the session's own
+// state, as Authenticate and the request transaction's authentication
+// return it, and nothing else: not a route's held or Charge refusal of the
+// same code, not a service's error, not a family refusal.
+func TestSessionStateRefusal(t *testing.T) {
+	for _, c := range []struct {
+		err  error
+		want bool
+	}{
+		{authority.ErrSessionRevoked, true},
+		{authority.ErrAccessExpired, true},
+		{authority.ErrEpochChanged, true},
+		{authority.ErrReauthenticationRequired, true},
+		{fmt.Errorf("serve: %w", authority.ErrSessionRevoked), true},
+		{syncRefusal("access_expired"), false},
+		{syncRefusal("session_revoked"), false},
+		{authority.ErrMembershipRevoked, false},
+		{authority.ErrScopeFailed, false},
+		{authority.ErrUnavailable, false},
+		{errors.New("session_revoked"), false},
+		{nil, false},
+	} {
+		if got := sessionStateRefusal(c.err); got != c.want {
+			t.Errorf("sessionStateRefusal(%v) = %v, want %v", c.err, got, c.want)
+		}
+	}
+}
+
 // 13 rows (a baby and 12 feeds) at page size 3 page as 3, 3, 3, 3, 1: a
-// first page and three continuations with more, then a last continuation.
+// first page and three continuations with more, each 4 round trips (the
+// page is read with its COMMIT, then its binding is stored with the COMMIT
+// of a second request transaction), then a last continuation in 2.
 func TestPagedHTTPRoundTrips(t *testing.T) {
 	h := testkit.New(t)
 	h.Limits.SyncPageSize = 3
@@ -308,16 +388,18 @@ func TestPagedHTTPRoundTrips(t *testing.T) {
 		return rec
 	}
 	first() // prepares the first-page statements
+	// A pull page's binding goes with the COMMIT of a second request
+	// transaction, after the page's own.
 	if got := s.trips(t, "first page with more", nil, first, http.StatusOK); got != 4 || token == nil {
-		t.Errorf("first pull page with a token: %d (token %v), want 4", got, token) // page 1
+		t.Errorf("first pull page with a token: %d (token %v), want 4: %q", got, token, s.wire.Statements()) // page 1
 	}
 	next() // page 2: prepares the continuation statements
 	if got := s.trips(t, "continuation with more", nil, next, http.StatusOK); got != 4 || token == nil {
-		t.Errorf("continuation with more: %d, want 4", got) // page 3
+		t.Errorf("continuation with more: %d, want 4: %q", got, s.wire.Statements()) // page 3
 	}
 	next() // page 4
-	if got := s.trips(t, "last continuation", nil, next, http.StatusOK); got != 3 || token != nil {
-		t.Errorf("last continuation: %d round trips (token %v), want 3", got, token) // page 5
+	if got := s.trips(t, "last continuation", nil, next, http.StatusOK); got != 2 || token != nil {
+		t.Errorf("last continuation: %d round trips (token %v), want 2", got, token) // page 5
 	}
 	// The first pages presented cursor 0 and the continuations none, so
 	// only the final page reports: its high water.
@@ -397,7 +479,11 @@ type syncPrecedenceRow struct {
 	headers map[string]string
 	status  int
 	code    string
-	trips   int // after the collapse: 0 before any database work, else at most 2
+	// trips is exact (assertRefusalStatements): 0 before any database work,
+	// 1 for a bearer refused by the credential check before its body, 2 for
+	// the one request transaction, 3 for a bearer the stack meets first and
+	// that passes the check (the check, then the transaction).
+	trips int
 }
 
 // syncPrecedenceRows is the sync and snapshot refusal table over its
@@ -474,19 +560,19 @@ func syncPrecedenceRows(t *testing.T) []syncPrecedenceRow {
 	return []syncPrecedenceRow{
 		{"no credential, malformed body", s, http.MethodPost, syncRoute, malformed, with(s.headers("owner", syncRoute), "Authorization", ""), 401, "access_expired", 0},
 		{"malformed bearer", s, http.MethodPost, syncRoute, pull, with(s.headers("owner", syncRoute), "Authorization", "Bearer not-a-token"), 401, "session_revoked", 0},
-		{"removed caregiver, malformed body", s, http.MethodPost, syncRoute, malformed, s.headers("removed", syncRoute), 401, "session_revoked", 2},
+		{"removed caregiver, malformed body", s, http.MethodPost, syncRoute, malformed, s.headers("removed", syncRoute), 401, "session_revoked", 1},
 		{"removed caregiver, bad snapshot query", s, http.MethodGet, snapshotRoute + "?page_token=", nil, s.headers("removed", snapshotRoute), 401, "session_revoked", 2},
 		{"unsupported protocol header", s, http.MethodPost, syncRoute, pull, with(s.headers("owner", syncRoute), "X-Baby-Tracker-Protocol", "v2"), 400, "unsupported_protocol", 2},
 		{"body over the limit", s, http.MethodPost, syncRoute, append(pull, bytes.Repeat([]byte(" "), h.Limits.SyncBodyBytes)...), s.headers("owner", syncRoute), 413, "body_too_large", 2},
 		{"batch over the limit", s, http.MethodPost, syncRoute, encode(tooMany), s.headers("owner", syncRoute), 400, "batch_limit", 2},
 		{"bad snapshot query", s, http.MethodGet, snapshotRoute + "?page_token=", nil, s.headers("owner", snapshotRoute), 400, "invalid_request", 2},
 		{"cursor of another instance", s, http.MethodPost, syncRoute, encode(foreign), s.headers("owner", syncRoute), 409, "snapshot_required", 2},
-		{"viewer's mutation", s, http.MethodPost, syncRoute, encode(viewerBatch), s.headers("viewer", syncRoute), 403, "read_only_caregiver", 2},
-		{"unrefreshed account session, malformed body", u, http.MethodPost, syncRoute, malformed, u.headers("caregiver", syncRoute), 401, "access_expired", 2},
+		{"viewer's mutation", s, http.MethodPost, syncRoute, encode(viewerBatch), s.headers("viewer", syncRoute), 403, "read_only_caregiver", 3},
+		{"unrefreshed account session, malformed body", u, http.MethodPost, syncRoute, malformed, u.headers("caregiver", syncRoute), 401, "access_expired", 3},
 		{"unrefreshed account session, snapshot", u, http.MethodGet, snapshotRoute, nil, u.headers("caregiver", snapshotRoute), 401, "access_expired", 2},
-		{"expired access token, malformed body", expired, http.MethodPost, syncRoute, malformed, expired.headers("owner", syncRoute), 401, "access_expired", 2},
-		{"another recovery epoch, malformed body", epoch, http.MethodPost, syncRoute, malformed, epoch.headers("owner", syncRoute), 401, "epoch_changed", 2},
-		{"past the reauthentication deadline, malformed body", deadline, http.MethodPost, syncRoute, malformed, deadline.headers("owner", syncRoute), 401, "reauthentication_required", 2},
+		{"expired access token, malformed body", expired, http.MethodPost, syncRoute, malformed, expired.headers("owner", syncRoute), 401, "access_expired", 1},
+		{"another recovery epoch, malformed body", epoch, http.MethodPost, syncRoute, malformed, epoch.headers("owner", syncRoute), 401, "epoch_changed", 1},
+		{"past the reauthentication deadline, malformed body", deadline, http.MethodPost, syncRoute, malformed, deadline.headers("owner", syncRoute), 401, "reauthentication_required", 1},
 		{"node not ready, malformed body", notReady, http.MethodPost, syncRoute, malformed, notReady.headers("owner", syncRoute), 503, "service_unavailable", 0},
 		{"snapshot with a bad header and a bad query", s, http.MethodGet, snapshotRoute + "?page_token=", nil, with(s.headers("owner", snapshotRoute), "X-Baby-Tracker-Capabilities", "records-v1"), 409, "unsupported_capability", 2},
 		// A held header or body refusal ranks before family policy (the
@@ -508,9 +594,15 @@ func syncPrecedenceRows(t *testing.T) []syncPrecedenceRow {
 // wire (written green against the handler that authenticated, read the
 // family and charged in separate steps): a bad credential answers before
 // any header or body refusal, those before family policy, and family
-// policy before the in-transaction refusals. Every refusal costs at most
-// the one transaction's two round trips (none before any database work)
-// and ends in one rollback.
+// policy before the in-transaction refusals. Phase 5 Task 19 moved where a
+// bad credential is refused on POST /v1/sync, not what it answers: a
+// bearer the node has not seen authenticate is refused by the credential
+// check before its body is read (1 round trip, no transaction), one that
+// passes meets the request transaction (3 in all), and a known bearer only
+// the transaction (2, as before). Every refusal answers the status and code
+// it answered before (the check's refusal is written by the route's own
+// error writer; the push-token and import goldens pin those routes' bytes),
+// and every transaction ends in one rollback.
 func TestSyncErrorPrecedenceIsUnchanged(t *testing.T) {
 	for _, c := range syncPrecedenceRows(t) {
 		t.Run(c.name, func(t *testing.T) {
@@ -522,12 +614,10 @@ func TestSyncErrorPrecedenceIsUnchanged(t *testing.T) {
 			}
 			trips := c.on.wire.Trips()
 			t.Logf("%s: %d round trips", c.name, trips)
-			if trips > c.trips {
-				t.Errorf("%d round trips, want at most %d: %q", trips, c.trips, c.on.wire.Statements())
+			if trips != c.trips {
+				t.Errorf("%d round trips, want %d: %q", trips, c.trips, c.on.wire.Statements())
 			}
-			if c.trips != 0 {
-				c.on.assertRefusalRollsBack(t, c.name)
-			}
+			c.on.assertRefusalStatements(t, c.name, c.trips)
 		})
 	}
 }

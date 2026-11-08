@@ -28,7 +28,11 @@ type Claim struct {
 	DirtyVersion        uint64    `json:"dirty_version"`
 	LeaseDeadline       time.Time `json:"lease_deadline"`
 }
-type Queue struct{ pool *pgxpool.Pool }
+type Queue struct {
+	pool *pgxpool.Pool
+	// workPage overrides SweepWorkPageLimit (tests); zero keeps it.
+	workPage int
+}
 
 func NewQueue(pool *pgxpool.Pool) *Queue { return &Queue{pool: pool} }
 func (q *Queue) Claim(ctx context.Context, now time.Time, limit int) ([]Claim, error) {
@@ -207,12 +211,36 @@ func (q *Queue) SweepRegistrations(ctx context.Context, requireEntitlement bool)
 	return n, err
 }
 
-// SweepWork dirties every registered family whose sequence moved past its
-// last flush, or whose authority was last checked over a minute ago: the
-// backstop for a change the post-commit feed lost (main's claim ran it).
-func (q *Queue) SweepWork(ctx context.Context) error {
-	_, err := q.pool.Exec(ctx, `SELECT app.sweep_live_activity_work()`)
-	return err
+// SweepWorkPageLimit is one work-sweep page: the families one call of
+// app.sweep_live_activity_work_page dirties in its own short transaction
+// (about 2.5 ms a family under the 2x load, so a page holds its families'
+// dirty rows for a fraction of a second).
+const SweepWorkPageLimit = 100
+
+// SweepWorkPage is one page of the work sweep. Of the registered families
+// after after ("" for the first page), in family order, it takes up to a
+// page and dirties each whose sequence moved past its last flush, or whose
+// authority was last checked over a minute ago: the backstop for a change
+// the post-commit feed lost (main's claim ran it). It returns the next
+// page's after, or "" once the pass is over. Each call commits on its own,
+// so a family's dirty row is locked only while its page runs.
+func (q *Queue) SweepWorkPage(ctx context.Context, after string) (string, error) {
+	var cursor any
+	if after != "" {
+		cursor = after
+	}
+	limit := q.workPage
+	if limit <= 0 {
+		limit = SweepWorkPageLimit
+	}
+	var next *string
+	if err := q.pool.QueryRow(ctx, `SELECT app.sweep_live_activity_work_page($1::uuid,$2)::text`, cursor, limit).Scan(&next); err != nil {
+		return "", err
+	}
+	if next == nil {
+		return "", nil
+	}
+	return *next, nil
 }
 
 // MaximumDirtyBatch bounds one FlushDirty call (app.dirty_live_activity_families).

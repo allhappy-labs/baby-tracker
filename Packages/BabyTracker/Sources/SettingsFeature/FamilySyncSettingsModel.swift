@@ -147,6 +147,7 @@ public struct FamilySyncStatusLine: Equatable, Sendable {
 public enum FamilySyncStatusCopy {
     public static let syncing = String(localized: "Syncing…", bundle: .module)
     public static let offline = String(localized: "Offline — entries are saved and will sync", bundle: .module)
+    public static let serverUnreachable = String(localized: "Can't reach the family server", bundle: .module)
     public static let signInAgain = String(localized: "Sign in again to keep syncing", bundle: .module)
     public static let signInButton = String(localized: "Sign in with Apple", bundle: .module)
 
@@ -177,6 +178,10 @@ public enum FamilySyncStatusCopy {
             )
         case .offline:
             return FamilySyncStatusLine(text: offline, isProblem: false, offersSignIn: false)
+        case .serverUnreachable:
+            // Entries still wait safely, but nothing will move until the
+            // parent fixes the route to the server, so it reads as a problem.
+            return FamilySyncStatusLine(text: serverUnreachable, isProblem: true, offersSignIn: false)
         case .needsSignIn:
             return FamilySyncStatusLine(text: signInAgain, isProblem: true, offersSignIn: true)
         case .failed(let message) where message == SyncIssueCopy.retrying:

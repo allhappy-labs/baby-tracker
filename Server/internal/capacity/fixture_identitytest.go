@@ -332,8 +332,13 @@ func provisionFixture(ctx context.Context, r *RestoredFixture, issuer *testident
 			r.Integrations = append(r.Integrations, integration)
 		}
 	}
-	// Legitimate session rotations age history. Natural history is never rewritten
-	// if provisioning already exceeds the requested minimum event count.
+	// Legitimate family commands age history: the first family's owner
+	// invites and revokes the invitation (two family-scope rows, nothing left
+	// pending). A routine refresh appends no audit row (owner decision D1,
+	// 2026-10-16), so rotations no longer can. Natural history is never
+	// rewritten if provisioning already exceeds the requested minimum event
+	// count.
+	var owner access.Principal
 	for {
 		events, err := r.authorityEvents(ctx)
 		if err != nil {
@@ -342,11 +347,18 @@ func provisionFixture(ctx context.Context, r *RestoredFixture, issuer *testident
 		if events >= uint64(spec.AuthorityEvents) {
 			break
 		}
-		bundle, err := r.Auth.Refresh(ctx, devices[0].Session.RefreshToken)
+		if owner.AccountID == "" {
+			if owner, err = r.Auth.Authenticate(ctx, devices[0].Session.AccessToken); err != nil {
+				return nil, err
+			}
+		}
+		invitation, err := r.Families.Invite(ctx, owner, fixtureUUID(), "caregiver")
 		if err != nil {
 			return nil, err
 		}
-		devices[0].Session = bundle
+		if _, err := r.Families.RevokeInvitation(ctx, owner, fixtureUUID(), invitation.Invitation.ID); err != nil {
+			return nil, err
+		}
 	}
 	return devices, nil
 }
@@ -809,8 +821,9 @@ func RestoreFixture(ctx context.Context, directory, destination string) (_ *Rest
 		return nil, err
 	}
 	r.RestoredAuthorityEvents = events
-	// Every genuine refresh appends exactly one session_rotated audit row.
-	if events != private.AuthorityEvents+uint64(len(r.Devices)) {
+	// A genuine refresh appends no audit row (owner decision D1, 2026-10-16):
+	// the restored history is exactly the sealed one.
+	if events != private.AuthorityEvents {
 		return nil, ErrFixtureInvalid
 	}
 	if err := verifyFixtureState(ctx, r, events); err != nil {

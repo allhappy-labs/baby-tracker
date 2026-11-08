@@ -87,6 +87,11 @@ BT_SECRETS_DIR=$(mktemp -d "${TMPDIR:-/tmp}/baby-tracker-protocol.XXXXXXXX")
 if [[ ${BT_DISPOSABLE_PERFORMANCE:-0} == 1 ]]; then
   export BT_KEYRING_DIR="$BT_SECRETS_DIR/keyrings"
   mkdir -m 0700 "$BT_KEYRING_DIR"
+  # Compose binds BT_MCP_SECRETS_DIR into the app; unset it falls back to the
+  # repository's Server/deploy/mcp, which the owned-bind proofs refuse. MCP is
+  # off in the capacity runs, so an empty directory this run owns is enough.
+  export BT_MCP_SECRETS_DIR="$BT_SECRETS_DIR/mcp"
+  mkdir -m 0700 "$BT_MCP_SECRETS_DIR"
   : > "$BT_SECRETS_DIR/compose.env"
 fi
 override="$BT_SECRETS_DIR/compose.override.yaml"
@@ -321,7 +326,7 @@ authority=$(docker exec "$db" psql -XAt -U postgres -d babytracker -c "SELECT in
 # server, answered /readyz twice, tore everything down and exited non-zero
 # without a word. So the two-client gate had not actually run since the
 # caregiver work began.
-[[ $schema == 32 && $authority == "$BT_SERVER_INSTANCE_ID:$BT_RECOVERY_EPOCH" && $image_revision == "$source_sha" ]]
+[[ $schema == 37 && $authority == "$BT_SERVER_INSTANCE_ID:$BT_RECOVERY_EPOCH" && $image_revision == "$source_sha" ]]
 # The device push-token route exists exactly when the push profile is on.
 push_capability=$(curl --silent --fail --max-time 2 "$base/v1/server" | jq -r '.capabilities | index("push-token-v1") != null')
 if [[ -n $push_override ]]; then

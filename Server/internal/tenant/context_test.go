@@ -379,7 +379,7 @@ func TestTenantFoundation(t *testing.T) {
 		if err != nil {
 			t.Fatalf("runtime migration readiness: %v", err)
 		}
-		if status.Current != 32 || status.Required != 32 {
+		if status.Current != 37 || status.Required != 37 {
 			t.Fatalf("runtime schema status = %+v", status)
 		}
 		var count int

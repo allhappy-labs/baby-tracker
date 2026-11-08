@@ -76,7 +76,7 @@ import BabyCore
         var bottleFeed: FeedEntry?
         try bumps("stopBottle") { bottleFeed = try store.stopBottle(try #require(bottle), volumeML: 80) }
         let saved = try #require(bottleFeed)
-        try bumps("setBottleVolume") { try store.setBottleVolume(90, onFeed: saved.id) }
+        try bumps("setBottle") { try store.setBottle(volumeML: 90, contents: .formula, onFeed: saved.id) }
 
         clock.advance(by: 3_600)
         try bumps("logBreast") {

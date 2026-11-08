@@ -87,7 +87,7 @@ func TestProtocolE2EReadsCareEntitiesAndNoWakeQueue(t *testing.T) {
 	if !strings.Contains(text, `SELECT to_regclass('public.delivery_pending') IS NULL`) {
 		t.Fatal("protocol e2e does not assert that the wake queue relation is gone")
 	}
-	for _, ledger := range []string{"kind=1 AND", "kind=2 AND", "kind=3 AND", "kind=4 AND", "kind=5 AND", "kind=6 AND", "kind=7 AND", "kind=8 AND"} {
+	for _, ledger := range []string{"kind=1 AND", "kind=2 AND", "kind=3 AND", "kind=4 AND", "kind=5 AND", "kind=6 AND", "kind=7 AND", "kind=8 AND", "kind=9 AND", "kind=10 AND"} {
 		if !strings.Contains(text, ledger) {
 			t.Fatalf("owner-reinstall ledger omits care kind %q", ledger)
 		}
@@ -148,7 +148,7 @@ func TestProtocolE2ERequiresTheRunningTimerSnapshotStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, proof := range []string{"running-timer snapshot proof: ", "two-caregiver proof: step 24:", "owner-reinstall proof: step 6:"} {
+	for _, proof := range []string{"running-timer snapshot proof: ", "two-caregiver proof: step 24:", "immunization proof: step 6:", "pumping proof: step 6:", "owner-reinstall proof: step 6:"} {
 		requireSwiftProofLine(t, string(script), proof)
 	}
 }

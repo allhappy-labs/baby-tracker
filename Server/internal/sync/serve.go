@@ -23,6 +23,13 @@ import (
 // done. Exchange then validates the request against the grant's family
 // before its first statement. Family and role come only from the session
 // row: nothing reads the family first.
+//
+// A pull (no mutations) sends its one statement with the COMMIT, so it is
+// two round trips; a pull page with more then stores its binding in a
+// second transaction (settle), authorized again as a new request would be
+// (without a second rate-limit charge): a change committed between the two
+// (a revocation, a rotation, a family moved into recovery) refuses the page
+// with the code a new request would get in that state.
 func (s *Service) ServeSync(ctx context.Context, req authority.Request, request protocol.SyncRequest) (protocol.SyncResponse, error) {
 	if !s.ready() {
 		return protocol.SyncResponse{}, errUnavailable
@@ -35,11 +42,17 @@ func (s *Service) ServeSync(ctx context.Context, req authority.Request, request 
 	err := s.guard.WithRequestTx(txCtx, req, "read", func(tx pgx.Tx, p access.Principal, g access.Grant) error {
 		familyID, deviceID = g.FamilyID, p.DeviceID
 		var err error
-		exchanged, err = s.Exchange(txCtx, tx, p, g, request) // seamReady and validateSync run first, before any statement
+		exchanged, err = s.exchangeRequest(txCtx, tx, p, g, request, true) // seamReady and validateSync run first, before any statement
 		return err
 	})
-	// The whole transaction is one database phase, recorded after it ended,
-	// so an opt-in recorder never runs inside it.
+	if err == nil {
+		// A pull read with the commit: the page, and a page with more
+		// stores its binding in a second transaction, authorized again.
+		err = s.settle(txCtx, &exchanged, s.requestBindingTx(txCtx, req))
+	}
+	// The whole transaction (with a pull's binding transaction) is one
+	// database phase, recorded after it ended, so an opt-in recorder never
+	// runs inside it.
 	diagnostics.Record(ctx, nil, diagnostics.Database, time.Since(start))
 	if err != nil {
 		return protocol.SyncResponse{}, err

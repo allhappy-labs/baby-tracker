@@ -12,5 +12,7 @@ Packages/BabyTracker/.build/
 __pycache__/
 *.py[cod]
 
+.superpowers/
+
 # Real signing and server values (see Config/Base.xcconfig)
 Config/Local.xcconfig

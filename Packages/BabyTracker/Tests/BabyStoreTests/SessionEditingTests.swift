@@ -50,6 +50,45 @@ import BabyCore
         #expect(try liveFeeds(store, baby).count == 1)
     }
 
+    /// Solids join a feed by Add part: one create carrying the link and the
+    /// note, and the feed still takes milk parts afterwards.
+    @Test func addFeedPartAddsSolidsToAMilkSession() throws {
+        let (store, baby, clock) = try fixture()
+        let at = day(clock)
+        let bottle = try store.logBottle(volumeML: 100, contents: .formula, for: baby, at: at(18, 0))
+        let solids = try store.addFeedPart(.solids(foods: ["pear"], amount: .taste, at: at(18, 10), note: "liked it"),
+                                           toSession: bottle.id, for: baby)
+        #expect(solids.kind == .solids)
+        #expect(solids.feedingSessionID == bottle.id)
+        #expect(solids.note == "liked it")
+        #expect(solids.components.map(\.solidFoods) == [["pear"]])
+        #expect(try store.changeLog().filter { $0.entityID == solids.id }.map(\.operation) == [.create])
+
+        let left = try store.addFeedPart(.breast(side: .left, from: at(18, 20), to: at(18, 30)), toSession: bottle.id, for: baby)
+        #expect(left.feedingSessionID == bottle.id)
+        #expect(try store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture).map(\.feedIDs)
+            == [[bottle.id, solids.id, left.id]])
+    }
+
+    /// A feed holding solids joins and is joined like any other; only solids
+    /// alone never are.
+    @Test func aFeedWithSolidsStillJoins() throws {
+        let (store, baby, clock) = try fixture()
+        let at = day(clock)
+        let early = try store.logBottle(volumeML: 60, contents: .formula, for: baby, at: at(9, 0))
+        let late = try store.logBottle(volumeML: 90, contents: .formula, for: baby, at: at(13, 0))
+        let solids = try store.addFeedPart(.solids(foods: ["oat"], amount: .some, at: at(13, 5), note: nil),
+                                           toSession: late.id, for: baby)
+
+        #expect(try store.previousSession(.feed, before: late.id, for: baby)?.rootID == early.id)
+        let later = try store.logBottle(volumeML: 30, contents: .formula, for: baby, at: at(17, 0))
+        #expect(try store.previousSession(.feed, before: later.id, for: baby)?.lastMemberID == solids.id)
+
+        try store.combineFeeds([early.id, late.id], for: baby)
+        #expect(try store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture).first?.feedIDs
+            == [early.id, late.id, solids.id])
+    }
+
     @Test func addSleepPartJoinsTheGivenSessionEvenPastTheBreakLimit() throws {
         let (store, baby, clock) = try fixture()
         let at = day(clock)
@@ -212,75 +251,71 @@ import BabyCore
 
     // MARK: - Part start check
 
-    @Test func checkPartStartRefusesAStartBeforeThePreviousPartEnds() throws {
-        let (store, baby, clock) = try fixture()
-        let at = day(clock)
-        let left = try store.logBreast(side: .left, from: at(10, 0), to: at(10, 12), for: baby)
-        let right = try store.logBreast(side: .right, from: at(10, 15), to: at(10, 30), for: baby)
-        #expect(right.effectiveFeedingSessionID == left.id)
-
-        #expect(try store.previousPartEnd(ofFeed: right.id, for: baby) == at(10, 12))
-        #expect(try store.previousPartEnd(ofFeed: left.id, for: baby) == nil)
-        #expect(throws: PartError.startBeforePreviousPart) {
-            try store.checkPartStart(at(10, 10), ofFeed: right.id, for: baby)
-        }
-        try store.checkPartStart(at(10, 12), ofFeed: right.id, for: baby)
-        try store.checkPartStart(at(9, 0), ofFeed: left.id, for: baby)
-    }
-
-    /// H-R15: a part moved past the next part's start would reorder its
-    /// session behind the root, where Split does nothing.
-    @Test func checkPartStartRefusesAStartAfterTheNextPartBegan() throws {
+    @Test func checkPartSpanRefusesOnlyANewOverlap() throws {
         let (store, baby, clock) = try fixture()
         let at = day(clock)
         let left = try store.logBreast(side: .left, from: at(10, 0), to: at(10, 12), for: baby)
         let right = try store.logBreast(side: .right, from: at(10, 15), to: at(10, 30), for: baby)
         let bottle = try store.logBottle(volumeML: 60, contents: .formula, for: baby, at: at(10, 40))
         #expect(bottle.effectiveFeedingSessionID == left.id)
+        let was = PartSpan(start: at(10, 15), end: at(10, 30))
 
-        #expect(try store.nextPartStart(ofFeed: left.id, for: baby) == at(10, 15))
-        #expect(try store.nextPartStart(ofFeed: right.id, for: baby) == at(10, 40))
-        #expect(try store.nextPartStart(ofFeed: bottle.id, for: baby) == nil)
-        #expect(throws: PartError.startAfterNextPart) {
-            try store.checkPartStart(at(10, 16), ofFeed: left.id, for: baby)
+        #expect(try store.otherPartSpans(ofFeed: right.id, for: baby).sorted { $0.start < $1.start }
+            == [PartSpan(start: at(10, 0), end: at(10, 12)), PartSpan(start: at(10, 40), end: at(10, 40))])
+        #expect(throws: PartError.overlapsPart) {
+            try store.checkPartSpan(PartSpan(start: at(10, 10), end: at(10, 20)), was: was, ofFeed: right.id, for: baby)
         }
-        #expect(throws: PartError.startAfterNextPart) {
-            try store.checkPartStart(at(10, 41), ofFeed: right.id, for: baby)
+        #expect(throws: PartError.overlapsPart) {
+            try store.checkPartSpan(PartSpan(start: at(10, 35), end: at(10, 45)), was: was, ofFeed: right.id, for: baby)
         }
-        try store.checkPartStart(at(10, 15), ofFeed: left.id, for: baby)
-        try store.checkPartStart(at(10, 40), ofFeed: right.id, for: baby)
-        try store.checkPartStart(at(19, 0), ofFeed: bottle.id, for: baby)
+        // Touching is no overlap, and a part may move past another.
+        try store.checkPartSpan(PartSpan(start: at(10, 12), end: at(10, 27)), was: was, ofFeed: right.id, for: baby)
+        try store.checkPartSpan(PartSpan(start: at(10, 40), end: at(10, 55)), was: was, ofFeed: right.id, for: baby)
+        try store.checkPartSpan(PartSpan(start: at(9, 0), end: at(9, 15)), was: was, ofFeed: right.id, for: baby)
+        // An overlap the part already had is left alone (ruling H-R12).
+        try store.checkPartSpan(PartSpan(start: at(10, 11), end: at(10, 20)),
+                                was: PartSpan(start: at(10, 10), end: at(10, 30)), ofFeed: right.id, for: baby)
     }
 
-    /// H-R14 and H-R15: a sleep part has the same two bounds.
-    @Test func checkSleepPartStartRefusesBothBounds() throws {
+    @Test func checkSleepPartSpanRefusesAnOverlap() throws {
         let (store, baby, clock) = try fixture()
         let at = day(clock)
         let first = try store.logSleep(from: at(9, 0), to: at(9, 40), for: baby)
         let second = try store.logSleep(from: at(9, 50), to: at(10, 30), for: baby)
-        let third = try store.logSleep(from: at(10, 40), to: at(11, 0), for: baby)
         #expect(second.effectiveSleepSessionID == first.id)
-        #expect(third.effectiveSleepSessionID == first.id)
+        let was = PartSpan(start: at(9, 50), end: at(10, 30))
 
-        #expect(try store.previousPartEnd(ofSleep: first.id, for: baby) == nil)
-        #expect(try store.previousPartEnd(ofSleep: second.id, for: baby) == at(9, 40))
-        #expect(try store.nextPartStart(ofSleep: second.id, for: baby) == at(10, 40))
-        #expect(try store.nextPartStart(ofSleep: third.id, for: baby) == nil)
-        #expect(throws: PartError.startBeforePreviousPart) {
-            try store.checkSleepPartStart(at(9, 30), ofSleep: second.id, for: baby)
+        #expect(try store.otherPartSpans(ofSleep: second.id, for: baby) == [PartSpan(start: at(9, 0), end: at(9, 40))])
+        #expect(throws: PartError.overlapsPart) {
+            try store.checkSleepPartSpan(PartSpan(start: at(9, 30), end: at(10, 30)), was: was, ofSleep: second.id, for: baby)
         }
-        #expect(throws: PartError.startAfterNextPart) {
-            try store.checkSleepPartStart(at(10, 41), ofSleep: second.id, for: baby)
-        }
-        #expect(throws: PartError.startAfterNextPart) {
-            try store.checkSleepPartStart(at(9, 51), ofSleep: first.id, for: baby)
-        }
-        try store.checkSleepPartStart(at(9, 40), ofSleep: second.id, for: baby)
-        try store.checkSleepPartStart(at(10, 40), ofSleep: second.id, for: baby)
-        try store.checkSleepPartStart(at(8, 0), ofSleep: first.id, for: baby)
+        try store.checkSleepPartSpan(PartSpan(start: at(8, 0), end: at(8, 30)), was: was, ofSleep: second.id, for: baby)
         #expect(throws: SleepSessionError.missingSleep) {
-            try store.checkSleepPartStart(at(8, 0), ofSleep: UUID(), for: baby)
+            try store.checkSleepPartSpan(was, was: was, ofSleep: UUID(), for: baby)
         }
+    }
+
+    /// A part moved before the session's first keys it, and a running part
+    /// that continued the session follows the new key.
+    @Test func updateFeedPartRekeysTheSessionByItsEarliestMember() throws {
+        let (store, baby, clock) = try fixture()
+        let first = try store.logBreast(side: .left, from: clock.now.addingTimeInterval(-1500),
+                                        to: clock.now.addingTimeInterval(-1200), for: baby)
+        let second = try store.logBreast(side: .right, from: clock.now.addingTimeInterval(-900),
+                                         to: clock.now.addingTimeInterval(-300), for: baby)
+        #expect(second.feedingSessionID == first.id)
+        let timer = try store.startPart(.breast(.left), for: baby)
+        #expect(timer.sessionID == first.id)
+
+        second.startedAt = clock.now.addingTimeInterval(-2400)
+        second.endedAt = clock.now.addingTimeInterval(-1800)
+        try store.updateFeedPart(second, for: baby)
+
+        #expect(second.feedingSessionID == nil)
+        #expect(first.feedingSessionID == second.id)
+        #expect(try store.activeTimer(kind: .feed, for: baby)?.sessionID == second.id)
+        #expect(try store.feedingSessions(for: baby, from: .distantPast, to: .distantFuture).map(\.feedIDs)
+            == [[second.id, first.id]])
     }
 
     // MARK: - A session id that is also a member's id

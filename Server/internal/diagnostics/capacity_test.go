@@ -77,11 +77,18 @@ func TestAdmissionMetricsFixedDomainsAndOccupancy(t *testing.T) {
 	c.ObserveAdmission(SyncAdmission, AdmissionRejected)
 	c.ObserveAdmission(MCPAdmission, AdmissionAccepted)
 	c.ObserveAdmission(MCPAdmission, AdmissionReleased)
+	c.ObserveAdmission(AuthAdmission, AdmissionAccepted)
+	c.ObserveAdmission(AuthAdmission, AdmissionRejected)
+	c.ObserveAdmission(AuthAdmission, AdmissionRejected)
 	c.ObserveAdmission(AdmissionClass("credential-secret"), AdmissionAccepted)
 	c.ObserveAdmission(SyncAdmission, AdmissionOutcome(255))
 	s := c.Snapshot()
-	if len(s.Admission) != 2 || s.Admission[SyncAdmission] != (AdmissionCounts{Accepted: 1, Rejected: 1, Active: 1}) || s.Admission[MCPAdmission] != (AdmissionCounts{Accepted: 1, Released: 1}) {
+	if len(s.Admission) != 3 || s.Admission[SyncAdmission] != (AdmissionCounts{Accepted: 1, Rejected: 1, Active: 1}) || s.Admission[MCPAdmission] != (AdmissionCounts{Accepted: 1, Released: 1}) ||
+		s.Admission[AuthAdmission] != (AdmissionCounts{Accepted: 1, Rejected: 2, Active: 1}) {
 		t.Fatalf("metrics=%+v", s.Admission)
+	}
+	if AuthAdmission != "auth" {
+		t.Fatalf("auth class %q", AuthAdmission)
 	}
 	raw, _ := json.Marshal(s)
 	if strings.Contains(string(raw), "secret") {
@@ -92,5 +99,59 @@ func TestAdmissionMetricsFixedDomainsAndOccupancy(t *testing.T) {
 		c.ObserveAdmission(SyncAdmission, AdmissionReleased)
 	}); n != 0 {
 		t.Fatalf("allocations=%v", n)
+	}
+}
+
+// A request that found no slot and waited (BT_ADMISSION_WAIT) is counted
+// with its wait, and as canceled when its request ended while it waited
+// (neither admitted nor refused); an admission or refusal after a wait is
+// counted as any other. Fixed domains, no
+// allocations.
+func TestAdmissionWaitMetrics(t *testing.T) {
+	var c CapacityCollector
+	c.ObserveAdmissionWait(SyncAdmission, 30*time.Millisecond, false)
+	c.ObserveAdmission(SyncAdmission, AdmissionAccepted)
+	c.ObserveAdmissionWait(SyncAdmission, 250*time.Millisecond, false)
+	c.ObserveAdmission(SyncAdmission, AdmissionRejected)
+	c.ObserveAdmissionWait(SyncAdmission, -time.Millisecond, true)
+	c.ObserveAdmissionWait(MCPAdmission, time.Millisecond, false)
+	c.ObserveAdmissionWait(AuthAdmission, 2*time.Millisecond, false)
+	c.ObserveAdmissionWait(AdmissionClass("credential-secret"), time.Second, true)
+	s := c.Snapshot()
+	if got := s.Admission[SyncAdmission]; got != (AdmissionCounts{Accepted: 1, Rejected: 1, Active: 1, Waited: 3, Canceled: 1,
+		WaitNS: uint64(280 * time.Millisecond)}) {
+		t.Fatalf("sync %+v", got)
+	}
+	if got := s.Admission[MCPAdmission]; got != (AdmissionCounts{Waited: 1, WaitNS: uint64(time.Millisecond)}) {
+		t.Fatalf("mcp %+v", got)
+	}
+	if got := s.Admission[AuthAdmission]; got != (AdmissionCounts{Waited: 1, WaitNS: uint64(2 * time.Millisecond)}) {
+		t.Fatalf("auth %+v", got)
+	}
+	raw, _ := json.Marshal(s.Admission[SyncAdmission])
+	if string(raw) != `{"accepted":1,"rejected":1,"released":0,"active":1,"waited":3,"wait_ns":280000000,"canceled":1}` {
+		t.Fatalf("json %s", raw)
+	}
+	if n := testing.AllocsPerRun(1000, func() { c.ObserveAdmissionWait(SyncAdmission, time.Millisecond, false) }); n != 0 {
+		t.Fatalf("allocations=%v", n)
+	}
+}
+
+// A standalone Histogram (the live sample's sweep durations) buckets by the
+// same boundaries as the capacity phases, clamps to [0, 1 minute] and
+// allocates nothing.
+func TestHistogramObserveBucketsAndClamps(t *testing.T) {
+	var h Histogram
+	h.Observe(-time.Second)     // 0: bucket 0
+	h.Observe(time.Second)      // bucket 8 (<= 1s)
+	h.Observe(time.Second + 1)  // bucket 9 (<= 5s)
+	h.Observe(31 * time.Second) // bucket 11 (above 30s)
+	h.Observe(2 * time.Hour)    // clamped to a minute, bucket 11
+	want := [12]uint64{0: 1, 8: 1, 9: 1, 11: 2}
+	if h.Count != 5 || h.Buckets != want || h.TotalNS != uint64(time.Second+time.Second+1+31*time.Second+time.Minute) {
+		t.Fatalf("histogram %+v", h)
+	}
+	if n := testing.AllocsPerRun(1000, func() { h.Observe(time.Millisecond) }); n != 0 {
+		t.Fatalf("allocations per observation: %v", n)
 	}
 }

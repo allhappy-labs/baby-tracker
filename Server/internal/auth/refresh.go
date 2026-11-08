@@ -42,6 +42,19 @@ func (service *Service) AccessDigests(rawToken string) ([]authority.KeyedDigest,
 	return service.tokenCandidates("access", rawToken), nil
 }
 
+// RefreshDigests is a refresh token's digest under every configured token
+// key, current first, with no database work; a malformed token is
+// session_revoked, as Refresh refuses it. The digests are the
+// sessions.refresh_digest lookup keys (the current key's is the one a
+// sign-in or rotation stores): HTTP admission tells a known session's
+// refresh apart by them, and callers never log them.
+func (service *Service) RefreshDigests(rawToken string) ([]authority.KeyedDigest, error) {
+	if service == nil || !validBearerSecret(rawToken) {
+		return nil, ErrSessionRevoked
+	}
+	return service.tokenCandidates("refresh", rawToken), nil
+}
+
 // Refresh rotates a refresh token (the legacy, non-recoverable path): the
 // parent is consumed and its child issued, or, for a consumed parent, the
 // whole lineage is revoked (refresh_reused).
@@ -146,8 +159,9 @@ func (service *Service) deriveRecoverableRotation(in authority.RefreshDerivation
 	return authority.RefreshDerivation(derived), err
 }
 
-// rotationMaterial is the legacy refresh stage of a rotation: its digest is
-// the session_rotated audit row's material_digest.
+// rotationMaterial is the legacy refresh stage of a rotation. The authority
+// encodes it to check the child's stage; nothing persists it (a routine
+// rotation appends no audit row since owner decision D1, 2026-10-16).
 func (service *Service) rotationMaterial(stage authority.RefreshStage) ([]byte, [32]byte, error) {
 	return EncodeRefreshStage(service.refreshStage(stage))
 }

@@ -11,6 +11,10 @@ struct TodayStripView: View {
     let onOpenHistory: () -> Void
 
     @Environment(\.dynamicTypeSize) private var dynamicTypeSize
+    /// The totals row's width, and the width it needs with the pumped
+    /// amount in it: the amount shows only where the whole row fits.
+    @State private var rowWidth: CGFloat = 0
+    @State private var rowWidthWithPump: CGFloat = 0
     @ScaledMetric(relativeTo: .caption2) private var axisHeight: CGFloat = 13
     /// How far an hour label keeps from the bar's edges, clear of "00" and "now".
     @ScaledMetric(relativeTo: .caption2) private var axisEdgeRoom: CGFloat = 40
@@ -18,29 +22,31 @@ struct TodayStripView: View {
     var body: some View {
         Button(action: onOpenHistory) {
             TimelineView(.everyMinute) { context in
-                VStack(alignment: .leading, spacing: 10) {
-                    HStack {
-                        Text(HomeCopy.today)
-                            .font(.footnote)
-                            .foregroundStyle(Palette.secondaryText)
-                        Spacer(minLength: 0)
-                        Image(systemName: "chevron.right")
-                            .font(.footnote.weight(.semibold))
-                            .foregroundStyle(Palette.secondaryText)
-                    }
-                    VStack(spacing: 4) {
-                        bar(now: context.date)
-                        // At the accessibility sizes the labels cannot sit
-                        // side by side; the bar reads without them.
-                        if !dynamicTypeSize.isAccessibilitySize {
-                            axis(now: context.date)
+                Card {
+                    VStack(alignment: .leading, spacing: 10) {
+                        // A caption, not `ListRow`'s body-sized title: the
+                        // bar is what this card says. The chevron is the one
+                        // `ListRow` draws for a disclosure.
+                        HStack {
+                            Text(HomeCopy.today)
+                                .textRole(.caption)
+                            Spacer(minLength: 0)
+                            Image(systemName: "chevron.right")
+                                .font(.footnote.weight(.semibold))
+                                .foregroundStyle(Palette.secondaryText)
+                                .accessibilityHidden(true)
                         }
+                        VStack(spacing: Spacing.xs) {
+                            bar(now: context.date)
+                            // At the accessibility sizes the labels cannot sit
+                            // side by side; the bar reads without them.
+                            if !dynamicTypeSize.isAccessibilitySize {
+                                axis(now: context.date)
+                            }
+                        }
+                        totals
                     }
-                    totals
                 }
-                .padding(14)
-                .background(.white.opacity(0.045), in: RoundedRectangle(cornerRadius: 20, style: .continuous))
-                .overlay(RoundedRectangle(cornerRadius: 20, style: .continuous).strokeBorder(.white.opacity(0.05)))
                 .contentShape(Rectangle())
             }
         }
@@ -54,10 +60,10 @@ struct TodayStripView: View {
             let width = proxy.size.width
             let x = { (date: Date) in position(of: date, now: now) * width }
             ZStack(alignment: .leading) {
-                Rectangle().fill(.white.opacity(0.06))
+                Rectangle().fill(Surface.card)
                 ForEach(strip.hourMarks(now: now), id: \.self) { mark in
                     Rectangle()
-                        .fill(.white.opacity(0.10))
+                        .fill(Surface.raised)
                         .frame(width: 1)
                         .offset(x: x(mark))
                 }
@@ -127,13 +133,31 @@ struct TodayStripView: View {
     /// One row, or a column at the accessibility sizes. One view tree either
     /// way: swapping trees (`ViewThatFits`) reads to the accessibility audit
     /// as text that cannot change size.
+    ///
+    /// The pumped amount is the row's last item, and only where the row has
+    /// room for it: a hidden copy of the row with it measures the width it
+    /// needs. It never takes a second line. The column always has room.
     private var totals: some View {
         let stacked = dynamicTypeSize.isAccessibilitySize
+        let showsPump = pumpText != nil && (stacked || rowWidthWithPump <= rowWidth)
+        return totalsRow(totalItems(withPump: showsPump), stacked: stacked)
+            .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidth = $0 }
+            .background(alignment: .leading) {
+                if pumpText != nil, !stacked {
+                    totalsRow(totalItems(withPump: true), stacked: false)
+                        .fixedSize()
+                        .hidden()
+                        .onGeometryChange(for: CGFloat.self) { $0.size.width } action: { rowWidthWithPump = $0 }
+                }
+            }
+    }
+
+    private func totalsRow(_ items: [TotalItem], stacked: Bool) -> some View {
         let layout = stacked
             ? AnyLayout(VStackLayout(alignment: .leading, spacing: 8))
             : AnyLayout(HStackLayout(spacing: 12))
         return layout {
-            ForEach(Array(totalItems.enumerated()), id: \.offset) { index, item in
+            ForEach(Array(items.enumerated()), id: \.offset) { index, item in
                 if index > 0, !stacked { Spacer(minLength: 0) }
                 total(item)
             }
@@ -146,8 +170,9 @@ struct TodayStripView: View {
         let value: String
     }
 
-    /// Feeds, sleep and diapers always; bottle volume only once there is some.
-    private var totalItems: [TotalItem] {
+    /// Feeds, sleep and diapers always; bottle volume only once there is
+    /// some; then the pumped amount, where it fits.
+    private func totalItems(withPump: Bool) -> [TotalItem] {
         var items = [
             TotalItem(icon: Tracker.feed.icon, color: Tracker.feed.color, value: String(strip.feedCount)),
             TotalItem(icon: Tracker.sleep.icon, color: Tracker.sleep.color, value: ElapsedFormatter.total(strip.sleepSeconds)),
@@ -156,11 +181,19 @@ struct TodayStripView: View {
         if let volume = volumeText {
             items.append(TotalItem(icon: .bottle, color: Palette.feed, value: volume))
         }
+        if withPump, let pumped = pumpText {
+            items.append(TotalItem(icon: Tracker.pump.icon, color: Tracker.pump.color, value: pumped))
+        }
         return items
     }
 
     private var volumeText: String? {
         strip.volumeML > 0 ? Volume(millilitres: strip.volumeML).formatted(as: volumeUnit) : nil
+    }
+
+    /// Today's pumped total, the same on every baby's Home.
+    private var pumpText: String? {
+        strip.showsPump ? Volume(millilitres: strip.pumpML).formatted(as: volumeUnit) : nil
     }
 
     private func total(_ item: TotalItem) -> some View {
@@ -185,6 +218,7 @@ struct TodayStripView: View {
             Tracker.feed.title + " \(strip.feedCount)",
             Tracker.sleep.title + " " + HomeCopy.spokenDuration(TimeInterval(strip.sleepSeconds)),
             Tracker.diaper.title + " \(strip.diaperCount)",
-        ] + (volumeText.map { [HomeCopy.bottle + " " + $0] } ?? [])).joined(separator: ", ")
+        ] + (volumeText.map { [HomeCopy.bottle + " " + $0] } ?? [])
+          + (pumpText.map { [Tracker.pump.title + " " + $0] } ?? [])).joined(separator: ", ")
     }
 }

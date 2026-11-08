@@ -11,7 +11,7 @@ import (
 // one, permanently (build 2961ca1 sends feed deletes at 2, sleep deletes at 1).
 func TestInboundPayloadVersionRule(t *testing.T) {
 	current := map[string]uint32{"baby": 1, "feed": 4, "sleep": 2, "diaper": 1, "supplement": 1,
-		"growth_profile": 1, "measurement": 1, "timer": 5}
+		"growth_profile": 1, "measurement": 1, "immunization": 1, "pump": 1, "timer": 5}
 	for kind, want := range current {
 		if got := CurrentPayloadVersion(kind); got != want {
 			t.Fatalf("%s current=%d want=%d", kind, got, want)
@@ -33,7 +33,7 @@ func TestInboundPayloadVersionRule(t *testing.T) {
 // is refused one version either side of it.
 func TestFixtureWritesDecodeOnlyAtTheirCurrentVersion(t *testing.T) {
 	for _, fixture := range []string{"baby.json", "feed-bottle.json", "feed-breast.json", "feed-combination.json",
-		"feed-solids.json", "sleep.json", "diaper.json", "supplement.json", "growth-profile.json", "measurement.json",
+		"feed-solids.json", "sleep.json", "diaper.json", "supplement.json", "growth-profile.json", "measurement.json", "immunization.json", "pump.json",
 		"timer-feed.json", "timer-sleep.json"} {
 		t.Run(fixture, func(t *testing.T) {
 			raw := readV1Fixture(t, fixture)
@@ -55,9 +55,9 @@ func TestFixtureWritesDecodeOnlyAtTheirCurrentVersion(t *testing.T) {
 // A delete names only its baby, so the interim client's older delete
 // versions decode; zero and anything above the current version do not.
 func TestDeletesDecodeAtEveryVersionUpToTheCurrentOne(t *testing.T) {
-	for kind, current := range map[string]uint32{"baby": 1, "feed": 4, "sleep": 2, "diaper": 1, "supplement": 1, "growth_profile": 1, "measurement": 1} {
+	for kind, current := range map[string]uint32{"baby": 1, "feed": 4, "sleep": 2, "diaper": 1, "supplement": 1, "growth_profile": 1, "measurement": 1, "immunization": 1, "pump": 1} {
 		payload := `{"baby_id":"10000000-0000-4000-8000-000000000001"}`
-		if kind == "baby" {
+		if kind == "baby" || kind == "pump" {
 			payload = `{}`
 		}
 		for version := uint32(0); version <= current+1; version++ {

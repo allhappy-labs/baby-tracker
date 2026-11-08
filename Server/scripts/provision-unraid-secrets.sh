@@ -85,6 +85,12 @@ environment_file=$deploy_root/deployment.env
 source_sha=${BT_SOURCE_SHA:-}
 [[ $source_sha =~ ^[0-9a-f]{40}$ ]] || { echo "BT_SOURCE_SHA must be the reviewed 40-character Git SHA" >&2; exit 1; }
 if [[ ! -e $environment_file ]]; then
+  # This deployment's own values, never committed: the sidecar's MagicDNS name
+  # (baby-sync.<tailnet>.ts.net) and the app's bundle ID (BT_BUNDLE_ID_PREFIX).
+  public_host=${BT_PUBLIC_HOST:-}
+  apple_audience=${BT_APPLE_AUDIENCE:-}
+  [[ $public_host =~ ^[a-z0-9-]+(\.[a-z0-9-]+)+$ ]] || { echo "BT_PUBLIC_HOST must be the sidecar's MagicDNS name, such as baby-sync.<tailnet>.ts.net" >&2; exit 1; }
+  [[ $apple_audience =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)+$ ]] || { echo "BT_APPLE_AUDIENCE must be the app's bundle ID" >&2; exit 1; }
   instance_id=$(uuidgen | tr '[:upper:]' '[:lower:]')
   {
     printf 'BT_DEPLOY_ROOT=%s\n' "$deploy_root"
@@ -92,8 +98,8 @@ if [[ ! -e $environment_file ]]; then
     printf 'BT_SERVER_INSTANCE_ID=%s\n' "$instance_id"
     printf 'BT_RECOVERY_EPOCH=1\n'
     printf 'BT_MODE=self_hosted\n'
-    printf 'BT_PUBLIC_ORIGIN=https://baby-sync.example-tailnet.ts.net\n'
-    printf 'BT_APPLE_AUDIENCE=com.olhapi.babytracker\n'
+    printf 'BT_PUBLIC_ORIGIN=https://%s\n' "$public_host"
+    printf 'BT_APPLE_AUDIENCE=%s\n' "$apple_audience"
     printf 'BT_TRUSTED_PROXY_CIDRS=127.0.0.1/32\n'
     printf 'BT_SOURCE_SHA=%s\n' "$source_sha"
     printf 'BT_IMAGE_NAME=baby-tracker-server:%s\n' "$source_sha"

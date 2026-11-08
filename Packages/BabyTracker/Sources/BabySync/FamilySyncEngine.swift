@@ -1,3 +1,4 @@
+import BabyCore
 import BabyProtocol
 import BabyStore
 import CryptoKit
@@ -17,10 +18,28 @@ import Observation
 public final class FamilySyncEngine {
     public enum Status: Equatable {
         case idle, syncing, upToDate(Date), offline, needsSignIn, failed(String)
+        /// Requests have failed for `serverUnreachableAfter` while the phone
+        /// has a network. On 2026-10-19 that was a Tailscale tunnel showing
+        /// "Connected" and carrying nothing, which "Offline" did not explain.
+        case serverUnreachable
     }
 
-    public private(set) var status: Status = .idle
+    public private(set) var status: Status = .idle {
+        didSet {
+            switch status {
+            case .offline, .serverUnreachable, .syncing: break
+            case .idle, .upToDate, .needsSignIn, .failed: offlineSince = nil
+            }
+        }
+    }
     public private(set) var operationalStatus: SyncOperationalStatus = .inactive
+    /// From coming to the foreground until the first sync after it has an
+    /// answer, or `catchUpHold` has passed. Until then the store may predate
+    /// what the other phone did while this one slept: on 2026-11-01 a phone
+    /// opened after four silent hours stopped a feed the other parent had
+    /// already stopped, then — once the sync landed — the sleep they had
+    /// started since.
+    public private(set) var isCatchingUp = false
 
     /// Long enough for a burst of taps to become one request, short enough
     /// that the other caregiver sees the entry "now". With the live socket
@@ -38,6 +57,14 @@ public final class FamilySyncEngine {
     /// A ceiling on back-to-back passes in one `syncNow`, so a server that
     /// keeps accepting without ever acknowledging cannot spin the phone.
     static let maximumPassesPerSync = 50
+    /// How long requests must keep failing, with a network present, before
+    /// the server counts as out of reach rather than this phone as offline.
+    /// Longer than a lift ride or a Wi-Fi handover, short enough that a dead
+    /// tunnel is named within one feed.
+    public nonisolated static let serverUnreachableAfter: TimeInterval = 3 * 60
+    /// The longest a tap waits for the catch-up. Past it the server counts as
+    /// out of reach at once, and the tap goes ahead on what this phone has.
+    public nonisolated static let defaultCatchUpHold: Duration = .seconds(5)
 
     @ObservationIgnored private let store: BabyStore
     @ObservationIgnored private let familyKey: FamilySessionKey
@@ -48,6 +75,13 @@ public final class FamilySyncEngine {
     @ObservationIgnored private let pollInterval: Duration
     @ObservationIgnored private let livePollInterval: Duration
     @ObservationIgnored private let announcer: any RemoteTimerAnnouncer
+    @ObservationIgnored private let catchUpHold: Duration
+    @ObservationIgnored private var catchUpWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var catchUpDeadline: Task<Void, Never>?
+    /// Attempts started so far, and how many had when the catch-up began:
+    /// only an attempt started after that is the catch-up.
+    @ObservationIgnored private var attemptsStarted = 0
+    @ObservationIgnored private var catchUpAfterAttempt = 0
     @ObservationIgnored private var coordinator: SyncCoordinator!
 
     /// Set by the coordinator's callbacks during one attempt.
@@ -56,6 +90,12 @@ public final class FamilySyncEngine {
     /// Part of the owner's imported history was refused. Outranks "up to
     /// date" on every later sync, so a routine poll cannot paper over it.
     @ObservationIgnored private var importRefused = false
+    /// When the current run of network failures began. Any answer from the
+    /// server, refusals included, ends the run.
+    @ObservationIgnored private var offlineSince: Date?
+    @ObservationIgnored private let now: () -> Date
+    /// Whether the phone has any usable network path, VPN aside.
+    @ObservationIgnored private let internetAvailable: () -> Bool
 
     /// The one piece of work talking to the server; its value is the error
     /// the work threw, if any.
@@ -110,6 +150,8 @@ public final class FamilySyncEngine {
         live: LiveHintChannel? = nil,
         foregroundPollInterval: Duration? = nil,
         diagnostics: (any SyncDiagnosticSink)? = nil,
+        now: @escaping () -> Date = Date.init,
+        internetAvailable: @escaping () -> Bool = { NetworkPath.shared.isSatisfied },
         onRevoked: @escaping (RealmID) async -> Void = { _ in }
     ) {
         self.init(
@@ -117,7 +159,8 @@ public final class FamilySyncEngine {
             renew: renew, prepareSession: prepareSession, debounce: Self.defaultDebounce,
             pollInterval: foregroundPollInterval ?? Self.defaultPollInterval,
             livePollInterval: foregroundPollInterval ?? Self.defaultLivePollInterval,
-            announcer: LiveActivityRemoteTimerAnnouncer(), live: live, diagnostics: diagnostics, onRevoked: onRevoked
+            announcer: LiveActivityRemoteTimerAnnouncer(), live: live, diagnostics: diagnostics,
+            now: now, internetAvailable: internetAvailable, onRevoked: onRevoked
         )
     }
 
@@ -132,12 +175,17 @@ public final class FamilySyncEngine {
         debounce: Duration,
         pollInterval: Duration,
         livePollInterval: Duration = FamilySyncEngine.defaultLivePollInterval,
+        catchUpHold: Duration = FamilySyncEngine.defaultCatchUpHold,
         announcer: any RemoteTimerAnnouncer,
         live: LiveHintChannel? = nil,
         diagnostics: (any SyncDiagnosticSink)? = nil,
+        now: @escaping () -> Date = Date.init,
+        internetAvailable: @escaping () -> Bool = { true },
         onRevoked: @escaping (RealmID) async -> Void = { _ in }
     ) {
         self.store = store
+        self.now = now
+        self.internetAvailable = internetAvailable
         self.familyKey = familyKey
         self.importClient = importClient
         self.renew = renew
@@ -145,6 +193,7 @@ public final class FamilySyncEngine {
         self.debounce = debounce
         self.pollInterval = pollInterval
         self.livePollInterval = livePollInterval
+        self.catchUpHold = catchUpHold
         self.announcer = announcer
         self.liveChannel = live
         coordinator = SyncCoordinator(
@@ -245,7 +294,7 @@ public final class FamilySyncEngine {
             try store.setActiveRealm(realm)
         }
         if try store.syncCursor(in: realm) == nil {
-            status = .syncing
+            markSyncing()
             do {
                 try await renewingOnce { try await self.coordinator.takeSnapshot() }
             } catch {
@@ -299,7 +348,7 @@ public final class FamilySyncEngine {
             var failure: (any Error)?
             var preparing = true
             var preparedVersion: UUID?
-            self.status = .syncing
+            self.markSyncing()
             self.operationalStatus.phase = .request
             do {
                 preparedVersion = try self.store.accountCredentialVersion(for: self.familyKey.leaseKey)
@@ -331,12 +380,25 @@ public final class FamilySyncEngine {
                             self.status = .needsSignIn
                             self.operationalStatus.signIn = .required
                         } else if error is URLError {
-                            self.status = .offline
+                            self.status = self.offlineStatus()
+                        } else if Self.isLockHeldElsewhere(error) {
+                            // Another process is renewing, and nothing was
+                            // heard from the server: a failure already
+                            // showing stays, with its age.
+                            switch self.status {
+                            case .offline, .serverUnreachable: break
+                            default: self.status = .failed(SyncIssueCopy.retrying)
+                            }
                         } else {
                             self.status = .failed(SyncIssueCopy.retrying)
                         }
                     } else if SessionRefresher.requiresFreshProof(error) { self.status = .needsSignIn }
-                    else if error is URLError { self.status = .offline }
+                    else if error is URLError { self.status = self.offlineStatus() }
+                    AppLog.sync.error("sync failed \(preparing ? "renewing" : "syncing", privacy: .public): \(SyncLogKind.of(error), privacy: .public); status \(String(describing: self.status), privacy: .public)")
+                    // The catch-up waits on for an answer, up to its hold.
+                    if !Self.isLockHeldElsewhere(error) {
+                        self.finishCatchUp(unanswered: error is URLError)
+                    }
                 }
                 if self.status == .needsSignIn {
                     self.operationalStatus.signIn = .required
@@ -373,13 +435,66 @@ public final class FamilySyncEngine {
     /// The poll starts at the short interval: the socket is only just dialling.
     public func startForegroundPolling() {
         guard !stopped, polling == nil else { return }
+        beginCatchUp()
         poll(every: pollInterval)
         startLive()
+    }
+
+    /// Returns once the catch-up begun on coming to the foreground has an
+    /// answer, or at once if none is under way. Never longer than
+    /// `catchUpHold`.
+    public func waitForCatchUp() async {
+        guard isCatchingUp else { return }
+        await withCheckedContinuation { catchUpWaiters.append($0) }
+    }
+
+    private func beginCatchUp() {
+        guard !isCatchingUp, status != .needsSignIn, store.realmIsShared else { return }
+        isCatchingUp = true
+        catchUpAfterAttempt = attemptsStarted
+        let hold = catchUpHold
+        catchUpDeadline = Task { [weak self] in
+            try? await Task.sleep(for: hold)
+            guard !Task.isCancelled, let self else { return }
+            // An answer ends the catch-up before this: still catching up
+            // means nothing was heard.
+            AppLog.sync.notice("catch-up hold passed without an answer")
+            self.finishCatchUp(unanswered: true)
+        }
+    }
+
+    private nonisolated static func isLockHeldElsewhere(_ error: any Error) -> Bool {
+        (error as? SessionRefresher.RefreshError) == .lockUnavailable
+    }
+
+    /// The catch-up has its answer, or ran out of time. Unanswered with a
+    /// network, the server is out of reach now: the parent is about to act
+    /// on what this phone last heard, and three minutes is too late to say so.
+    private func finishCatchUp(unanswered: Bool) {
+        guard isCatchingUp else { return }
+        if unanswered, !stopped, internetAvailable() {
+            switch status {
+            // A held lock's "retrying" heard nothing from the server; any
+            // other failure did, and says more than "out of reach" would.
+            case .needsSignIn: break
+            case .failed(let message) where message != SyncIssueCopy.retrying: break
+            default:
+                offlineSince = now().addingTimeInterval(-Self.serverUnreachableAfter)
+                status = .serverUnreachable
+            }
+        }
+        isCatchingUp = false
+        catchUpDeadline?.cancel()
+        catchUpDeadline = nil
+        let waiters = catchUpWaiters
+        catchUpWaiters = []
+        for waiter in waiters { waiter.resume() }
     }
 
     /// Closes the socket with 1000 too, which frees the server's single
     /// socket slot for this device at once rather than after its ping timeout.
     public func stopForegroundPolling() {
+        finishCatchUp(unanswered: false)
         polling?.cancel()
         polling = nil
         foregroundPollInterval = nil
@@ -414,6 +529,7 @@ public final class FamilySyncEngine {
     /// when the server refuses its token.
     public func stop() async {
         stopped = true
+        finishCatchUp(unanswered: false)
         operationalStatus = .inactive
         coordinator.stopDiagnostics()
         polling?.cancel()
@@ -580,17 +696,23 @@ public final class FamilySyncEngine {
     /// because the coordinator sends at most one batch per pass and an
     /// owner's imported history is usually more than one batch.
     private func attempt(_ reason: SyncReason) async {
+        attemptsStarted += 1
+        let isCatchUp = attemptsStarted > catchUpAfterAttempt
+        var unanswered = false
+        defer { if isCatchUp { finishCatchUp(unanswered: unanswered) } }
         // A fresh Apple proof is the only way out of this state. Keep its
         // button visible and avoid repeatedly sending the same refused token.
         guard !stopped, status != .needsSignIn, (try? accountMaySync()) == true else { return }
         // Not pointed at the family: there is nothing to sync, and the last
         // success says nothing about now.
         guard store.realmIsShared else {
-            if case .upToDate = status { status = .idle }
-            if status == .syncing { status = .idle }
+            switch status {
+            case .upToDate, .syncing, .offline, .serverUnreachable: status = .idle
+            default: break
+            }
             return
         }
-        status = .syncing
+        markSyncing()
         operationalStatus.phase = .request
         var owed = (try? store.nextDispatchBatch(limit: Int.max).count) ?? 0
         for _ in 0..<Self.maximumPassesPerSync {
@@ -611,6 +733,10 @@ public final class FamilySyncEngine {
         }
         guard !stopped else { return }
         status = currentStatus()
+        unanswered = coordinator.isOffline
+        if !coordinator.lastAttemptSucceeded {
+            AppLog.sync.error("sync attempt failed: \(self.coordinator.lastFailureKind ?? "unknown", privacy: .public); status \(String(describing: self.status), privacy: .public)")
+        }
         if status == .needsSignIn {
             operationalStatus.signIn = .required
             operationalStatus.phase = .idle
@@ -654,10 +780,35 @@ public final class FamilySyncEngine {
         }
     }
 
+    /// A retry after a failure keeps the failure showing until it has an
+    /// answer. Flipping to "Syncing" for every retry made Home's offline card
+    /// blink out and back every 20 seconds, shifting everything under it.
+    private func markSyncing() {
+        switch status {
+        case .offline, .serverUnreachable: break
+        default: status = .syncing
+        }
+    }
+
+    /// "Offline", until the failures have outlasted `serverUnreachableAfter`
+    /// on a phone that has a network: then the server is what is missing.
+    /// Only failures with a network count: a phone back from hours in
+    /// airplane mode starts the clock when the network returns.
+    private func offlineStatus() -> Status {
+        guard internetAvailable() else {
+            offlineSince = nil
+            return .offline
+        }
+        let at = now()
+        let since = offlineSince ?? at
+        offlineSince = since
+        return at.timeIntervalSince(since) >= Self.serverUnreachableAfter ? .serverUnreachable : .offline
+    }
+
     private func currentStatus() -> Status {
         if freshProofRequired { return .needsSignIn }
         if let issue = coordinator.currentIssue { return .failed(issue.presentation.message) }
-        if coordinator.isOffline { return .offline }
+        if coordinator.isOffline { return offlineStatus() }
         if coordinator.lastAttemptSucceeded {
             return importRefused ? .failed(SyncIssueCopy.importIncomplete) : .upToDate(Date())
         }
@@ -733,7 +884,7 @@ public final class FamilySyncEngine {
             }
             return .failed(SyncIssueCopy.retrying)
         }
-        if error is URLError { return .offline }
+        if error is URLError { return offlineStatus() }
         // A renewal inside the activation that only Apple can put right.
         if SessionRefresher.requiresFreshProof(error) { return .needsSignIn }
         // One that clears by itself — another process renewing — is the

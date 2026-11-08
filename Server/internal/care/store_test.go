@@ -2,6 +2,7 @@ package care_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -435,6 +436,104 @@ func TestReadPullIsOneStatementSnapshot(t *testing.T) {
 	}
 }
 
+// The pull's cached generic plan survives a VACUUM or ANALYZE of families.
+// Either updates families' pg_class row (or its statistics), which
+// invalidates every cached plan that names families; under load every
+// backend then re-plans the pull over all sixteen care_entities partitions
+// at once (vm-v2-analysis.md, the stall at ~40 s past every minute). The
+// test sees a re-plan by changing the planner settings after the plan is
+// cached: a cached plan keeps the index scans it was built with, a new plan
+// takes the sequential scans the new settings force. A control statement
+// that names families must be re-planned by each event (so the event did
+// invalidate); the pull must not be.
+func TestReadPullPlanSurvivesFamiliesVacuumAndAnalyze(t *testing.T) {
+	h := testkit.New(t)
+	ctx := t.Context()
+	baby := caretest.BabyRow(t, h, storeBaby, 1)
+	if err := caretest.Write(t, h, baby, caretest.FeedRow(t, h, baby, "21000000-0000-4000-8000-000000000002", 2)); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := pgx.ConnectConfig(ctx, h.Runtime.Config().ConnConfig)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close(context.Background())
+	if _, err := conn.Exec(ctx, `SELECT set_config('app.account_id', $1, false), set_config('app.family_id', $2, false)`,
+		h.Owner.AccountID, h.FamilyID); err != nil {
+		t.Fatal(err)
+	}
+	settings := func(t *testing.T, indexes bool) {
+		t.Helper()
+		on, off := "on", "off"
+		if !indexes {
+			on, off = off, on
+		}
+		for _, setting := range []string{"SET plan_cache_mode = force_generic_plan", "SET enable_seqscan = " + off, "SET enable_bitmapscan = off",
+			"SET enable_indexscan = " + on, "SET enable_indexonlyscan = " + on} {
+			if _, err := conn.Exec(ctx, setting); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	statements := map[string]string{"pull": care.Statements()["read_pull"], "control": `SELECT next_sequence FROM families WHERE id = $1`}
+	args := map[string]string{"pull": "'" + h.FamilyID + "'::uuid, 0, 10", "control": "'" + h.FamilyID + "'::uuid"}
+	// cachedPlan reports whether the prepared statement still runs the plan
+	// it was prepared with (index scans), or was planned again (sequential
+	// scans).
+	cachedPlan := func(t *testing.T, name, prepared string) bool {
+		t.Helper()
+		rows, err := conn.Query(ctx, "EXPLAIN (COSTS OFF) EXECUTE "+prepared+"("+args[name]+")")
+		if err != nil {
+			t.Fatal(err)
+		}
+		lines, err := pgx.CollectRows(rows, pgx.RowTo[string])
+		if err != nil {
+			t.Fatal(err)
+		}
+		plan := strings.Join(lines, "\n")
+		index, seq := strings.Contains(plan, "Index Scan") || strings.Contains(plan, "Index Only Scan"), strings.Contains(plan, "Seq Scan")
+		if index == seq {
+			t.Fatalf("%s plan is neither the cached nor a new one:\n%s", name, plan)
+		}
+		return index
+	}
+	for round, event := range []string{"ANALYZE public.families", "VACUUM public.families"} {
+		t.Run(event, func(t *testing.T) {
+			prepared := func(name string) string { return fmt.Sprintf("%s_%d", name, round) }
+			settings(t, true)
+			for name, sql := range statements {
+				if _, err := conn.Exec(ctx, "PREPARE "+prepared(name)+" AS "+sql); err != nil {
+					t.Fatal(err)
+				}
+				if !cachedPlan(t, name, prepared(name)) {
+					t.Fatalf("%s did not plan with index scans", name)
+				}
+			}
+			settings(t, false)
+			for name := range statements {
+				if !cachedPlan(t, name, prepared(name)) {
+					t.Fatalf("%s was planned again by a settings change alone", name)
+				}
+			}
+			// Dead versions, as the write load leaves them.
+			for i := 0; i < 3; i++ {
+				if _, err := h.Migrator.Exec(ctx, `UPDATE public.families SET next_sequence = next_sequence WHERE id = $1`, h.FamilyID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if _, err := h.Migrator.Exec(ctx, event); err != nil {
+				t.Fatal(err)
+			}
+			if cachedPlan(t, "control", prepared("control")) {
+				t.Fatalf("%s did not invalidate a plan that names families", event)
+			}
+			if !cachedPlan(t, "pull", prepared("pull")) {
+				t.Errorf("%s invalidated the pull's cached plan: every backend plans it again", event)
+			}
+		})
+	}
+}
+
 // A snapshot pages every row, tombstones included, by kind code then id.
 func TestSnapshotPageKeyOrder(t *testing.T) {
 	h := testkit.New(t)
@@ -858,7 +957,7 @@ func TestCareQueriesUseOnePartitionAndIndexes(t *testing.T) {
 		}
 		parents[child] = parent
 	}
-	if rows.Err() != nil || len(parents) != 16*10 {
+	if rows.Err() != nil || len(parents) != 16*11 {
 		t.Fatalf("partition indexes %d err=%v", len(parents), rows.Err())
 	}
 
@@ -882,6 +981,7 @@ func TestCareQueriesUseOnePartitionAndIndexes(t *testing.T) {
 		{"fetch_live_timers", family + "," + uuids, "care_entities_one_live_timer", 1, []string{"family_id = $1", "baby_id = ANY ($2)"}, false},
 		{"fetch_cascade_targets", family + "," + uuids, "care_entities_history_idx", 1, []string{"family_id = $1", "baby_id = ANY ($2)"}, false},
 		{"fetch_live_babies", family, "care_entities_baby_match_idx", 1, []string{"family_id = $1"}, false},
+		{"fetch_open_pump", family, "care_entities_one_open_pump", 1, []string{"family_id = $1"}, false},
 		{"read_pull", family + ",100,500", "care_entities_seq_key", 1, []string{"family_id = $1", "changed_seq > $2", "changed_seq <= "}, true},
 		{"changes", family + ",100,2000,500", "care_entities_seq_key", 1, []string{"family_id = $1", "changed_seq > $2", "changed_seq <= $3"}, true},
 		{"snapshot_page", family + ",2::smallint,'00000000-0000-0000-0000-000000000001'::uuid,201", "care_entities_snapshot_idx", 1,
@@ -942,6 +1042,12 @@ func TestCareQueriesUseOnePartitionAndIndexes(t *testing.T) {
 			} else {
 				if len(scans) != c.scans || pruned != c.scans {
 					t.Fatalf("%d partition scans, %d pruned to one partition, want %d: %s", len(scans), pruned, c.scans, raw)
+				}
+				// No other table: the pull reads its high water through
+				// app.family_high_water, so its plan does not name families
+				// (TestReadPullPlanSurvivesFamiliesVacuumAndAnalyze).
+				if len(other) != 0 {
+					t.Fatalf("scans %v beside care_entities: %s", other, raw)
 				}
 				for _, scan := range scans {
 					if parents[scan.IndexName] != c.index {

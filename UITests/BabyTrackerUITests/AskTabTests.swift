@@ -7,7 +7,7 @@ import XCTest
         XCTAssertTrue(app.goToTab("Ask"))
         let input = app.descendants(matching: .any)["ask.question"]
         XCTAssertTrue(input.waitForExistence(timeout: 5))
-        XCTAssertTrue(app.navigationBars["Ask"].exists, "The title is plain Ask, without the child's name")
+        XCTAssertTrue(app.descendants(matching: .any)["ask.babyName"].exists || app.buttons["ask.babySwitcher"].exists, "Ask carries the baby header like every tab")
         input.tap()
         input.typeText("Is he eating better?")
         app.buttons["ask.send"].tap()

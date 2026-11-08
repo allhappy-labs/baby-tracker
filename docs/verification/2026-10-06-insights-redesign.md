@@ -2,7 +2,7 @@
 
 Branch `feat/insights-redesign` (worktree `.worktrees/insights-redesign`). Spec: `docs/superpowers/specs/2026-10-04-insights-redesign-design.md`, including its 2026-10-06 amendments. Approved mockups: `mockups/2026-10-04-insights-redesign/` (`insights-full.html` for Week, All and new baby; `insights-growth.html` for G1).
 
-All simulator work ran on the one shared device, `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853` (iPhone 17 Pro). Before every `xcodebuild` run, `pgrep -fl xcodebuild` found nothing else running. No simulator was created or cloned. Nothing was pushed, deployed or installed on a phone.
+All simulator work ran on the one shared device, `platform=iOS Simulator,id=<simulator-udid>` (iPhone 17 Pro). Before every `xcodebuild` run, `pgrep -fl xcodebuild` found nothing else running. No simulator was created or cloned. Nothing was pushed, deployed or installed on a phone.
 
 ## Gates
 
@@ -14,13 +14,13 @@ Logs are under `work/` (git-ignored).
 | `-only-testing:BabyTrackerUITests/AccessibilityAuditTests/testAuditInsights`, with the fix | exit 0 — `Executed 1 test, with 0 failures`, 13.6 s |
 | UI subset, run 2, on `82f4c07f` plus the Task 10 test changes | exit 0 — `Executed 9 tests, with 0 failures (0 unexpected) in 206.512 s`, `** TEST SUCCEEDED **` (21:10–21:14) |
 | `make test` | exit 0 — `OK: 1609 tests` (`EXPECTED_TESTS` unchanged: Task 10 adds UI tests only) |
-| `xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-…' build` | exit 0 — `** BUILD SUCCEEDED **` |
+| `xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build` | exit 0 — `** BUILD SUCCEEDED **` |
 | `python3 scripts/verify-localizations.py`, compared with `comm -13 <(sort work/insights-loc-baseline.txt) <(sort work/insights-loc-task10.txt)` | the script exits 1 on 144 lines, all of them existing AskFeature gaps. The baseline had 272. `comm -13` printed nothing, so there are no new problems. |
 
 The UI subset command:
 
 ```bash
-xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/GrowthFlowUITests \
   -only-testing:BabyTrackerUITests/AccessibilityAuditTests/testAuditInsights \
@@ -148,5 +148,5 @@ Default size, English, for comparison: `work/final-fit-before/c-growth-en.png` s
 - `feat/insights-redesign` fast-forwarded onto `main` at `7a9294fe` (main had not moved since `73e27864`). `make test` on that exact tree: `OK: 1612 tests`.
 - The user chose to install main as-is. That also ships everything merged since the last recorded phone install (`1f1ca19`, 2026-10-03), including the tool-calling Ask and the family Live Activity push client with its `aps-environment` entitlement, ahead of that feature's own rollout runbook. The push client registers only with the built-in server when its live `GET /v1/server` advertises the push capability (`LiveActivityPushEligibility.isBuiltInPushServer`); the production server has not been upgraded to schema 28, so no registration is expected. Not observed on a phone.
 - Signed Debug `generic/platform=iOS` build from the clean worktree at `7a9294fe`: `BUILD SUCCEEDED` (log `/tmp/bt-insights-phone-build.log`); `codesign --verify --deep --strict` passed; team `TEAM123456`, `aps-environment` `development`; app executable SHA-256 `a55c2e9e3bfb065b925039f40ea340a9c2dad406a5c2a6ad6dd02e8ded759f91`.
-- `devicectl device install app` exited 0 on `Phone A` and `Phone B` (in place, no uninstall, local data kept); installed-app queries list `com.olhapi.babytracker` 1.0 (1) on both. Neither app was launched.
+- `devicectl device install app` exited 0 on `Phone A` and `Phone B` (in place, no uninstall, local data kept); installed-app queries list `com.example.babytracker` 1.0 (1) on both. Neither app was launched.
 - Server untouched: this branch changes nothing under `Server/`.

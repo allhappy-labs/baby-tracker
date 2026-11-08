@@ -40,7 +40,7 @@ let package = Package(
         .target(name: "LoggingFeature", dependencies: ["BabyCore", "BabyProtocol", "BabyStore", "BabyUI"], resources: [.process("Localizable.xcstrings")]),
         .target(name: "HistoryFeature", dependencies: ["BabyCore", "BabyProtocol", "BabyStore", "BabyUI"], resources: [.process("Localizable.xcstrings")]),
         .target(name: "InsightsFeature", dependencies: ["BabyCore", "BabyStore", "BabyUI", "GrowthFeature"], resources: [.process("Localizable.xcstrings")]),
-        .target(name: "AskFeature", dependencies: ["BabyCore", "BabyStore"], resources: [.process("Localizable.xcstrings")]),
+        .target(name: "AskFeature", dependencies: ["BabyCore", "BabyStore", "BabyUI"], resources: [.process("Localizable.xcstrings")]),
         .target(name: "BabyFeature", dependencies: ["BabyCore", "BabyStore", "BabyUI"], resources: [.process("Localizable.xcstrings")]),
         .target(name: "SettingsFeature", dependencies: ["BabyCore", "BabyStore", "BabyUI", "BabyFeature", "BabySync"], resources: [.process("Localizable.xcstrings")]),
         .testTarget(name: "GrowthFeatureTests", dependencies: ["GrowthFeature", "BabyCore", "BabyStore"]),

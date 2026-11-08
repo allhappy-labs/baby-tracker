@@ -382,7 +382,11 @@ struct TwoCaregiverSyncE2ETests {
             #expect(try phone.store.lastSupplement(for: baby.id)?.id == iron.id)
             #expect(try phone.store.supplementNames(for: baby.id) == ["Iron", "Vitamin D", "Vitamin D drops"])
         }
+        // Before the one fresh snapshot this account may hold open: the
+        // server admits two at a time, and the growth steps take the other.
+        let shot = try await immunizationProof(owner: owner, joiner: joiner, baby: baby, clock: clock)
         let fresh = try await joiner.freshSnapshot()
+        try immunizationSnapshotProof(fresh, shot: shot, phones: [owner, joiner])
         #expect(try fresh.feedingSessions(for: baby.id,
             from: composite.startedAt.addingTimeInterval(-1), to: stoppedFeed.startedAt.addingTimeInterval(1))
             .contains { Set($0.feedIDs) == Set([composite.id, stoppedFeed.id]) })
@@ -1093,6 +1097,86 @@ struct E2EFailure: Error, CustomStringConvertible {
 private func same(_ a: Date?, _ b: Date?) -> Bool {
     guard let a, let b else { return a == nil && b == nil }
     return abs(a.timeIntervalSince(b)) < 0.001
+}
+
+/// A vaccination through the real server, both ways: create, the family's
+/// spelling and the next dose on the other phone, an edit that clears the
+/// dose, a delete, and a fresh snapshot. Its own proof lines, so the script
+/// can require the last one.
+@MainActor
+private func immunizationProof(owner: Phone, joiner: Phone, baby: Baby, clock: TestDateProvider) async throws -> (id: UUID, givenAt: Date) {
+    func shots(_ phone: Phone) throws -> [ImmunizationEntry] { try phone.store.immunizations(for: baby.id) }
+    func line(_ step: Int, _ text: String) { print("immunization proof: step \(step): \(text)") }
+
+    clock.advance(by: 60)
+    let givenFirst = clock.now.addingTimeInterval(-20 * 86_400)
+    let first = try owner.store.logImmunization(vaccine: "Prevenar 13", dose: 1, for: baby.id, at: givenFirst, note: "left thigh")
+    try await owner.sync(.localWrite)
+    try await joiner.sync()
+    let received = try #require(try shots(joiner).first { $0.id == first.id })
+    #expect(received.vaccine == "Prevenar 13")
+    #expect(received.dose == 1)
+    #expect(received.note == "left thigh")
+    #expect(received.timeZoneID == first.timeZoneID)
+    #expect(same(received.givenAt, givenFirst))
+    #expect(try joiner.store.vaccineNames() == ["Prevenar 13"])
+    #expect(try joiner.store.nextDose(of: "Prevenar 13", for: baby.id) == 2)
+    line(1, "a shot created by the owner reached the joiner with its vaccine, dose, note, zone and time; the joiner's next dose is 2")
+
+    clock.advance(by: 60)
+    let second = try joiner.store.logImmunization(vaccine: " prevenar 13 ", dose: 2, for: baby.id)
+    #expect(second.vaccine == "Prevenar 13")
+    try await joiner.sync(.localWrite)
+    try await owner.sync()
+    #expect(try shots(owner).map(\.id) == [second.id, first.id])
+    #expect(try owner.store.nextDose(of: "Prevenar 13", for: baby.id) == 3)
+    line(2, "the joiner's shot reused the family's spelling and reached the owner; the owner's next dose is 3")
+
+    clock.advance(by: 60)
+    let moved = givenFirst.addingTimeInterval(-86_400)
+    try joiner.store.editImmunization(received, vaccine: "Prevenar 13", dose: nil, at: moved, note: nil)
+    try await joiner.sync(.localWrite)
+    try await owner.sync()
+    let editReceipt = try #require(try joiner.store.context.fetch(FetchDescriptor<SyncOutboxEntry>()).first {
+        $0.entityID == first.id && $0.operationRaw == "update"
+    })
+    try #require(editReceipt.deliveryState == .acknowledged, "immunization edit state=\(editReceipt.deliveryState)")
+    #expect(first.dose == nil)
+    #expect(first.note == nil)
+    #expect(same(first.givenAt, moved))
+    #expect(try owner.store.nextDose(of: "Prevenar 13", for: baby.id) == 3)
+    line(3, "the joiner cleared the owner's dose and note and moved its time; the owner sees all three")
+
+    clock.advance(by: 60)
+    try owner.store.softDelete(try #require(try shots(owner).first { $0.id == second.id }))
+    try await owner.sync(.localWrite)
+    try await joiner.sync()
+    for phone in [owner, joiner] {
+        #expect(try shots(phone).map(\.id) == [first.id])
+        #expect(try phone.store.vaccineNames() == ["Prevenar 13"])
+        #expect(try phone.store.nextDose(of: "Prevenar 13", for: baby.id) == 1)
+    }
+    line(4, "the owner's delete of the joiner's shot converged; one shot remains on both phones")
+
+    return (first.id, moved)
+}
+
+/// The fresh snapshot the two-caregiver test takes holds exactly the one live
+/// shot, with the other phone's edit.
+@MainActor
+private func immunizationSnapshotProof(_ fresh: BabyStore, shot: (id: UUID, givenAt: Date), phones: [Phone]) throws {
+    func line(_ step: Int, _ text: String) { print("immunization proof: step \(step): \(text)") }
+    let snapshot = try fresh.context.fetch(FetchDescriptor<ImmunizationEntry>()).filter { !$0.isTombstoned }
+    #expect(snapshot.map(\.id) == [shot.id])
+    #expect(snapshot.first?.vaccine == "Prevenar 13")
+    #expect(snapshot.first?.dose == nil)
+    #expect(snapshot.first?.note == nil)
+    #expect(same(snapshot.first?.givenAt, shot.givenAt))
+    line(5, "a fresh snapshot from the server holds exactly the one live shot, with the edit")
+    for phone in phones {
+        #expect(try phone.store.nextDispatchBatch(limit: 100).isEmpty)
+    }
+    line(6, "create, reuse, edit to no dose, delete and fresh snapshot agree on both phones; both outboxes drained")
 }
 
 private func proof(_ step: Int, _ line: String) {

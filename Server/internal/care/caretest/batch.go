@@ -29,7 +29,7 @@ const (
 
 // Kind digits lead the ids the builders derive, so ids of different kinds
 // never collide.
-var kindDigit = map[string]int{"feed": 2, "sleep": 3, "diaper": 4, "supplement": 6, "measurement": 7}
+var kindDigit = map[string]int{"feed": 2, "sleep": 3, "diaper": 4, "supplement": 6, "measurement": 7, "immunization": 9}
 
 // canonical is m as the server receives it: encoded and decoded through
 // protocol.DecodeMutation.
@@ -58,7 +58,7 @@ func RecordID(kind, baby string, n int) string {
 }
 
 // Record is the create of the n-th record of kind (feed, sleep, diaper,
-// supplement or measurement) for baby, with a fixed valid payload.
+// supplement, measurement or immunization) for baby, with a fixed valid payload.
 func Record(kind, baby string, n int) protocol.Mutation {
 	id := RecordID(kind, baby, n)
 	var payload protocol.Payload
@@ -79,6 +79,9 @@ func Record(kind, baby string, n int) protocol.Mutation {
 		position := "lying"
 		payload = protocol.MeasurementPayload{BabyID: baby, MeasuredAt: "2026-09-20T14:10:00Z", LoggedAt: "2026-09-20T15:00:00Z",
 			TimeZoneID: zoneID, WeightKG: protocol.MustParseDecimal("7.125"), LengthCM: protocol.MustParseDecimal("65.5"), LengthPosition: &position}
+	case "immunization":
+		dose := 1 + n%10
+		payload = protocol.ImmunizationPayload{BabyID: baby, GivenAt: "2026-09-20T09:30:00Z", TimeZoneID: zoneID, Vaccine: "Prevenar 13", Dose: &dose}
 	default:
 		panic("caretest: record kind " + kind)
 	}
@@ -128,6 +131,8 @@ func BabyOf(m protocol.Mutation) string {
 	case protocol.SupplementPayload:
 		return p.BabyID
 	case protocol.MeasurementPayload:
+		return p.BabyID
+	case protocol.ImmunizationPayload:
 		return p.BabyID
 	case protocol.GrowthProfilePayload:
 		return p.BabyID

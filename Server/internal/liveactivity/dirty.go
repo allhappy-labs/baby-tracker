@@ -8,7 +8,7 @@ import (
 )
 
 // MaximumDirtyFamilies bounds Dirty. A family recorded past it is dropped:
-// the worker's once-a-minute sweep (Queue.SweepWork) dirties every
+// the worker's once-a-minute sweep (Queue.SweepWorkPage) dirties every
 // registered family whose sequence moved past its last flush, so a dropped
 // change is late, never lost.
 const MaximumDirtyFamilies = 100_000

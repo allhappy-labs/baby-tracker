@@ -4,7 +4,7 @@ import SwiftUI
 /// tracker, breast side and diaper content. Each case names a vector asset in
 /// `Icons.xcassets`, rendered as a template image so it tints like a symbol.
 public enum BabyIcon: String, CaseIterable, Sendable {
-    case feed, breastLeft, breastRight, bottle, sleep, diaper, solids, meds, growth, wet, dirty, mixed, stop, pause, more, clock, plus, close
+    case feed, breastLeft, breastRight, bottle, sleep, diaper, solids, meds, growth, wet, dirty, mixed, stop, pause, more, clock, plus, close, vaccine, pump
 
     /// The asset catalog name backing this icon. `breastLeft` and
     /// `breastRight` share the feed drop — the letter overlay in

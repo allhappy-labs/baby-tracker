@@ -17,7 +17,7 @@ import BabyCore
         #expect(model.volumeML == 90)
         #expect(model.contents == .formula)
         #expect(model.start == at)
-        #expect(model.chips == [30, 60, 90, 120])
+        #expect(model.chips == [35, 65, 100, 135])
         #expect(model.canSave)
     }
 

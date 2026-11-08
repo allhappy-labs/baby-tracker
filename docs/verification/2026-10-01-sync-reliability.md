@@ -227,7 +227,7 @@ Task9 commit `f09b4ca` preserves two bounded diagnostics with all54 cells incomp
 
 Independent Task9 review found four Important defects: partial failed measurement duration, forced-timeout evidence preservation, missing actual resource instrumentation, and global teardown deadline enforcement. The original implementer is fixing these; Task9 remains active. Narrow instrumentation is authorized within the approved measurement requirement, preserving fence/validation order and emitting observations after release. Final server race checks are running; later gates will record their actual source boundaries and recheck affected instrumentation.
 
-Task10 uses only the mandated existing shared iPhone17Pro D17101C9-01EB-488D-AFE1-58E6C089B853. The two affected Home recovery tests use isolated in-memory fixtures; the broad UI suite would delete shared persistent data and is excluded. No new simulator, reset, main integration, push, paired-phone update or deployment is authorized for this work. No additional user approval currently blocks implementation.
+Task10 uses only the mandated existing shared iPhone17Pro <simulator-udid>. The two affected Home recovery tests use isolated in-memory fixtures; the broad UI suite would delete shared persistent data and is excluded. No new simulator, reset, main integration, push, paired-phone update or deployment is authorized for this work. No additional user approval currently blocks implementation.
 
 
 ## Sealed at user request — 2026-10-01

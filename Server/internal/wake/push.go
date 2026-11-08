@@ -224,7 +224,10 @@ type pushReport struct {
 	// is not one); failed counts those Apple did not accept and those never
 	// sent.
 	sent, failed int
-	answers      tickAnswers
+	// notSentCount counts the sends the client refused before writing;
+	// ambiguous the sends whose answer was lost (both within failed).
+	notSentCount, ambiguous int
+	answers                 tickAnswers
 	// The first answer of each logged kind.
 	notSent, backoff, retry, provider, configuration *loggedAnswer
 	forget                                           []pushJob // refused tokens
@@ -235,8 +238,13 @@ type pushReport struct {
 func (r *pushReport) record(job pushJob, result apns.Result, err error) answer {
 	a := classify(result, err)
 	notSent := errors.Is(err, apns.ErrNotSent)
-	if !notSent {
+	if notSent {
+		r.notSentCount++
+	} else {
 		r.sent++
+		if err != nil || result.Class == apns.Ambiguous {
+			r.ambiguous++
+		}
 	}
 	if a != answerAccepted {
 		r.failed++
@@ -270,10 +278,12 @@ func (r *pushReport) record(job pushJob, result apns.Result, err error) answer {
 // sendPushes sends the tick's reserved pushes, each under the client's own
 // bound: the first alone (it opens, or proves, the one HTTP/2 connection the
 // rest share, and an answer that pauses sends stops the tick before any
-// other leaves), then the rest at most pushConcurrency at once. Once an
-// answer pauses sends, or the tick's context ends, no further push is
-// started: those are reported unsent.
-func (w *Worker) sendPushes(ctx context.Context, jobs []pushJob) pushReport {
+// other leaves), then the rest at most pushConcurrency at once. Each push
+// runs under sendCtx (the send budget, detached from the tick), so the
+// tick's end never cancels one in flight. Once an answer pauses sends, or
+// the tick's context or the budget ends, no further push is started: those
+// are reported unsent.
+func (w *Worker) sendPushes(ctx, sendCtx context.Context, jobs []pushJob) pushReport {
 	var (
 		mu     sync.Mutex
 		report pushReport
@@ -283,11 +293,12 @@ func (w *Worker) sendPushes(ctx context.Context, jobs []pushJob) pushReport {
 	if len(jobs) == 0 {
 		return report
 	}
-	if ctx.Err() != nil {
+	ended := func() bool { return ctx.Err() != nil || sendCtx.Err() != nil }
+	if ended() {
 		report.unsent = jobs
 		return report
 	}
-	first, err := w.Pusher.Wake(ctx, jobs[0].target.env, jobs[0].target.token)
+	first, err := w.Pusher.Wake(sendCtx, jobs[0].target.env, jobs[0].target.token)
 	stop = report.record(jobs[0], first, err).pauses()
 	slots := make(chan struct{}, pushConcurrency)
 	for i := 1; i < len(jobs); i++ {
@@ -297,9 +308,10 @@ func (w *Worker) sendPushes(ctx context.Context, jobs []pushJob) pushReport {
 		case slots <- struct{}{}:
 			acquired = true
 		case <-ctx.Done():
+		case <-sendCtx.Done():
 		}
 		mu.Lock()
-		halted := stop || ctx.Err() != nil
+		halted := stop || ended()
 		if halted {
 			report.unsent = append(report.unsent, jobs[i:]...)
 		}
@@ -312,7 +324,7 @@ func (w *Worker) sendPushes(ctx context.Context, jobs []pushJob) pushReport {
 		}
 		wg.Go(func() {
 			defer func() { <-slots }()
-			result, err := w.Pusher.Wake(ctx, job.target.env, job.target.token)
+			result, err := w.Pusher.Wake(sendCtx, job.target.env, job.target.token)
 			mu.Lock()
 			defer mu.Unlock()
 			if report.record(job, result, err).pauses() {
@@ -384,6 +396,7 @@ const maxSettleRows = 4 * maxPushTargets
 // deliver, and release the reservations of pushes never sent (each a device
 // row the tick reserved at reservedAt).
 type pendingSettle struct {
+	id                          uint64 // from keepSettle: 1, 2, ...
 	reservedAt                  time.Time
 	forget, undelivered, unsent []pushJob
 }
@@ -393,11 +406,14 @@ func (s pendingSettle) rows() int { return len(s.forget) + len(s.undelivered) + 
 // keepSettle keeps a tick's settle until it applies. Past maxSettleRows the
 // oldest kept settles are dropped, logged at Warn: their reservations stand,
 // so those devices miss that write's push (they are pushed for the family's
-// next write).
-func (w *Worker) keepSettle(settle pendingSettle) {
+// next write). It returns the kept settle's id (0: an empty settle, not
+// kept).
+func (w *Worker) keepSettle(settle pendingSettle) uint64 {
 	if settle.rows() == 0 {
-		return
+		return 0
 	}
+	w.settleSeq++
+	settle.id = w.settleSeq
 	w.settles = append(w.settles, settle)
 	w.settleRows += settle.rows()
 	dropped := 0
@@ -406,10 +422,12 @@ func (w *Worker) keepSettle(settle pendingSettle) {
 		w.settleRows -= w.settles[0].rows()
 		w.settles = w.settles[1:]
 	}
+	w.totals.settled(w.settleRows, 0)
 	if dropped > 0 && w.Logger != nil {
 		w.Logger.Warn("wake settles dropped: too many kept; their reservations stand", slog.Int("rows", dropped),
 			slog.Int("kept_rows", w.settleRows), slog.Int("cap", maxSettleRows))
 	}
+	return settle.id
 }
 
 // settleColumns are the owe or release statement's arrays.
@@ -441,10 +459,14 @@ func (w *Worker) rescanSettled(settle pendingSettle) {
 	w.Tracker.requeue(families)
 }
 
-// applySettles runs every kept settle in one short implicit transaction
-// inside a worker slot, and returns them once it committed (none is kept
-// then). On failure they all stay kept, for the next tick (or the worker's
-// stop) to apply. Every statement is guarded by its row's reservation
+// applySettles runs every kept settle, oldest first, each in its own short
+// implicit transaction, all inside one worker slot. It returns the settles
+// that committed (no longer kept), in order, and the failures of the
+// others: each of those stays kept (quarantined) for the next tick or the
+// worker's stop and counts once in Totals.SettlesFailed, so one settle that
+// cannot apply never holds the others back (C35). Once ctx has ended after
+// a failure the rest are kept untried, and not counted. Without a worker
+// slot no settle can apply: each kept one counts as failed. Every statement is guarded by its row's reservation
 // (pushed_sequence and pushed_at as its tick reserved them), and forgetting
 // a token deletes it only while it is the token sent, so applying a settle
 // again (after a commit whose answer was lost) changes nothing. If ctx
@@ -461,23 +483,44 @@ func (w *Worker) applySettles(ctx context.Context) ([]pendingSettle, error) {
 	if w.Slots != nil {
 		release, err := w.Slots.Acquire(ctx)
 		if err != nil {
+			w.totals.settled(w.settleRows, len(w.settles))
 			return nil, fmt.Errorf("wake: settle pushes: %w", err)
 		}
 		defer release()
 	}
+	var applied, kept []pendingSettle
+	var failures []error
+	keptRows := 0
+	for _, settle := range w.settles {
+		if len(failures) > 0 && ctx.Err() != nil {
+			kept, keptRows = append(kept, settle), keptRows+settle.rows()
+			continue
+		}
+		if err := w.applySettle(ctx, settle); err != nil {
+			kept, keptRows = append(kept, settle), keptRows+settle.rows()
+			failures = append(failures, err)
+			continue
+		}
+		applied = append(applied, settle)
+	}
+	w.settles, w.settleRows = kept, keptRows
+	w.totals.settled(keptRows, len(failures))
+	return applied, errors.Join(failures...)
+}
+
+// applySettle runs one settle's statements in one implicit transaction.
+func (w *Worker) applySettle(ctx context.Context, settle pendingSettle) error {
 	var forgetDevices []string
 	var forgetTokens [][]byte
 	var owe, release settleColumns
-	for _, settle := range w.settles {
-		for _, job := range settle.forget {
-			forgetDevices, forgetTokens = append(forgetDevices, job.device), append(forgetTokens, job.target.token)
-		}
-		for _, job := range settle.undelivered {
-			owe.add(job, settle.reservedAt)
-		}
-		for _, job := range settle.unsent {
-			release.add(job, settle.reservedAt)
-		}
+	for _, job := range settle.forget {
+		forgetDevices, forgetTokens = append(forgetDevices, job.device), append(forgetTokens, job.target.token)
+	}
+	for _, job := range settle.undelivered {
+		owe.add(job, settle.reservedAt)
+	}
+	for _, job := range settle.unsent {
+		release.add(job, settle.reservedAt)
 	}
 	batch := &pgx.Batch{}
 	batch.Queue(sqlTimeouts)
@@ -491,11 +534,9 @@ func (w *Worker) applySettles(ctx context.Context) ([]pendingSettle, error) {
 		batch.Queue(sqlReleasePushes, release.families, release.devices, release.previous, release.previousAt, release.sequences, release.reservedAt)
 	}
 	if err := w.Pool.SendBatch(ctx, batch).Close(); err != nil {
-		return nil, fmt.Errorf("wake: settle pushes: %w", err)
+		return fmt.Errorf("wake: settle pushes: %w", err)
 	}
-	applied := w.settles
-	w.settles, w.settleRows = nil, 0
-	return applied, nil
+	return nil
 }
 
 // markRow is one device's mark: woken_* (wake) and the push reservation

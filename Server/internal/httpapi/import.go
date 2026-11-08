@@ -36,7 +36,7 @@ func importHandler(options Options, operation string) http.HandlerFunc {
 		}
 		noteCredential := func(context.Context, error) {}
 		if operation != "status" {
-			admitted, ok := admitAfterBody(w, r, options, int64(options.SyncLimits.SyncBodyBytes))
+			admitted, ok := admitAfterBody(w, r, options, digests, int64(options.SyncLimits.SyncBodyBytes), writeRequestError)
 			if !ok {
 				return
 			}

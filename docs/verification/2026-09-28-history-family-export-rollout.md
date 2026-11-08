@@ -17,6 +17,6 @@
 
 ## Phones
 
-- `devicectl device install app` reported successful installation of `com.olhapi.babytracker` on `Phone A` and `Phone B`; both subsequent installed-app queries found the bundle.
+- `devicectl device install app` reported successful installation of `com.example.babytracker` on `Phone A` and `Phone B`; both subsequent installed-app queries found the bundle.
 - `devicectl device process launch` succeeded on `Phone A`. Marta's phone denied launch because it was locked; a second attempt returned the same denial. The user declined further agent-driven device checks.
 - Installation and launch do not prove the History chips, leave confirmation, or export behavior on the physical devices. The targeted simulator captures cover the first two screens. The user elected to test export on their own iPhone; no authenticated live export or download is claimed here.

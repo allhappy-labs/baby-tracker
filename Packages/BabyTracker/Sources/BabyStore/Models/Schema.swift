@@ -1,12 +1,13 @@
 import Foundation
+import BabyCore
 import SwiftData
 
 public enum BabySchema {
-    public static let all: [any PersistentModel.Type] = SchemaV10.models
+    public static let all: [any PersistentModel.Type] = SchemaV12.models
 
     /// The App Group is what lets the app, the widget extension, and Live
     /// Activity intents read one database instead of three.
-    public static let appGroupID = "group.com.olhapi.babytracker"
+    public static let appGroupID = AppIdentity.appGroupID
 
     /// Serialises store opening, because Core Data's is not thread-safe.
     ///
@@ -57,7 +58,7 @@ public enum BabySchema {
         inMemory: Bool,
         ifIncompatible policy: IncompatibleStorePolicy = .refuse
     ) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: SchemaV10.self)
+        let schema = Schema(versionedSchema: SchemaV12.self)
         if inMemory {
             let configuration = ModelConfiguration(schema: schema, isStoredInMemoryOnly: true)
             return try makeContainer(schema: schema, migrationPlan: BabyStoreMigrationPlan.self, configurations: [configuration])
@@ -72,7 +73,7 @@ public enum BabySchema {
         bootstrapLockURL: URL? = nil,
         ifIncompatible policy: IncompatibleStorePolicy = .refuse
     ) throws -> ModelContainer {
-        let schema = Schema(versionedSchema: SchemaV10.self)
+        let schema = Schema(versionedSchema: SchemaV12.self)
         let configuration = ModelConfiguration(schema: schema, url: storeURL)
         let lockURL = bootstrapLockURL ?? storeURL.appendingPathExtension("bootstrap.lock")
         return try openOnDisk(schema: schema, configuration: configuration, lockURL: lockURL, policy: policy)

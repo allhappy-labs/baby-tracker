@@ -1,3 +1,110 @@
+# Design system (2026-11-07)
+
+- [x] Stage 1: shared kit in BabyUI (tokens, Card/CardSection/ListRow, Chip, buttons/tiles/confirmDelete, SheetScaffold/ConfirmSheet, ScreenScaffold/EmptyState/InlineError/PartsRow, kit gallery previews); no screen changed. `make test` OK 1984; `make build` OK.
+- [x] Stage 2: sheets move to SheetScaffold/CardSection/chips/buttons. Done (Task 9 last): package suites green, make test OK 1985, UI RunningTimerLifecycle, HistoryRedesign, EditFlow, UkrainianLayoutSmoke pass (HistoryRedesign testAViewOnlyFamilysRowsAreNotTappable fails on the first run after a rebuild, passes on rerun).
+- [x] Stage 3: Home on the kit (Task 10): dock tiles TileButtonStyle (suggested side = active fill), Stop/Wake .primary(.dock), Today/Pump/sync cards on Card, hero/sleep/pump-stop chips, shared PartsRow, ScreenScaffold header + flat Palette.ground (no hero glow: screenshots read calm, not dull; fallback stays available). Package HomeFeature/BabyUI suites pass; build OK; make test OK 1986 (+1 PartsRow mapping test); UI RunningTimerLifecycle, HomeSyncRecovery, PumpingFlow, LoggingFlow, UkrainianLayoutSmoke, ReadOnlyCaregiver, AX5 dock pass. CompositeFeedFlowTests.testTwoBottlesInARowAreBothKept fails at 00:14-00:25 CET on this branch AND on the untouched baseline (fixture near midnight) - recheck in daytime. No phone install (R16).
+- [x] Stage 4: History, Insights, Growth, Ask on the kit; Ask gets the baby header (switcher wired from RootView) and a CircleIconButton new-chat, confirmDelete (ask.confirmNewChat/ask.cancelNewChat became ask.confirmDelete/ask.keep), app-wide .tint(Palette.feed) on the TabView (R19). AskFeature/BabyUI suites pass, build OK, make test OK 1986, UI AskTabTests, AccessibilityAudit, UkrainianLayoutSmoke pass. Screenshots in scratchpad stage4/ask-*, tabbar-*.
+- [x] Stage 5: More, Settings, onboarding on the kit. Cleanup (Task 12c): removed PanelSection, PrimaryFillButtonStyle, TrackerButtonStyle, SheetHeader, SheetTitleText, deleteConfirmation (callers use confirmDelete), unused BabyEditCopy and PendingInvitationCopy constants; Ask composer gutter Spacing.l; leftover .bordered and accentColor replaced. make test OK 1988, build OK, UI EditFlow/LoggingFlow/CompositeFeedFlow/AskTab: see task-12c-report.md.
+- [x] Stage 6: widgets and cleanup (Task 13). Quick Log buttons use `.tile(size: .widget)` (links draw the same shape from tokens, since `Link` takes no ButtonStyle); Live Activity L/R/Bottle use `.tile` (suggested side = active fill) and the kit `PartsRow(size: .widget)`; Pump/Status on tokens; History clear-filter inset Spacing.l; Growth reference buttons Spacing.s gap. Full UI suite 58/58 passed (TEST SUCCEEDED), WidgetTourTests + LiveActivityPushUITests pass, make test OK 1988, build OK; sweep leaves only chart marks/TodayStrip. Screenshots in scratchpad stage6/. 4- and 9-part cards and per-family widget shots not captured (no fixture path); no phone install.
+
+# Pumping uses the bottle's interface (2026-11-02)
+
+- [x] Pump sheet (Home/More → Pump) is the bottle sheet's layout: side, Start, then "or log what was pumped, in ml", Pumped at, the bottle's −/+ amount with chips, and Log (a finished session at that time, off at 0).
+- [x] How much? is the stopped-bottle layout: caption, side (corrects the session's side), the bottle's amount control, Done. Skip still leaves it empty; Done at 0 also saves no amount.
+- [x] Edit / Past entry panel: the bottle part editor's order. The amount control replaces Add/Remove amount; dialling to 0 clears it. Pump chips are 30/60/90/120 ml (1–4 oz), in the pump's colour; ±5 ml / ½ oz, capped at 1000 ml.
+- [x] `make test` OK 1961 (+4); `make build` OK; UI `PumpingFlowTests` 6/6 on the shared simulator; screenshots of all three screens checked.
+- [x] Installed eeac50d9 in place on Phone B and Phone A 20:05 CET (signed Debug, team TEAM123456, push check ready). Phone A launched; Phone B refused the launch (locked) and picks up the build when next opened.
+- [x] Publishable tree: signing, bundle ID prefix, App Group and the hosted server come from the gitignored `Config/Local.xcconfig`; the Unraid host and audience from the provisioning environment; names, devices and local paths in docs are generic. GitHub gets the tree as one snapshot commit on top of its own history.
+- [ ] User check on the phones: Pump → Log with an amount; Stop → How much? with side and chips; edit a pump and dial the amount to 0.
+
+# Sync between phones: stops, Tailscale, blinking offline card (2026-11-01)
+
+- [x] Stops: no apply bug. Prod receipts show 19 double stops since 10-10; the second phone acted on a store that had not pulled the stop (11-01: 7209 silent 15:41–19:27 CET, then a stale stop + superseded sleep start, then it stopped the other parent's real sleep). Cause is reachability + Home showing stale local state without a warning.
+- [x] Tailscale: sidecar pinned at v1.98.3 since 10-04; from 10-14 (Tailscale 1.104.1 shipped 10-13) its log shows ~100 TSMP disco-key re-adverts a day, up from ~0, and DERP "does not know about peer" bursts on 10-17/21/22/25. Repo pin bumped to v1.104.4 (`Server/deploy/unraid/compose.yaml`, deployment test). `go test ./scripts/` OK.
+- [x] Offline card blink: each retry set status `.syncing`, hiding the card until the failure set it back. A retry now keeps `.offline`/`.serverUnreachable` until it has an answer. +1 test (`ServerUnreachableTests`), `make test` OK 1948.
+- [x] Sidecar v1.104.4 deployed on the homelab 21:30 CET (owner approved); verifier passed; both phones synced through it. Record in `docs/verification/2026-10-27-phase5-rollout.md`.
+- [x] Installed d3458e63 in place on Phone B and Phone A (signed Debug, push check ready), launched; both synced and opened the live socket at 21:20 CET.
+- [ ] User check on the phones: open after a while, tap Stop quickly; offline card no longer blinks.
+- [x] 11-02 "Offline" again (Phone A, 14:15 CET). Phone log (`log collect`, owner's sudo): app back at 14:14:46 and sending at once; every request through the tunnel timed out until 14:16:22. The phone's Tailscale (IPNExtension) logged "UDP is blocked" / "MagicSock ReceiveIPv6 is not running" 13:44–13:47, 14:15–14:16, 14:22–14:23, 14:30–14:31, 15:04– — each healed itself in 1–2 min. Server sidecar fine; not the app. Its constant "timeout opening … 100.64.0.43" lines are a build host (offline), unrelated.
+- [x] Why "Offline", not "Can't reach" (likely; the app logged nothing to prove it): a renewal that finds the account lock held by another process (`RefreshError.lockUnavailable`) set `.failed(retrying)`, which ended the catch-up as answered and reset the 3-min clock; the timeouts after read "Offline". Now a held lock leaves the catch-up running and keeps a showing failure; the hold passing unanswered always names the server. Sync failures now log their kind (`AppLog.sync`, public) so the next one is readable from the phone log. Reproduced by test first. +2 tests; `make test` OK 1957; `make build` OK.
+- [x] Installed ec8b8c56 in place on both phones 17:07 CET (owner approved). Phone A launched and synced at 17:07:39 CET; Phone B was locked, so it was not launched and picks up the build the next time it opens.
+- [x] Catch-up on foreground (owner said yes): the engine is `isCatchingUp` from foreground until the first sync answers (≤ 5 s). A Home timer tap meanwhile waits; if the catch-up changed the hero/dock/pump it is dropped. An unanswered catch-up with a network reads "Can't reach the family server" at once. +7 tests (`CatchUpTests`, `HomeViewModelTests`); `make test` OK 1955; `make build` OK. UI suite not run.
+
+# Bottle presets follow formula math (2026-10-28)
+
+- [x] Bottle chips 35 / 65 / 100 / 135 ml: what 30–120 ml of water makes with 1 scoop per 30 ml (~+12%, 0.77 ml/g). Same for every contents; oz chips stay 1–4.
+- [x] Bottle ± step 5 ml (was 10); ½ oz unchanged. Pump amount step 5 ml too.
+- [x] `make test` OK 1947; `make build` OK.
+- [x] Committed `d6bf3b64` on main; installed in place on Phone B and Phone A (signed Debug, team TEAM123456). Launch refused: both phones locked.
+- [ ] User check on the phones.
+
+# Solids as a feed's part (2026-10-23)
+
+- [x] Add part in a feed offers Solids: the Solids panel opens at the feed's end and writes one linked create once a food is named. Solids list as parts (foods · amount, time), open the Solids panel, delete, split and reorder like any part.
+- [x] Store: a feed holding solids still joins, combines and takes parts; only a feed of solids alone is refused. Auto-join by the break limit still never takes solids. Home's parts row, the Lock Screen card and the feed's breast/ml totals stay milk-only.
+- [x] `make test` OK 1946; `make build` OK; UI `HistoryRedesignTests` add-solids + swipe-delete 2/2 on the shared simulator.
+- [x] Committed `4714028c` on main; installed in place and launched on Phone B and Phone A (signed Debug, team TEAM123456).
+- [ ] User check on the phones: Add part → Solids in a feed.
+
+# Reorder a session's parts (2026-10-22)
+
+- [x] A part's times may move past another part into a free stretch; the session reorders and is re-keyed by its earliest member (supersedes ruling H-R15).
+- [x] `make test` OK 1942; `make build` OK.
+- [x] Committed `9f072bfb` on main; installed in place and launched on Phone B and Phone A (signed Debug, team TEAM123456).
+- [ ] User check: in a feed's sheet, open the last part and set its start to right after the first part.
+
+# Pumping (2026-10-12)
+
+Spec `docs/superpowers/specs/2026-10-09-pumping-design.md`, plan `docs/superpowers/plans/2026-10-10-pumping.md`, verification `docs/verification/2026-10-12-pumping/README.md`.
+Merged to `main` at `eaddcef0` (`TimeSpanSection` combined with `120f559e`). Server deployed at schema 34; rollout `docs/verification/2026-10-16-pumping-rollout.md`.
+
+- [x] Server: pump payload and hashes; care kind 10 with no baby, migration `000034`, one running pump per family; superseded / `pump_running`, `pump_reopened`, `pump_already_stopped`; export and API docs.
+- [x] Phone data: `PumpEntry` in `SchemaV12`; start/stop/log/edit; sync, losing start, pumps logged before the family.
+- [x] Phone UI: Pump as a Home action (last); panel, How much?, Past entry; strip beside a bottle; Today line; History, filter, PDF; Lock Screen card on the starting phone; Ask.
+- [x] Whole-branch review: seven fixes, then the six minors.
+- [x] `make test` OK 1931 on the merged tree; server suite, build and protocol e2e (six pumping proofs) on the branch.
+- [x] Server deployed `eaddcef0` (schema 34): 8 s of downtime, care rows unchanged, verifier passed.
+- [x] Phone B installed and launched from `2ea985de`; syncing.
+- [x] Phone A installed and launched from `2ea985de`; syncing.
+- [ ] User check on the phones: Lock Screen card and its Stop when locked, cross-phone strip, card ending when the other phone stops, widget Pump tile.
+
+# Live Activity replaced-card stall (2026-10-12)
+
+- [x] Verify Live Activities after the recent updates: Swift 1856, UI 8/8, protocol e2e, production read, both phones' ledgers.
+- [x] Found: both phones' feed jobs spin on an unsendable end; no feed push on Phone B since 2026-10-09 23:57 UTC, on Phone A since 2026-10-11 06:12 UTC.
+- [x] Fix `431dc6cc` on `fix/live-activity-replaced-card` (+2 tests); all server gates pass. Notes: `docs/verification/2026-10-12-live-activity-replaced-card.md`.
+- [x] Merged to main (ff) and deployed `431dc6cc` to the homelab (2026-10-12, 8 s down, verifier passed); both stuck jobs completed, leftover cards retired.
+- [ ] History cleanup refused by the permission system (rows expire by 2026-10-19 on their own); two-phone Lock Screen check (user).
+
+# Immunizations (2026-10-11)
+
+Spec `docs/superpowers/specs/2026-10-11-immunizations-design.md`, plan `docs/superpowers/plans/2026-10-11-immunizations.md`, verification `docs/verification/2026-10-11-immunizations/README.md`, rollout `docs/verification/2026-10-11-immunizations-rollout.md`.
+Merged to `main` at `339f655f`. Server deployed at schema 33 before the merge; both phones on the merged build.
+
+- [x] Server: `immunization` payload and pinned hashes; care kind 9 with migration `000033`; cascade order, archive section, import manifest; API docs.
+- [x] Phone data: `ImmunizationEntry` in schema V11; log/edit, family-wide vaccine names, next dose; remote apply, realm move, purge, import.
+- [x] Phone UI: glyph and tracker; the vaccine panel; Vaccine as a Home action (listed in Settings → Home buttons); History rows, filter and PDF; the Insights card and Immunizations screen; Ask.
+- [x] Package suite (1856), full server suite, protocol e2e against schema 33, simulator build, UI subset, screenshots.
+- [x] Whole-branch review: one important finding and the minors fixed.
+- [x] Server deployed `339f655f` (schema 33): 8 s of downtime, care rows unchanged, verifier passed.
+- [x] Merged to `main`; installed and launched on Phone B and Phone A; both sync 200.
+- [ ] User check on the phones: the three items under "Still open" in the rollout record.
+- [ ] Pumping's plan renumbered to migration `000034` and `SchemaV12`.
+
+# Arrangeable Home buttons (2026-10-11)
+
+Spec `docs/superpowers/specs/2026-10-11-home-buttons-order-design.md`, plan `docs/superpowers/plans/2026-10-11-home-buttons-order.md`.
+Verification: `docs/verification/2026-10-11-home-buttons/README.md`. Rollout: `docs/verification/2026-10-11-home-buttons-rollout.md`.
+Merged to `main` at `34cd4455`. Client only, so no server deploy.
+
+- [x] Order per baby on this phone; dock, More sheet and Quick Log widget follow it.
+- [x] Settings → Tracking → Home buttons, and "Edit Home buttons" in the More sheet.
+- [x] Bottle: contents on the amount screen; the default amount is the previous bottle's.
+- [x] Whole-branch review: three fixes and four minors, all done.
+- [x] Verification: `make test` OK 1798 on the merged tree; UI subset 23/23 in a run with the simulator to itself.
+- [x] Installed in place on Phone A and Phone B from `34cd4455`. Not launched.
+- [ ] User check on the phones: the six widget items in the rollout note, and dragging rows in Home buttons.
+
 # Entry panels (2026-10-09)
 
 Spec: docs/superpowers/specs/2026-10-09-entry-panels-design.md
@@ -285,7 +392,7 @@ Baseline `make test` → 1622. Fast-forwarded to main `6546a98c`; `make test` on
 - [x] Prepare and review a lossless recovery procedure; user authorized restoring only the eight hidden records from their own phone, leaving the second caregiver's three phone-only rows preserved and unchanged.
 - [x] With renewed approval, preserve restricted copies of both phone stores and a server archive; both SQLite integrity checks, server archive validation, and SHA-256 checks passed.
 - [x] Compare record identities across the three sources: all visible phone records exist on the server; 11 phone-only hidden timer completions have superseded stop commands and no delete commands. Nine do not overlap visible server history; two second-caregiver feeds overlap existing entries.
-- [x] Write a detailed additive restore preview outside the repository at `/private/tmp/baby-tracker-recovery-20260927/restore-preview.md`; no restore or membership mutation performed.
+- [x] Write a detailed additive restore preview outside the repository at `/path/to/baby-tracker-recovery-20260927/restore-preview.md`; no restore or membership mutation performed.
 - [x] User chose their own records only; all three second-caregiver-only hidden rows remain preserved as recovery evidence.
 - [x] Restore four original-ID feeds and four original-ID sleeps through the server repository in one additive transaction after a rollback-only production dry run and fresh validated archive. All pre-existing record IDs and tombstone states remained unchanged.
 - [x] Repair live-canonical rematerialization and launch-time reconciliation; focused red/green tests, 851-test suite, signed iPhone build, install, launch, and final read-only phone snapshot all passed. The eight original IDs are visible on the user's phone; sync cursor matches the server journal.

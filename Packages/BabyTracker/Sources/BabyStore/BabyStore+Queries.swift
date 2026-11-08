@@ -14,7 +14,10 @@ public extension BabyStore {
         if let diaper = try context.fetch(FetchDescriptor<DiaperEntry>(
             predicate: #Predicate { $0.id == id && $0.babyID == babyID && !$0.isTombstoned }
         )).first { return .diaper(diaper) }
-        return try supplementRows(for: babyID).first(where: { $0.id == id }).map(HistoryItem.supplement)
+        if let med = try supplementRows(for: babyID).first(where: { $0.id == id }) { return .supplement(med) }
+        if let shot = try immunizations(for: babyID).first(where: { $0.id == id }) { return .immunization(shot) }
+        // A pump belongs to the family: found by id alone, for every baby.
+        return try pump(id: id).map(HistoryItem.pump)
     }
 
     /// Fetched ascending and read from the end, not fetched descending and
@@ -85,7 +88,7 @@ public extension BabyStore {
         let runningFeedSession = feedTimer?.sessionID.flatMap { id in sessions.first { $0.id == id } }
         let exposedFeedIDs = Set([lastSession, feedBreak, runningFeedSession].compactMap { $0 }.flatMap(\.feedIDs))
 
-        return HomeSnapshot(
+        var snapshot = HomeSnapshot(
             lastFeed: lastFeed,
             lastFeedingSession: lastSession,
             lastSleep: try lastSleep(for: babyID),
@@ -104,6 +107,10 @@ public extension BabyStore {
             todayFeedTimes: allFeeds.filter { $0.kind != .solids && $0.startedAt >= start && $0.startedAt < end }.map(\.startedAt),
             sessionFeedsByID: feedsByID.filter { exposedFeedIDs.contains($0.key) }
         )
+        snapshot.runningPump = try runningPump()
+        snapshot.todayPumpML = try pumps(from: start, to: end).filter { $0.endedAt != nil }.compactMap(\.volumeML).reduce(0, +)
+        snapshot.lastPumpEndedAt = try lastFinishedPump()?.endedAt
+        return snapshot
     }
 
     /// One local day of history, newest first, all kinds merged.
@@ -130,7 +137,9 @@ public extension BabyStore {
         )).map(HistoryItem.diaper)
 
         let supplements = try supplementRows(for: babyID).filter { $0.startedAt >= start && $0.startedAt < end }.map(HistoryItem.supplement)
-        return (feeds + sleeps + diapers + supplements).sorted { $0.startedAt > $1.startedAt }
+        let shots = try immunizations(for: babyID).filter { $0.givenAt >= start && $0.givenAt < end }.map(HistoryItem.immunization)
+        let pumps = try pumps(from: start, to: end).map(HistoryItem.pump)
+        return (feeds + sleeps + diapers + supplements + shots + pumps).sorted { $0.startedAt > $1.startedAt }
     }
 }
 
@@ -161,6 +170,8 @@ public extension BabyStore {
         )).map(HistoryItem.diaper)
 
         let supplements = try supplementRows(for: babyID).filter { $0.startedAt >= start && $0.startedAt < end }.map(HistoryItem.supplement)
-        return (feeds + sleeps + diapers + supplements).sorted { $0.startedAt > $1.startedAt }
+        let shots = try immunizations(for: babyID).filter { $0.givenAt >= start && $0.givenAt < end }.map(HistoryItem.immunization)
+        let pumps = try pumps(from: start, to: end).map(HistoryItem.pump)
+        return (feeds + sleeps + diapers + supplements + shots + pumps).sorted { $0.startedAt > $1.startedAt }
     }
 }

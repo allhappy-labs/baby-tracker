@@ -64,6 +64,7 @@ public final class AppleAskModel: AskModel {
         let text = AskText(timeZone: .current)
         let running = try store.activeTimers(for: profile.babyID).filter { $0.startedAt <= now }
         let timers = AskSessionBuilder.liveTimers(running, volumeUnit: volumeUnit)
+        let pump = try store.runningPump().map { AskLivePump(startedAt: $0.startedAt, side: $0.side) }
         var history = AskSessionBuilder.history(
             conversation, budget: historyBudget - AskSessionBuilder.estimatedTokens(conversation.memory ?? ""),
             tokens: AskSessionBuilder.estimatedTokens)
@@ -72,7 +73,7 @@ public final class AppleAskModel: AskModel {
             // The model picks the reads with guided generation; the app runs
             // them, so an answer about the log always has the log in front of it.
             let planner = LanguageModelSession(model: model, instructions: AskSessionBuilder.planInstructions(
-                profile: profile, now: now, timers: timers, text: text))
+                profile: profile, now: now, timers: timers, text: text, pump: pump))
             let reads: [AskRead]
             do {
                 reads = try await planner.respond(to: AskSessionBuilder.planPrompt(question: question, history: history),
@@ -85,7 +86,7 @@ public final class AppleAskModel: AskModel {
             }
             let logData = reads.prefix(3).map(log.run)
             let instructions = AskSessionBuilder.instructions(profile: profile, now: now, timers: timers, text: text,
-                                                              memory: conversation.memory, logData: Array(logData))
+                                                              memory: conversation.memory, logData: Array(logData), pump: pump)
             let prompt = AskSessionBuilder.prompt(question: question)
             var retriedOverflow = false
             while true {

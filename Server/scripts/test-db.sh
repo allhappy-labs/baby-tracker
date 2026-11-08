@@ -6,6 +6,14 @@ if [[ -n ${BABY_TRACKER_TEST_DATABASE_URL:-} ]]; then
   exit 2
 fi
 
+# BT_TEST_COUNT=N repeats the selected tests N times (-count=N), for
+# reproducing a flake; the default of 1 keeps every run uncached.
+test_count=${BT_TEST_COUNT:-1}
+if [[ ! $test_count =~ ^[1-9][0-9]*$ ]]; then
+  echo "test-db: BT_TEST_COUNT must be a positive integer" >&2
+  exit 2
+fi
+
 for tool in docker openssl; do
   if ! command -v "$tool" >/dev/null; then
     echo "test-db requires $tool" >&2
@@ -103,12 +111,12 @@ docker exec "$db" psql -XAt -U postgres -d babytracker -v ON_ERROR_STOP=1 -c \
 export BABY_TRACKER_REQUIRE_DATABASE=1
 bootstrap_password=$(<"$BT_SECRETS_DIR/bootstrap_password")
 export BABY_TRACKER_TEST_DATABASE_URL="postgres://postgres:$bootstrap_password@127.0.0.1:$host_port/babytracker?sslmode=disable"
-go_test=(go test -p=1 -race -count=1)
+go_test=(go test -p=1 -race "-count=$test_count")
 # For timing runs: BT_TEST_RACE=0 drops -race, BT_TEST_TIMEOUT
 # sets -timeout and BT_TEST_VERBOSE=1 adds -v. The defaults are unchanged.
 case ${BT_TEST_RACE:-1} in
   1) ;;
-  0) go_test=(go test -p=1 -count=1) ;;
+  0) go_test=(go test -p=1 "-count=$test_count") ;;
   *) echo "test-db: BT_TEST_RACE must be 0 or 1" >&2; exit 2 ;;
 esac
 if [[ -n ${BT_TEST_TIMEOUT:-} ]]; then

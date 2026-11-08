@@ -192,6 +192,51 @@ func TestRecoveryAcknowledgement(t *testing.T) {
 	}
 }
 
+// AcknowledgeRefreshToken is Authenticate then AcknowledgeRefresh in one
+// transaction: the same outcomes in the same order, the bearer's refusals
+// first (an unknown or expired bearer is refused before the attempt ID and
+// the device proof are looked at).
+func TestRecoveryAcknowledgementByToken(t *testing.T) {
+	h := newSessionFixture(t, config.ModeSelfHosted)
+	original := h.Issue()
+	request := recoveryRequest(original)
+	child, err := h.Service.RefreshRecoverable(t.Context(), request)
+	if err != nil {
+		t.Fatal(err)
+	}
+	bad := request.DeviceContinuity
+	bad.Credential = child.RefreshToken
+	const zero = "00000000-0000-4000-8000-000000000000"
+	unknown := strings.Repeat("A", 43)
+	for _, step := range []struct {
+		token, attempt string
+		claim          identity.DeviceContinuityClaim
+		code           string
+		receipts       int
+	}{
+		{unknown, request.AttemptID, bad, "session_revoked", 1},
+		{unknown, zero, bad, "session_revoked", 1},
+		{"not a token", request.AttemptID, request.DeviceContinuity, "session_revoked", 1},
+		{child.AccessToken, zero, bad, "invalid_request", 1},
+		{child.AccessToken, request.AttemptID, bad, "device_continuity_invalid", 1},
+		{child.AccessToken, request.AttemptID, request.DeviceContinuity, "", 0},
+		{child.AccessToken, request.AttemptID, request.DeviceContinuity, "", 0},
+		{child.AccessToken, request.AttemptID, bad, "device_continuity_invalid", 0},
+	} {
+		if err := h.Service.AcknowledgeRefreshToken(t.Context(), step.token, step.attempt, step.claim); Code(err) != step.code && !(step.code == "" && err == nil) {
+			t.Fatalf("ack(%.8s, %s): %v, want %q", step.token, step.attempt, err, step.code)
+		}
+		recoveryReceiptCount(t, h, step.receipts)
+	}
+	h.Clock.Advance(11 * time.Minute)
+	if err = h.Service.AcknowledgeRefreshToken(t.Context(), child.AccessToken, request.AttemptID, bad); Code(err) != "access_expired" {
+		t.Fatalf("expired ack: %v", err)
+	}
+	if err = h.Service.AcknowledgeRefreshToken(t.Context(), child.AccessToken, zero, bad); Code(err) != "access_expired" {
+		t.Fatalf("expired zero ack: %v", err)
+	}
+}
+
 func TestRecoveryRetention(t *testing.T) {
 	h := newSessionFixture(t, config.ModeSelfHosted)
 	original := h.Issue()

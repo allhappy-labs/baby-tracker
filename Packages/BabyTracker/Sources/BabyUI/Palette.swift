@@ -12,8 +12,12 @@ public enum Palette {
     public static let meds = Color(red: 0.77, green: 0.65, blue: 0.96)       // #C4A6F5
     public static let solids = Color(red: 0.91, green: 0.60, blue: 0.48)     // #E89A7B
     public static let growth = Color(red: 0.62, green: 0.82, blue: 0.48)     // #9FD27A
+    public static let vaccine = Color(red: 0.96, green: 0.60, blue: 0.76)    // #F599C2
+    public static let pump = Color(red: 0.90, green: 0.83, blue: 0.42)       // #E6D46B
     public static let wet = Color(red: 0.50, green: 0.85, blue: 1.0)         // #7FD8FF
     public static let dirty = Color(red: 0.79, green: 0.64, blue: 0.48)      // #C9A27A
+    /// Behind a QR code: a camera needs a light quiet zone, so this stays white in the dark theme.
+    public static let qrGround = Color.white
     /// Desaturated to the same degree as the three trackers rather than a pure
     /// red: on the near-black ground, full-saturation red blooms and is the
     /// one thing on screen that undoes dark adaptation.
@@ -31,7 +35,7 @@ public enum Palette {
 }
 
 public enum Tracker: String, CaseIterable, Sendable {
-    case feed, sleep, diaper, supplement, solids, growth
+    case feed, sleep, diaper, supplement, solids, growth, vaccine, pump
 
     public var color: Color {
         switch self {
@@ -41,6 +45,8 @@ public enum Tracker: String, CaseIterable, Sendable {
         case .supplement: Palette.meds
         case .solids: Palette.solids
         case .growth: Palette.growth
+        case .vaccine: Palette.vaccine
+        case .pump: Palette.pump
         }
     }
 
@@ -55,6 +61,8 @@ public enum Tracker: String, CaseIterable, Sendable {
         case .supplement: .meds
         case .solids: .solids
         case .growth: .growth
+        case .vaccine: .vaccine
+        case .pump: .pump
         }
     }
 
@@ -66,6 +74,8 @@ public enum Tracker: String, CaseIterable, Sendable {
         case .supplement: String(localized: "Meds", bundle: .module)
         case .solids: String(localized: "Solids", bundle: .module)
         case .growth: String(localized: "Growth", bundle: .module)
+        case .vaccine: String(localized: "Vaccine", bundle: .module)
+        case .pump: String(localized: "Pump", bundle: .module)
         }
     }
 

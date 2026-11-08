@@ -36,7 +36,7 @@
   - `history.export.empty`
   - `history.export.failed`
 - `Makefile`'s `EXPECTED_TESTS` (1622 at plan time) must rise by exactly the number of `@Test` functions each task adds, in that task's commit. Tests guarded by `#if canImport(UIKit)` do not run under `swift test`, so they are **not** counted.
-- iOS builds and tests use only the shared simulator, `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`. Never run two `xcodebuild` processes at once (`pgrep xcodebuild` first).
+- iOS builds and tests use only the shared simulator, `platform=iOS Simulator,id=<simulator-udid>`. Never run two `xcodebuild` processes at once (`pgrep xcodebuild` first).
 - Work on branch `history-pdf-export` in a worktree. `main` has unrelated uncommitted edits from a parallel session, so never stage them.
 - Commit messages end with `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 
@@ -1277,7 +1277,7 @@ Run `pgrep xcodebuild`. It must print nothing. Then:
 
 ```bash
 cd Packages/BabyTracker && xcodebuild test -scheme BabyTracker-Package \
-  -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -only-testing:HistoryFeatureTests 2>&1 | tail -30
 ```
 
@@ -1817,8 +1817,8 @@ If the share sheet's header text doesn't contain ".pdf" on iOS 26, find what it 
 - [ ] **Step 6: Build, then run the UI test.** Run `pgrep xcodebuild` and expect nothing. Then:
 
 ```bash
-xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build 2>&1 | tail -3
-xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build 2>&1 | tail -3
+xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/HistoryRedesignTests 2>&1 | tail -30
 ```
@@ -1846,7 +1846,7 @@ Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>"
 - [ ] **Step 3: Check the real PDF on the simulator.**
   1. Launch the app with the History fixture: run `testExportSheetCreatesAPDF` once more, or use the `run` skill with `-uiTestHistorySessions`.
   2. Export the 7-day range.
-  3. Copy the PDF out of the simulator: `xcrun simctl get_app_container D17101C9-01EB-488D-AFE1-58E6C089B853 <bundle id> data`, then `find <that>/tmp/baby-tracker-history-exports -name '*.pdf'`.
+  3. Copy the PDF out of the simulator: `xcrun simctl get_app_container <simulator-udid> <bundle id> data`, then `find <that>/tmp/baby-tracker-history-exports -name '*.pdf'`.
   4. Make an image of page 1: `sips -s format png <file>.pdf --out /tmp/history-export.png`.
   5. Read the PNG and check that it has the title, range, day headings, the totals line (with the bottle volume) and table rows. Put it in the hand-off.
 - [ ] **Step 4: Screenshot the day headers.** In History, check the bottle total shows between sleep and diapers. Screenshot at the default text size and at the largest accessibility size.

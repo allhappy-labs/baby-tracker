@@ -114,7 +114,7 @@ func TestDomainRejectsProcessLocalTimeZone(t *testing.T) {
 }
 
 func TestEveryFrozenMutationFixtureDecodesAndValidates(t *testing.T) {
-	for _, name := range []string{"baby.json", "feed-breast.json", "feed-bottle.json", "feed-solids.json", "feed-combination.json", "sleep.json", "diaper.json", "supplement.json", "timer-feed.json", "timer-sleep.json"} {
+	for _, name := range []string{"baby.json", "feed-breast.json", "feed-bottle.json", "feed-solids.json", "feed-combination.json", "sleep.json", "diaper.json", "supplement.json", "immunization.json", "pump.json", "timer-feed.json", "timer-sleep.json"} {
 		t.Run(name, func(t *testing.T) {
 			mutation := mustMutation(t, name)
 			if err := ValidateMutation(mutation, protocol.DefaultLimits()); err != nil {
@@ -172,6 +172,61 @@ func TestSupplementNameValidation(t *testing.T) {
 		})
 	}
 }
+
+func TestImmunizationValidation(t *testing.T) {
+	dose := func(n int) *int { return &n }
+	text := func(s string) *string { return &s }
+	limits := protocol.DefaultLimits()
+	for _, tt := range []struct {
+		name   string
+		change func(*protocol.ImmunizationPayload)
+		want   error // nil accepted; errAny any refusal
+	}{
+		{"the fixture", func(p *protocol.ImmunizationPayload) {}, nil},
+		{"no dose", func(p *protocol.ImmunizationPayload) { p.Dose = nil }, nil},
+		{"dose 1", func(p *protocol.ImmunizationPayload) { p.Dose = dose(1) }, nil},
+		{"dose 10", func(p *protocol.ImmunizationPayload) { p.Dose = dose(10) }, nil},
+		{"a 64-scalar vaccine", func(p *protocol.ImmunizationPayload) { p.Vaccine = strings.Repeat("x", 64) }, nil},
+		// The server has no future check: the phone owns that rule.
+		{"a time next year", func(p *protocol.ImmunizationPayload) { p.GivenAt = "2099-01-01T00:00:00.000000Z" }, nil},
+		{"dose 0", func(p *protocol.ImmunizationPayload) { p.Dose = dose(0) }, protocol.ErrInvalidMutation},
+		{"dose 11", func(p *protocol.ImmunizationPayload) { p.Dose = dose(11) }, protocol.ErrInvalidMutation},
+		{"dose -1", func(p *protocol.ImmunizationPayload) { p.Dose = dose(-1) }, protocol.ErrInvalidMutation},
+		{"a bad time zone", func(p *protocol.ImmunizationPayload) { p.TimeZoneID = "Local" }, protocol.ErrInvalidMutation},
+		{"a baby that is not a UUID", func(p *protocol.ImmunizationPayload) { p.BabyID = "mira" }, protocol.ErrInvalidMutation},
+		{"a blank vaccine", func(p *protocol.ImmunizationPayload) { p.Vaccine = "   " }, protocol.ErrInvalidText},
+		{"a 65-scalar vaccine", func(p *protocol.ImmunizationPayload) { p.Vaccine = strings.Repeat("x", 65) }, protocol.ErrInvalidText},
+		{"a control character", func(p *protocol.ImmunizationPayload) { p.Vaccine = "MMR\x07" }, protocol.ErrInvalidText},
+		{"a decomposed vaccine", func(p *protocol.ImmunizationPayload) { p.Vaccine = "Cafe\u0301" }, protocol.ErrInvalidText},
+		{"a note over the limit", func(p *protocol.ImmunizationPayload) { p.Note = text(strings.Repeat("n", limits.MaxNoteBytes+1)) }, protocol.ErrInvalidText},
+		{"a time that is not one", func(p *protocol.ImmunizationPayload) { p.GivenAt = "yesterday" }, errAnyRefusal},
+		{"a time before 1900", func(p *protocol.ImmunizationPayload) { p.GivenAt = "1899-12-31T23:59:59.000000Z" }, errAnyRefusal},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := mustMutation(t, "immunization.json")
+			p := m.Payload.(protocol.ImmunizationPayload)
+			tt.change(&p)
+			m.Payload = p
+			err := ValidateMutation(m, limits)
+			switch {
+			case tt.want == nil && err != nil:
+				t.Fatalf("refused: %v", err)
+			case tt.want == errAnyRefusal && err == nil:
+				t.Fatal("accepted")
+			case tt.want != nil && tt.want != errAnyRefusal && !errors.Is(err, tt.want):
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+		})
+	}
+	// A shot is not another kind's payload, and has no operation but create, update and delete.
+	m := mustMutation(t, "immunization.json")
+	m.EntityKind = "supplement"
+	if err := ValidateMutation(m, limits); !errors.Is(err, protocol.ErrInvalidMutation) {
+		t.Fatalf("a shot sent as a supplement: %v", err)
+	}
+}
+
+var errAnyRefusal = errors.New("any refusal")
 
 func TestSupplementRequiresValidLoggedAt(t *testing.T) {
 	for _, value := range []string{"", "not-a-date", "1899-12-31T23:59:59.000000Z"} {
@@ -335,5 +390,68 @@ func TestBabyIconValidation(t *testing.T) {
 		if err := ValidateMutation(m, limits); !errors.Is(err, protocol.ErrInvalidMutation) {
 			t.Fatalf("icon %q error = %v", icon, err)
 		}
+	}
+}
+
+func TestPumpValidation(t *testing.T) {
+	limits := protocol.DefaultLimits()
+	at := func(s string) *string { return &s }
+	for _, tt := range []struct {
+		name   string
+		change func(*protocol.PumpPayload)
+		want   error // nil accepted
+	}{
+		{"the fixture", func(p *protocol.PumpPayload) {}, nil},
+		{"running", func(p *protocol.PumpPayload) { p.EndedAt, p.VolumeML = nil, nil }, nil},
+		{"left", func(p *protocol.PumpPayload) { p.Side = "left" }, nil},
+		{"right", func(p *protocol.PumpPayload) { p.Side = "right" }, nil},
+		{"no amount", func(p *protocol.PumpPayload) { p.VolumeML = nil }, nil},
+		{"zero", func(p *protocol.PumpPayload) { p.VolumeML = protocol.MustParseDecimal("0") }, nil},
+		{"a thousand", func(p *protocol.PumpPayload) { p.VolumeML = protocol.MustParseDecimal("1000") }, nil},
+		{"two places", func(p *protocol.PumpPayload) { p.VolumeML = protocol.MustParseDecimal("88.72") }, nil},
+		{"exactly six hours", func(p *protocol.PumpPayload) { p.EndedAt = at("2026-09-20T20:10:00.000000Z") }, nil},
+		{"zero length", func(p *protocol.PumpPayload) { p.EndedAt = at("2026-09-20T14:10:00.000000Z") }, nil},
+		// The future check needs the accept time: it is the record rules' (Task 3).
+		{"a time next year", func(p *protocol.PumpPayload) { p.StartedAt, p.EndedAt = "2099-01-01T00:00:00.000000Z", nil }, nil},
+		{"a side that is not one", func(p *protocol.PumpPayload) { p.Side = "middle" }, protocol.ErrInvalidMutation},
+		{"a bad time zone", func(p *protocol.PumpPayload) { p.TimeZoneID = "Local" }, protocol.ErrInvalidMutation},
+		{"negative", func(p *protocol.PumpPayload) { p.VolumeML = protocol.MustParseDecimal("-1") }, protocol.ErrInvalidDecimal},
+		{"over a thousand", func(p *protocol.PumpPayload) { p.VolumeML = protocol.MustParseDecimal("1000.01") }, protocol.ErrInvalidDecimal},
+		{"three places", func(p *protocol.PumpPayload) { p.VolumeML = protocol.MustParseDecimal("88.721") }, protocol.ErrInvalidDecimal},
+		{"an end before the start", func(p *protocol.PumpPayload) { p.EndedAt = at("2026-09-20T14:09:59.000000Z") }, protocol.ErrInvalidTimestamp},
+		{"six hours and a microsecond", func(p *protocol.PumpPayload) { p.EndedAt = at("2026-09-20T20:10:00.000001Z") }, protocol.ErrInvalidTimestamp},
+		{"a start that is not a time", func(p *protocol.PumpPayload) { p.StartedAt = "yesterday" }, protocol.ErrInvalidTimestamp},
+		{"a note over the limit", func(p *protocol.PumpPayload) { n := strings.Repeat("n", limits.MaxNoteBytes+1); p.Note = &n }, protocol.ErrInvalidText},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			m := mustMutation(t, "pump.json")
+			p := m.Payload.(protocol.PumpPayload)
+			tt.change(&p)
+			m.Payload = p
+			err := ValidateMutation(m, limits)
+			switch {
+			case tt.want == nil && err != nil:
+				t.Fatalf("refused: %v", err)
+			case tt.want != nil && !errors.Is(err, tt.want):
+				t.Fatalf("got %v, want %v", err, tt.want)
+			}
+		})
+	}
+	// A pump's delete names nothing; one that names a baby is refused.
+	deletion := mustMutation(t, "pump.json")
+	deletion.Operation, deletion.Payload = "delete", protocol.DeletePayload{}
+	if err := ValidateMutation(deletion, limits); err != nil {
+		t.Fatalf("pump delete refused: %v", err)
+	}
+	baby := "10000000-0000-4000-8000-000000000001"
+	deletion.Payload = protocol.DeletePayload{BabyID: &baby}
+	if err := ValidateMutation(deletion, limits); !errors.Is(err, protocol.ErrInvalidMutation) {
+		t.Fatalf("pump delete naming a baby: %v", err)
+	}
+	// A pump is not another kind's payload.
+	m := mustMutation(t, "pump.json")
+	m.EntityKind = "sleep"
+	if err := ValidateMutation(m, limits); !errors.Is(err, protocol.ErrInvalidMutation) {
+		t.Fatalf("a pump sent as a sleep: %v", err)
 	}
 }

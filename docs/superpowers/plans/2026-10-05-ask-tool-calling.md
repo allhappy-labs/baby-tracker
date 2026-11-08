@@ -33,7 +33,7 @@ Private Cloud Compute needs a managed entitlement the team doesn't have yet, so 
 - Logs record the engine, tool names and error kind only, never question or answer text.
 - New user-facing strings get Ukrainian (`uk`) translations in `Packages/BabyTracker/Sources/AskFeature/Localizable.xcstrings`.
 - `make test` asserts the literal package test total in `Makefile` (`EXPECTED_TESTS`). Each task changes it by the delta stated in its commit step. Apply the delta to whatever value is current, since other branches may have moved it.
-- UI tests use only the shared simulator `platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853`. Run `pgrep -fl xcodebuild` first and wait if another run is active. Run only `BabyTrackerUITests/AskTabTests`.
+- UI tests use only the shared simulator `platform=iOS Simulator,id=<simulator-udid>`. Run `pgrep -fl xcodebuild` first and wait if another run is active. Run only `BabyTrackerUITests/AskTabTests`.
 - Every commit message ends with `Co-Authored-By: Claude Opus 5.5 (1M context) <noreply@anthropic.com>`.
 
 ### Refinements to the spec made while planning
@@ -2451,8 +2451,8 @@ Expected: all Ask tests PASS (13 view model, 1 transcript, plus Tasks 1–5 and 
 
 ```bash
 pgrep -fl xcodebuild || true   # wait if anything is listed
-xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build
-xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build
+xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/AskTabTests
 ```
@@ -2620,8 +2620,8 @@ In `docs/superpowers/specs/2026-10-05-ask-tool-calling-design.md`:
 ```bash
 make test
 pgrep -fl xcodebuild || true
-xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' build
-xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=D17101C9-01EB-488D-AFE1-58E6C089B853' \
+xcodebuild -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' build
+xcodebuild test -scheme BabyTracker -destination 'platform=iOS Simulator,id=<simulator-udid>' \
   -parallel-testing-enabled NO -maximum-concurrent-test-simulator-destinations 1 \
   -only-testing:BabyTrackerUITests/AskTabTests
 git diff main --stat

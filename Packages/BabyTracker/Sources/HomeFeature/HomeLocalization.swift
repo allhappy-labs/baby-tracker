@@ -27,6 +27,8 @@ enum HomeCopy {
     static let feedBreak = HomeL10n.text("Break")
     static let bottle = HomeL10n.text("Bottle")
     static let stop = HomeL10n.text("Stop")
+    static let stopPumping = HomeL10n.text("Stop pumping")
+
     static let wakeUp = HomeL10n.text("Wake up")
     static let more = HomeL10n.text("More")
     static let today = HomeL10n.text("Today")
@@ -65,6 +67,13 @@ enum HomeCopy {
         now.timeIntervalSince(since) < 60
             ? ElapsedFormatter.total(0)
             : ElapsedFormatter.compact(since: since, now: now)
+    }
+
+    /// The status line's "23m ago". A bare time beside an icon read as a
+    /// length, not as time since. A whole phrase, because German and French
+    /// put the word first: "vor 23m".
+    static func ago(_ elapsed: String) -> String {
+        HomeL10n.format("%@ ago", elapsed)
     }
 
     /// "since 3:02": the clock time a running part or break began.

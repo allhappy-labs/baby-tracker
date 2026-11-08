@@ -59,10 +59,12 @@ public final class NewPartModel: PartFormModel {
         self.babyID = babyID
         self.unit = unit
         self.kind = kind
-        self.end = store.now
+        // `didSet` does not run here: a bottle opens as a moment, like a
+        // switch to one.
+        self.end = kind == .bottle ? nil : store.now
         self.start = store.now.addingTimeInterval(-600)
         let defaults = LogDefaults(store: store)
-        self.volumeML = (try? defaults.mostUsedBottleVolumeML(for: babyID)) ?? LogDefaults.fallbackVolumeML
+        self.volumeML = (try? defaults.lastBottleVolumeML(for: babyID)) ?? LogDefaults.fallbackVolumeML
         self.contents = (try? defaults.lastBottleContents(for: babyID)) ?? LogDefaults.fallbackContents
     }
 

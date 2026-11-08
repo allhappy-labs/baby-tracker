@@ -1,5 +1,5 @@
 // Package care stores every care record (baby, feed, sleep, diaper, timer,
-// supplement, growth profile, measurement) as one care_entities row
+// supplement, growth profile, measurement, immunization, pump) as one care_entities row
 // (migration 000030).
 //
 // Encode is the only place a canonical entity becomes a row. It writes the

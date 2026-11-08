@@ -277,9 +277,10 @@ func TestOpenAPIRepresentsRawRequestsAndTypedImportResponses(t *testing.T) {
 	mutationAllOf := mutation["allOf"].([]any)
 	operationVariants := mutationAllOf[0].(map[string]any)["oneOf"].([]any)
 	// Record deletes split by kind, because each kind accepts deletes up to its
-	// own current payload version.
-	if len(operationVariants) != 15 {
-		t.Fatalf("mutation operation variants = %d, want 15", len(operationVariants))
+	// own current payload version. A pump adds its create/update arm; its
+	// delete names no baby, so it shares the baby's empty-payload arm.
+	if len(operationVariants) != 17 {
+		t.Fatalf("mutation operation variants = %d, want 17", len(operationVariants))
 	}
 	editRequired := stringSet(schemas["TimerEditPayload"]["required"].([]any))
 	if !editRequired["baby_id"] || !editRequired["components"] || editRequired["started_at"] {
@@ -543,7 +544,7 @@ func TestV1FixtureDigestManifestCoversExactCorpus(t *testing.T) {
 	if err := json.Unmarshal(raw, &manifest); err != nil {
 		t.Fatalf("decode fixture manifest: %v", err)
 	}
-	if manifest.Version != "v1" || manifest.Algorithm != "sha256" || len(manifest.Files) != 21 {
+	if manifest.Version != "v1" || manifest.Algorithm != "sha256" || len(manifest.Files) != 23 {
 		t.Fatalf("manifest header/count = %q/%q/%d", manifest.Version, manifest.Algorithm, len(manifest.Files))
 	}
 	entries, err := os.ReadDir(directory)
@@ -565,8 +566,8 @@ func TestV1FixtureDigestManifestCoversExactCorpus(t *testing.T) {
 			t.Errorf("%s digest = %s, want %s", entry.Name(), got, want)
 		}
 	}
-	if corpusCount != 21 {
-		t.Fatalf("corpus file count = %d, want 21", corpusCount)
+	if corpusCount != 23 {
+		t.Fatalf("corpus file count = %d, want 23", corpusCount)
 	}
 }
 

@@ -18,7 +18,8 @@
 // Pools: the authority sweeps (SessionSweep) run on the background pool, the
 // runtime credential's one-connection pool they share with the audit
 // verifier and the key inventory; everything on the maintenance pool
-// (AuditPartitionSweep, ReceiptSweep, ExpirySweep, Purger) holds a
+// (AuditPartitionSweep, AuditRetentionSweep, ReceiptSweep, ExpirySweep,
+// Purger) holds a
 // database.WorkerSlots slot for each transaction, so the readiness audit
 // always finds a maintenance connection. The purge's authority commands run
 // on the request authority, so their invalidations reach the live hub.

@@ -25,6 +25,8 @@ func parent(payload protocol.Payload) string {
 		return p.BabyID
 	case protocol.SupplementPayload:
 		return p.BabyID
+	case protocol.ImmunizationPayload:
+		return p.BabyID
 	case protocol.DiaperPayload:
 		return p.BabyID
 	case protocol.TimerStartPayload:
@@ -62,25 +64,30 @@ func (s *Service) compare(family string, row care.Row, found bool, kind, baby st
 	return &entity, &cursor, "", nil
 }
 
-// mappings is the import's local baby id to shared baby id mapping.
-func (s *Service) mappings(ctx context.Context, tx pgx.Tx, family, importID string) (map[string]string, error) {
-	rows, e := tx.Query(ctx, `SELECT local_baby_id::text,shared_baby_id::text FROM import_baby_mappings WHERE family_id=$1 AND import_id=$2`, family, importID)
+// mappings is a mapped import's local baby id to shared baby id mapping,
+// in local baby id order (none, and no statement, before it is mapped).
+// A resolve reads it once, for its record conflicts and its response.
+func (s *Service) mappings(ctx context.Context, tx pgx.Tx, family string, v session) ([]protocol.BabyMapping, error) {
+	result := []protocol.BabyMapping{}
+	if !v.mapped {
+		return result, nil
+	}
+	rows, e := tx.Query(ctx, `SELECT local_baby_id::text,shared_baby_id::text FROM import_baby_mappings WHERE family_id=$1 AND import_id=$2 ORDER BY import_baby_mappings.local_baby_id`, family, v.id)
 	if e != nil {
 		return nil, e
 	}
 	defer rows.Close()
-	shared := map[string]string{}
 	for rows.Next() {
-		var local, baby string
-		if e := rows.Scan(&local, &baby); e != nil {
+		var m protocol.BabyMapping
+		if e := rows.Scan(&m.LocalBabyID, &m.SharedBabyID); e != nil {
 			return nil, e
 		}
-		shared[local] = baby
+		result = append(result, m)
 	}
-	return shared, rows.Err()
+	return result, rows.Err()
 }
 
-func (s *Service) recordConflicts(ctx context.Context, tx pgx.Tx, family string, v session, pending []protocol.RecordManifest) ([]conflict, error) {
+func (s *Service) recordConflicts(ctx context.Context, tx pgx.Tx, family string, v session, mappings []protocol.BabyMapping, pending []protocol.RecordManifest) ([]conflict, error) {
 	result := []conflict{}
 	if !v.mapped {
 		return result, nil
@@ -103,12 +110,12 @@ func (s *Service) recordConflicts(ctx context.Context, tx pgx.Tx, family string,
 	if e != nil {
 		return nil, e
 	}
-	// The import's mappings, read once: an import maps at most
-	// ImportMaxBabies babies, and a manifest may hold ImportMaxRecords
+	// The import's mappings, read once by the caller: an import maps at
+	// most ImportMaxBabies babies, and a manifest may hold ImportMaxRecords
 	// records, each looked up here under the family lock.
-	shared, e := s.mappings(ctx, tx, family, v.id)
-	if e != nil {
-		return nil, e
+	shared := make(map[string]string, len(mappings))
+	for _, m := range mappings {
+		shared[m.LocalBabyID] = m.SharedBabyID
 	}
 	type target struct {
 		manifest protocol.RecordManifest

@@ -61,9 +61,69 @@ struct BaselineStoreTests {
 
     // MARK: The baseline
 
-    @Test func theMigrationPlanHasV9AndV10WithOneStage() {
-        #expect(BabyStoreMigrationPlan.schemas.map { $0.versionIdentifier } == [Schema.Version(9, 0, 0), Schema.Version(10, 0, 0)])
-        #expect(BabyStoreMigrationPlan.stages.count == 1)
+    @Test func theMigrationPlanHasV9ToV12WithThreeStages() {
+        #expect(BabyStoreMigrationPlan.schemas.map { $0.versionIdentifier }
+                == [Schema.Version(9, 0, 0), Schema.Version(10, 0, 0), Schema.Version(11, 0, 0), Schema.Version(12, 0, 0)])
+        #expect(BabyStoreMigrationPlan.stages.count == 3)
+    }
+
+    /// An install from before immunizations opens in place: nothing moved
+    /// aside, its rows kept, and a vaccination can then be saved.
+    @Test func aV10StoreMigratesInPlaceToV11() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "default.store")
+        let babyID = UUID()
+        let supplementID = UUID()
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: SchemaV10.self)
+            let container = try BabySchema.makeContainer(schema: schema, configurations: [ModelConfiguration(schema: schema, url: url)])
+            let context = ModelContext(container)
+            context.insert(Baby(id: babyID, name: "Mira", birthDate: .now))
+            context.insert(SupplementEntry(id: supplementID, babyID: babyID, name: "Vitamin D", startedAt: .now,
+                                           timeZoneID: "UTC", loggedAt: .now))
+            try context.save()
+        }
+
+        let reopened = ModelContext(try BabySchema.container(storeURL: url, ifIncompatible: .moveAside))
+
+        #expect(try reopened.fetch(FetchDescriptor<Baby>()).map(\.id) == [babyID])
+        #expect(try reopened.fetch(FetchDescriptor<SupplementEntry>()).map(\.id) == [supplementID])
+        #expect(try reopened.fetch(FetchDescriptor<ImmunizationEntry>()).isEmpty)
+        reopened.insert(ImmunizationEntry(babyID: babyID, vaccine: "Prevenar 13", dose: 1, givenAt: .now, timeZoneID: "UTC"))
+        try reopened.save()
+        #expect(try reopened.fetch(FetchDescriptor<ImmunizationEntry>()).count == 1)
+        #expect(try Self.movedAside(in: directory).isEmpty)
+        #expect(try Self.isBaseline(url))
+    }
+
+    /// An install from before pumping opens in place: nothing moved aside,
+    /// its rows kept, and a pump can then be saved.
+    @Test func aV11StoreMigratesInPlaceToV12() throws {
+        let directory = try Self.temporaryDirectory()
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appending(path: "default.store")
+        let babyID = UUID()
+        let shotID = UUID()
+        try autoreleasepool {
+            let schema = Schema(versionedSchema: SchemaV11.self)
+            let container = try BabySchema.makeContainer(schema: schema, configurations: [ModelConfiguration(schema: schema, url: url)])
+            let context = ModelContext(container)
+            context.insert(Baby(id: babyID, name: "Mira", birthDate: .now))
+            context.insert(ImmunizationEntry(id: shotID, babyID: babyID, vaccine: "Prevenar 13", dose: 1, givenAt: .now, timeZoneID: "UTC"))
+            try context.save()
+        }
+
+        let reopened = ModelContext(try BabySchema.container(storeURL: url, ifIncompatible: .moveAside))
+
+        #expect(try reopened.fetch(FetchDescriptor<Baby>()).map(\.id) == [babyID])
+        #expect(try reopened.fetch(FetchDescriptor<ImmunizationEntry>()).map(\.id) == [shotID])
+        #expect(try reopened.fetch(FetchDescriptor<PumpEntry>()).isEmpty)
+        reopened.insert(PumpEntry(startedAt: .now, timeZoneID: "UTC", side: .both))
+        try reopened.save()
+        #expect(try reopened.fetch(FetchDescriptor<PumpEntry>()).count == 1)
+        #expect(try Self.movedAside(in: directory).isEmpty)
+        #expect(try Self.isBaseline(url))
     }
 
     /// An install from before icons opens in place: nothing moved aside,
@@ -264,7 +324,7 @@ struct BaselineStoreTests {
 
     static func isBaseline(_ url: URL) throws -> Bool {
         let metadata = try NSPersistentStoreCoordinator.metadataForPersistentStore(type: .sqlite, at: url)
-        let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: Schema(versionedSchema: SchemaV10.self)))
+        let model = try #require(NSManagedObjectModel.makeManagedObjectModel(for: Schema(versionedSchema: SchemaV12.self)))
         return model.isConfiguration(withName: nil, compatibleWithStoreMetadata: metadata)
     }
 

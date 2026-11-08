@@ -263,13 +263,21 @@ func (s *Service) resolveGraph(ctx context.Context, tx pgx.Tx, g access.Grant, v
 			highWater = result.HighWater
 		}
 	}
-	for _, b := range babies {
-		baby := mapped[b.target]
-		_, e = tx.Exec(ctx, `INSERT INTO import_baby_mappings(family_id,import_id,local_baby_id,shared_baby_id,published_revision,shared_baby_entity_version,shared_baby_cursor,storage_bytes) VALUES($1,$2,$3,$4,$5,$6,$7,192)`, g.FamilyID, v.id, b.LocalBabyID, b.target, v.revision, baby.version, baby.cursor)
+	// The mappings are written in one statement and charged in one (192
+	// bytes each): every charge is positive, so the sum is refused exactly
+	// when one of the charges one by one would have been.
+	if len(babies) > 0 {
+		local, shared := make([]string, len(babies)), make([]string, len(babies))
+		versions, cursors := make([]int64, len(babies)), make([]int64, len(babies))
+		for i, b := range babies {
+			baby := mapped[b.target]
+			local[i], shared[i], versions[i], cursors[i] = b.LocalBabyID, b.target, int64(baby.version), int64(baby.cursor)
+		}
+		_, e = tx.Exec(ctx, `INSERT INTO import_baby_mappings(family_id,import_id,local_baby_id,shared_baby_id,published_revision,shared_baby_entity_version,shared_baby_cursor,storage_bytes) SELECT $1,$2,m.local_baby_id::uuid,m.shared_baby_id::uuid,$3,m.version,m.cursor,192 FROM unnest($4::text[],$5::text[],$6::bigint[],$7::bigint[]) WITH ORDINALITY AS m(local_baby_id,shared_baby_id,version,cursor,ordinal) ORDER BY m.ordinal`, g.FamilyID, v.id, v.revision, local, shared, versions, cursors)
 		if e != nil {
 			return false, 0, e
 		}
-		if e = care.ChargeImport(ctx, tx, g.FamilyID, 192, s.limits); e != nil {
+		if e = care.ChargeImport(ctx, tx, g.FamilyID, 192*int64(len(babies)), s.limits); e != nil {
 			return false, 0, e
 		}
 	}
@@ -428,7 +436,11 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 		if _, publish, e = s.resolveGraph(ctx, tx, g, &v); e != nil {
 			return e
 		}
-		pending, e := s.recordConflicts(ctx, tx, family, v, nil)
+		mappings, e := s.mappings(ctx, tx, family, v)
+		if e != nil {
+			return e
+		}
+		pending, e := s.recordConflicts(ctx, tx, family, v, mappings, nil)
 		if e != nil {
 			return e
 		}
@@ -437,7 +449,7 @@ func (s *Service) ResolveConflict(ctx context.Context, p access.Principal, id st
 				return e
 			}
 		}
-		out, e = s.response(ctx, tx, p, family, v, nil, nil)
+		out, e = s.response(ctx, tx, p, family, v, nil, nil, mappings)
 		if e != nil {
 			return e
 		}

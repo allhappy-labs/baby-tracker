@@ -123,28 +123,48 @@ func principalOf(f *authoritytest.Fixture, t *testing.T, sessionID string) acces
 
 func newAttempt(t *testing.T) string { return authoritytest.NewID(t) }
 
-func TestRefreshRotatesAndWritesOneAuditRow(t *testing.T) {
+// Owner decision D1 (2026-10-16): a routine rotation, legacy or recoverable,
+// appends no audit row and leaves the account's chain head where it was. The
+// consumed parent, the child row and a recoverable rotation's refresh
+// receipt are its record, and the child is issued at the account's current
+// security revision (the head every later account invalidation is compared
+// with, realtime.Hub).
+func TestRefreshAppendsNoAuditRow(t *testing.T) {
 	f := authoritytest.New(t)
 	account := liveAccount(t, f)
 	device := f.Device(t, account)
 	parentID, _, rawRefresh := f.Session(t, account, device, "account", "", "")
 	before, _ := sessionRow(t, f, parentID)
+	// Earlier security events (the sign-in's genesis row and one more): the
+	// account's head is 2 when it rotates.
+	appendRows(t, f, authority.ScopeAccount, account, 1)
+	headSeq, headHash := chainHead(t, f, authority.ScopeAccount, account)
+	unchanged := func(step string) {
+		t.Helper()
+		if rows := readAudit(t, f, authority.ScopeAccount, account); len(rows) != 2 {
+			t.Fatalf("%s: %d account audit rows, want the 2 written before it", step, len(rows))
+		}
+		if seq, hash := chainHead(t, f, authority.ScopeAccount, account); seq != headSeq || hash != headHash {
+			t.Fatalf("%s moved the account head %d -> %d", step, headSeq, seq)
+		}
+	}
 
 	got, err := f.Service.Refresh(t.Context(), refreshOf(f, rawRefresh, "", nil))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Outcome != "committed" || got.Code != "ok" || got.Revision != 1 || got.Recovered {
+	if got.Outcome != "committed" || got.Code != "ok" || got.Revision != 2 || got.Recovered {
 		t.Fatalf("result %+v", got.Result)
 	}
+	unchanged("a legacy rotation")
 	parent, _ := sessionRow(t, f, parentID)
 	child, _ := sessionRow(t, f, got.Child.ID)
 	if parent.Status != "consumed" || parent.ChildID != child.ID || parent.ConsumedAttemptID != "" || parent.ConsumedAt == nil || !parent.ConsumedAt.Equal(f.Now) {
 		t.Fatalf("parent after rotation %+v", parent)
 	}
 	if child.Status != "active" || child.ParentID != parentID || child.LineageRootID != before.LineageRootID || !child.DeadlineAt.Equal(before.DeadlineAt) ||
-		!child.LineageStartedAt.Equal(before.LineageStartedAt) || child.IssuedSeq != 1 || child.Scope != "account" || child.TokenKeyID != f.TokenKeys.Current.ID ||
-		!child.AccessExpiresAt.Equal(f.Now.Add(10*time.Minute)) || !child.RefreshExpiresAt.Equal(f.Now.Add(30*24*time.Hour)) {
+		!child.LineageStartedAt.Equal(before.LineageStartedAt) || child.IssuedSeq != 2 || got.Child.IssuedSeq != 2 || child.Scope != "account" ||
+		child.TokenKeyID != f.TokenKeys.Current.ID || !child.AccessExpiresAt.Equal(f.Now.Add(10*time.Minute)) || !child.RefreshExpiresAt.Equal(f.Now.Add(30*24*time.Hour)) {
 		t.Fatalf("child %+v", child)
 	}
 	if child.AccessDigest != authoritytest.TokenDigest(f.TokenKeys.Current, "access", got.AccessToken) ||
@@ -154,18 +174,6 @@ func TestRefreshRotatesAndWritesOneAuditRow(t *testing.T) {
 	if got.Account.ID != account || got.FamilySlot != nil || !got.EffectiveDeadline.Equal(before.DeadlineAt) {
 		t.Fatalf("presentation %+v slot %+v deadline %v", got.Account, got.FamilySlot, got.EffectiveDeadline)
 	}
-	rows := readAudit(t, f, authority.ScopeAccount, account)
-	if len(rows) != 1 || rows[0].Kind != "session_rotated" || rows[0].CommandID != got.CommandID || recompute(t, rows[0]) != rows[0].Hash {
-		t.Fatalf("audit rows %+v", rows)
-	}
-	var payload map[string]any
-	if err := json.Unmarshal(rows[0].Payload, &payload); err != nil {
-		t.Fatal(err)
-	}
-	if payload["session_id"] != child.ID || payload["parent_session_id"] != parentID || payload["lineage_root_session_id"] != before.LineageRootID ||
-		len(payload["material_digest"].(string)) != 64 || payload["refresh_attempt_id"] != nil {
-		t.Fatalf("payload %s", rows[0].Payload)
-	}
 	if n := count(t, f, `SELECT count(*) FROM command_receipts`); n != 0 {
 		t.Fatalf("%d command receipts for a rotation, want 0 (the consumed parent is the receipt)", n)
 	}
@@ -173,28 +181,180 @@ func TestRefreshRotatesAndWritesOneAuditRow(t *testing.T) {
 		t.Fatalf("%d refresh receipts for a legacy rotation", n)
 	}
 
-	// Recoverable rotations keep one receipt per unresolved rotation: a
-	// successor rotation proves possession of its predecessor's child.
+	// Recoverable rotations append none either, and keep one receipt per
+	// unresolved rotation: a successor rotation proves possession of its
+	// predecessor's child.
 	attempt1, attempt2 := newAttempt(t), newAttempt(t)
 	second, err := f.Service.Refresh(t.Context(), refreshOf(f, got.RefreshToken, attempt1, binding(account, device)))
 	if err != nil {
 		t.Fatal(err)
 	}
+	unchanged("a recoverable rotation")
 	if n := count(t, f, `SELECT count(*) FROM refresh_receipts WHERE parent_id=$1 AND child_id=$2 AND attempt_id=$3`, child.ID, second.Child.ID, attempt1); n != 1 {
 		t.Fatal("recoverable rotation wrote no receipt")
 	}
+	// Its lost-acknowledgement retry is served from the receipt and
+	// appends nothing.
+	retry, err := f.Service.Refresh(t.Context(), refreshOf(f, got.RefreshToken, attempt1, binding(account, device)))
+	if err != nil || !retry.Recovered || retry.Child.ID != second.Child.ID || retry.Revision != second.Revision {
+		t.Fatalf("lost-acknowledgement retry %+v (%v)", retry.Result, err)
+	}
+	unchanged("a lost-acknowledgement retry")
 	third, err := f.Service.Refresh(t.Context(), refreshOf(f, second.RefreshToken, attempt2, binding(account, device)))
 	if err != nil {
 		t.Fatal(err)
 	}
+	unchanged("a successor rotation")
 	if n := count(t, f, `SELECT count(*) FROM refresh_receipts`); n != 1 {
 		t.Fatalf("%d receipts after the successor rotation, want 1", n)
 	}
 	if n := count(t, f, `SELECT count(*) FROM refresh_receipts WHERE child_id=$1`, third.Child.ID); n != 1 {
 		t.Fatal("successor receipt missing")
 	}
-	if rows := readAudit(t, f, authority.ScopeAccount, account); len(rows) != 3 || third.Revision != 3 || third.Child.IssuedSeq != 3 {
-		t.Fatalf("%d audit rows, revision %d", len(rows), third.Revision)
+	if second.Revision != 2 || third.Revision != 2 || second.Child.IssuedSeq != 2 || third.Child.IssuedSeq != 2 {
+		t.Fatalf("revisions %d %d, issued %d %d, want the unchanged head 2", second.Revision, third.Revision, second.Child.IssuedSeq, third.Child.IssuedSeq)
+	}
+	// A later security event moves the head; the next rotation's child is
+	// issued at it.
+	appendRows(t, f, authority.ScopeAccount, account, 1)
+	fourth, err := f.Service.Refresh(t.Context(), refreshOf(f, third.RefreshToken, "", nil))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if fourth.Revision != 3 || fourth.Child.IssuedSeq != 3 || len(readAudit(t, f, authority.ScopeAccount, account)) != 3 {
+		t.Fatalf("after a later event: revision %d, issued %d", fourth.Revision, fourth.Child.IssuedSeq)
+	}
+	// The chain still verifies end to end.
+	verifier, _ := newChainVerifier(f)
+	if report, err := verifier.VerifyAll(t.Context()); err != nil || len(report.Failed) != 0 {
+		t.Fatalf("verify after rotations: %+v (%v)", report, err)
+	}
+}
+
+// A failed account chain freezes the account (scope_failed), refresh included:
+// with no audit row to append since D1, the rotation itself refuses it before
+// any write. A legacy or recoverable rotation leaves the parent active, no
+// child and no receipt; a lost-acknowledgement retry of a rotation committed
+// before the chain failed is not served either.
+func TestRefreshOnAFailedAccountChainIsScopeFailed(t *testing.T) {
+	for _, recoverable := range []bool{false, true} {
+		name := map[bool]string{false: "legacy", true: "recoverable"}[recoverable]
+		t.Run(name, func(t *testing.T) {
+			f := authoritytest.New(t)
+			account := liveAccount(t, f)
+			device := f.Device(t, account)
+			parentID, _, rawRefresh := f.Session(t, account, device, "account", "", "")
+			appendRows(t, f, authority.ScopeAccount, account, 1)
+			f.Exec(t, `UPDATE accounts SET chain_failed=true WHERE id=$1`, account)
+			in := refreshOf(f, rawRefresh, "", nil)
+			if recoverable {
+				in = refreshOf(f, rawRefresh, newAttempt(t), binding(account, device))
+			}
+			_, err := f.Service.Refresh(t.Context(), in)
+			wantCode(t, err, "scope_failed")
+			if parent, _ := sessionRow(t, f, parentID); parent.Status != "active" || parent.ChildID != "" {
+				t.Fatalf("parent after a refused rotation %+v", parent)
+			}
+			if n := count(t, f, `SELECT count(*) FROM sessions WHERE parent_id=$1`, parentID); n != 0 {
+				t.Fatalf("%d children of a refused rotation", n)
+			}
+			if n := count(t, f, `SELECT count(*) FROM refresh_receipts`); n != 0 {
+				t.Fatalf("%d receipts for a refused rotation", n)
+			}
+		})
+	}
+	t.Run("lost-acknowledgement retry", func(t *testing.T) {
+		f := authoritytest.New(t)
+		account := liveAccount(t, f)
+		device := f.Device(t, account)
+		_, _, rawRefresh := f.Session(t, account, device, "account", "", "")
+		appendRows(t, f, authority.ScopeAccount, account, 1)
+		attempt := newAttempt(t)
+		first, err := f.Service.Refresh(t.Context(), refreshOf(f, rawRefresh, attempt, binding(account, device)))
+		if err != nil {
+			t.Fatal(err)
+		}
+		f.Exec(t, `UPDATE accounts SET chain_failed=true WHERE id=$1`, account)
+		_, err = f.Service.Refresh(t.Context(), refreshOf(f, rawRefresh, attempt, binding(account, device)))
+		wantCode(t, err, "scope_failed")
+		if child, _ := sessionRow(t, f, first.Child.ID); child.Status != "active" {
+			t.Fatalf("the committed child became %s", child.Status)
+		}
+		if n := count(t, f, `SELECT count(*) FROM refresh_receipts WHERE child_id=$1`, first.Child.ID); n != 1 {
+			t.Fatal("the refused retry changed the receipt")
+		}
+	})
+}
+
+// An account with no audit chain has no security revision to issue a child
+// at: a rotation of a (hand-seeded) session on it fails closed, writing
+// nothing. Issuing a session appends to the chain, so production never meets
+// it.
+func TestRefreshAtAnEmptyAccountChainFailsClosed(t *testing.T) {
+	f := authoritytest.New(t)
+	account := liveAccount(t, f)
+	device := f.Device(t, account)
+	parentID, _, rawRefresh := f.Session(t, account, device, "account", "", "")
+	// Hand-empty the chain the fixture gave the account (the table owner may).
+	f.Exec(t, `DELETE FROM security_audit_events WHERE scope='account' AND scope_id=$1`, account)
+	f.Exec(t, `UPDATE accounts SET audit_seq=0, audit_hash=$2 WHERE id=$1`, account, make([]byte, 32))
+	_, err := f.Service.Refresh(t.Context(), refreshOf(f, rawRefresh, "", nil))
+	wantCode(t, err, "service_unavailable")
+	if parent, _ := sessionRow(t, f, parentID); parent.Status != "active" {
+		t.Fatalf("parent %s", parent.Status)
+	}
+	if n := count(t, f, `SELECT count(*) FROM sessions WHERE parent_id=$1`, parentID); n != 0 {
+		t.Fatalf("%d children", n)
+	}
+}
+
+// Reuse detection keeps its audit row (D1): a legacy replay (refresh_reused)
+// and a recoverable refresh under another attempt (refresh_attempt_conflict)
+// each append exactly one session_revoked row, on top of a rotation that
+// appended none, and move the account head to it.
+func TestRefreshReuseStillAppendsAnAuditRow(t *testing.T) {
+	for _, c := range []struct {
+		name, code  string
+		recoverable bool
+	}{{"legacy replay", "refresh_reused", false}, {"recoverable attempt conflict", "refresh_attempt_conflict", true}} {
+		t.Run(c.name, func(t *testing.T) {
+			f := authoritytest.New(t)
+			account := liveAccount(t, f)
+			device := f.Device(t, account)
+			_, _, rawRefresh := f.Session(t, account, device, "account", "", "") // the sign-in's row: head 1
+			refresh := func() authority.Refresh {
+				if c.recoverable {
+					return refreshOf(f, rawRefresh, newAttempt(t), binding(account, device))
+				}
+				return refreshOf(f, rawRefresh, "", nil)
+			}
+			first, err := f.Service.Refresh(t.Context(), refresh())
+			if err != nil {
+				t.Fatal(err)
+			}
+			if rows := readAudit(t, f, authority.ScopeAccount, account); len(rows) != 1 {
+				t.Fatalf("%d audit rows after a rotation, want the 1 before it", len(rows))
+			}
+			_, err = f.Service.Refresh(t.Context(), refresh())
+			wantCode(t, err, c.code)
+			rows := readAudit(t, f, authority.ScopeAccount, account)
+			if len(rows) != 2 || rows[1].Kind != "session_revoked" || rows[1].Seq != 2 || recompute(t, rows[1]) != rows[1].Hash {
+				t.Fatalf("audit rows after the reuse %+v, want one session_revoked appended", rows)
+			}
+			var payload map[string]any
+			if err := json.Unmarshal(rows[1].Payload, &payload); err != nil {
+				t.Fatal(err)
+			}
+			if payload["session_id"] == nil || payload["lineage_root_session_id"] == nil {
+				t.Fatalf("session_revoked payload %s", rows[1].Payload)
+			}
+			if child, reason := sessionRow(t, f, first.Child.ID); child.Status != "revoked" || reason != "refresh_reused" {
+				t.Fatalf("child %s %s", child.Status, reason)
+			}
+			if head, hash := chainHead(t, f, authority.ScopeAccount, account); head != 2 || hash != rows[1].Hash {
+				t.Fatalf("account head %d after the reuse, want 2", head)
+			}
+		})
 	}
 }
 
@@ -321,6 +481,7 @@ func TestRefreshReuseRevokesLineageOnce(t *testing.T) {
 		wantCode(t, err, "session_revoked")
 		_, err = f.Service.Refresh(t.Context(), refreshOf(f, first.RefreshToken, "", nil))
 		wantCode(t, err, "session_revoked")
+		// The sign-in's row, then the reuse's: the rotation appended none (D1).
 		if rows := readAudit(t, f, authority.ScopeAccount, account); len(rows) != 2 || rows[1].Kind != "session_revoked" {
 			t.Fatalf("audit %+v", rows)
 		}
@@ -517,7 +678,7 @@ func TestLogoutRevokesEveryDeviceSession(t *testing.T) {
 		t.Fatalf("%d receipts survive the device revocation", n)
 	}
 	rows := readAudit(t, f, authority.ScopeAccount, account)
-	if len(rows) != 2 || rows[1].Kind != "device_binding_revoked" || rows[1].CommandID != command {
+	if len(rows) != 2 || rows[1].Kind != "device_binding_revoked" || rows[1].CommandID != command { // the sign-in's row, then the logout's: the rotation appended none (D1)
 		t.Fatalf("audit %+v", rows)
 	}
 	retry, err := f.Service.Logout(t.Context(), p, command, f.Now.Add(time.Minute))

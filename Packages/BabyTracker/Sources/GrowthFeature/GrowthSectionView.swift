@@ -55,57 +55,55 @@ public struct GrowthSectionView: View {
     }
 
     public var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        Card { content }
+            .accessibilityElement(children: .contain)
+            .accessibilityIdentifier("insights.growth")
+    }
+
+    private var content: some View {
+        VStack(alignment: .leading, spacing: Spacing.s) {
             HStack(alignment: .firstTextBaseline) {
                 TrackerIcon(.growth).foregroundStyle(Palette.growth).accessibilityHidden(true)
                 Spacer(minLength: 8)
                 if let header = presentation.headerText {
-                    Text(header).font(.footnote).foregroundStyle(Palette.secondaryText)
+                    Text(header).textRole(.caption)
                 }
             }
             if presentation.isEmpty {
-                Text(GrowthCopy.text("No measurements yet")).font(.footnote).foregroundStyle(Palette.secondaryText)
+                Text(GrowthCopy.text("No measurements yet")).textRole(.caption)
             } else {
                 chips
                 if model.profileState == .missing { referenceChoice }
                 if let line = presentation.changeLine(metric) {
-                    Text(line).font(.footnote.monospacedDigit()).foregroundStyle(Palette.primaryText.opacity(0.85))
+                    Text(line).textRole(.caption).monospacedDigit().foregroundStyle(Palette.primaryText)
                 }
                 let summary = presentation.summary(metric)
                 if summary.chartPoints.isEmpty {
-                    Text(GrowthCopy.text("A trend needs two measurements.")).font(.footnote).foregroundStyle(Palette.secondaryText)
+                    Text(GrowthCopy.text("A trend needs two measurements.")).textRole(.caption)
                 } else {
                     GrowthChart(display: GrowthMetricPresentation(summary: summary), selected: $selected).frame(height: 180)
                 }
             }
             NavigationLink { GrowthReferenceInfoView() } label: {
-                Label(GrowthCopy.text("Swiss PEZZ 2025 reference"), systemImage: "info.circle")
-                    .font(.footnote).frame(minHeight: 44)
+                ListRow(GrowthCopy.text("Swiss PEZZ 2025 reference"), accessory: .disclosure, density: .compact)
+                    .cardRow()
             }
+            .buttonStyle(.plain)
             .accessibilityIdentifier("insights.growth.reference.info")
             if model.checkInCount > 0 {
                 Button(action: onOpenAllCheckIns) {
-                    HStack {
-                        Text(GrowthCopy.text("All check-ins")).foregroundStyle(Palette.secondaryText)
-                        Spacer(minLength: 8)
-                        Text("\(model.checkInCount)").foregroundStyle(Palette.secondaryText)
-                        Image(systemName: "chevron.right").font(.footnote.weight(.semibold)).foregroundStyle(Palette.secondaryText)
-                    }
-                    .font(.footnote).frame(minHeight: 44).contentShape(Rectangle())
+                    ListRow(GrowthCopy.text("All check-ins"), value: "\(model.checkInCount)",
+                            accessory: .disclosure, density: .compact)
+                        .cardRow()
                 }
                 .buttonStyle(.plain)
                 .accessibilityIdentifier("insights.growth.allCheckIns")
             }
             if let message = choice.errorMessage {
-                Text(message).font(.footnote).foregroundStyle(Palette.destructive)
+                InlineError(message)
             }
         }
         .onChange(of: metric) { _, _ in selected = nil }
-        .padding(14)
-        .frame(maxWidth: .infinity, alignment: .leading)
-        .background(.white.opacity(0.055), in: .rect(cornerRadius: 18))
-        .accessibilityElement(children: .contain)
-        .accessibilityIdentifier("insights.growth")
     }
 
     private var chips: some View {
@@ -116,22 +114,18 @@ public struct GrowthSectionView: View {
                 let chip = presentation.chip(item)
                 Button { metric = item } label: {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text(chip.title).font(.footnote.weight(.semibold)).foregroundStyle(Palette.secondaryText)
-                        Text(chip.value).font(.body.weight(.bold).monospacedDigit()).foregroundStyle(Palette.primaryText)
+                        Text(chip.title).font(.footnote.weight(.semibold))
+                        Text(chip.value).font(.body.weight(.bold).monospacedDigit())
+                            .foregroundStyle(item == metric ? Palette.ground : Palette.primaryText)
                         if let percentile = chip.percentile {
-                            Text(percentile).font(.footnote.weight(.bold)).foregroundStyle(Palette.growth)
+                            Text(percentile).font(.footnote.weight(.bold))
                         }
                     }
-                    .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
-                    .padding(8)
-                    .background(item == metric ? Palette.growth.opacity(0.14) : .white.opacity(0.05), in: .rect(cornerRadius: 12))
-                    .overlay {
-                        if item == metric { RoundedRectangle(cornerRadius: 12).stroke(Palette.growth.opacity(0.6), lineWidth: 1.5) }
-                    }
+                    .multilineTextAlignment(.leading)
+                    .frame(maxWidth: .infinity, alignment: .leading)
                 }
-                .buttonStyle(.plain)
+                .buttonStyle(TileButtonStyle(tint: Palette.growth, size: .regular, isSelected: item == metric))
                 .accessibilityLabel(chipLabel(item, chip))
-                .accessibilityAddTraits(item == metric ? .isSelected : [])
                 .accessibilityIdentifier("insights.growth.chip." + item.rawValue)
             }
         }
@@ -146,14 +140,14 @@ public struct GrowthSectionView: View {
     private var referenceChoice: some View {
         VStack(alignment: .leading, spacing: 8) {
             Text(GrowthCopy.text("Choose the girls’ or boys’ reference for comparisons. Your recorded measurements stay available."))
-                .font(.footnote).fixedSize(horizontal: false, vertical: true)
-            HStack {
+                .textRole(.caption).fixedSize(horizontal: false, vertical: true)
+            HStack(spacing: Spacing.s) {
                 Button(GrowthCopy.text("Girls")) { choice.choose(.girls) }
                     .accessibilityIdentifier("insights.growth.reference.girls")
                 Button(GrowthCopy.text("Boys")) { choice.choose(.boys) }
                     .accessibilityIdentifier("insights.growth.reference.boys")
             }
-            .buttonStyle(.bordered).controlSize(.large)
+            .buttonStyle(.secondary)
         }
     }
 }
@@ -233,7 +227,7 @@ struct GrowthChart: View {
                     .annotation(position: .top, overflowResolution: .init(x: .fit(to: .chart), y: .disabled)) {
                         Text("\(display.dateText(point)) · \(display.valueText(point.value))\n\(display.referenceText(point))")
                             .font(.footnote).padding(6)
-                            .background(Palette.ground.opacity(0.95), in: .rect(cornerRadius: 8))
+                            .background(Palette.ground.opacity(0.95), in: .rect(cornerRadius: Radius.control))
                     }
                     .accessibilityHidden(true)
             }

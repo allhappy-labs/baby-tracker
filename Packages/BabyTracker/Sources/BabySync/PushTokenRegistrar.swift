@@ -172,12 +172,5 @@ public final class PushTokenRegistrar {
         return SHA256.hash(data: input).map { String(format: "%02x", $0) }.joined()
     }
 
-    /// The kind of a failure, never its text: a description can carry a URL.
-    private static func logKind(of error: any Error) -> String {
-        switch error {
-        case let code as SyncErrorCode: code.rawValue
-        case let error as URLError: "URLError \(error.code.rawValue)"
-        default: String(reflecting: type(of: error))
-        }
-    }
+    private static func logKind(of error: any Error) -> String { SyncLogKind.of(error) }
 }

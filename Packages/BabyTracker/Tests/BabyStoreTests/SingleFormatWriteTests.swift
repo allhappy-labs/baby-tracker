@@ -16,7 +16,7 @@ struct SingleFormatWriteTests {
 
     static let currentVersions: [(WireEntityKind, Int64)] = [
         (.feed, 4), (.timer, 5), (.sleep, 2), (.baby, 1), (.diaper, 1),
-        (.supplement, 1), (.growthProfile, 1), (.measurement, 1),
+        (.supplement, 1), (.growthProfile, 1), (.measurement, 1), (.immunization, 1), (.pump, 1),
     ]
 
     /// The version is the kind's, not something read off the payload: a
@@ -64,7 +64,7 @@ struct SingleFormatWriteTests {
         let baby = try store.addBaby(name: "Mira", birthDate: .now, referenceSex: .girls, expectedDueDate: nil).id
 
         let bottle = try store.logBottle(volumeML: 120, contents: .formula, for: baby)
-        try store.setBottleVolume(90, onFeed: bottle.id)
+        try store.setBottle(volumeML: 90, contents: .formula, onFeed: bottle.id)
         let solids = try store.logSolids(foods: ["pear"], amount: .some, for: baby)
         let breast = try store.logBreast(side: .left, from: clock.now.addingTimeInterval(-600), to: clock.now, for: baby)
 

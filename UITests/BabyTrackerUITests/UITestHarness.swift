@@ -15,6 +15,11 @@ enum Harness {
         var runningSleep = false
         var runningFeed = false
         var runningBottle = false
+        /// The baby's Home order, as comma-separated action names.
+        var homeOrder: String?
+        /// Opens a Quick Log widget tile's link for the seeded baby: an
+        /// action name, such as "solids".
+        var logLink: String?
         /// A Left part of 9:02 that ended 40 s ago: the feed is in its break.
         var feedBreak = false
         /// A stopped Left part and a running Right part joined to it.
@@ -22,6 +27,16 @@ enum Harness {
         /// A Left part of 5:00 that ended six minutes ago, with no fixture.
         var feedEndedSixMinutesAgo = false
         var seedMeds = false
+        /// Four shots (two vaccines, two doses each) for a baby five months old.
+        var seedVaccines = false
+        /// Opens the vaccine panel on launch.
+        var openVaccine = false
+        /// The family's pump, running.
+        var runningPump = false
+        /// Two finished pumps earlier today: one with 90 ml, one without an amount.
+        var seedPumps = false
+        /// Opens the pump panel on launch.
+        var openPump = false
         /// History's fixture, at fixed times on the two days before today:
         /// a feed of L, R and a bottle, a sleep with one wake, a diaper, a
         /// med, a growth check-in, solids and a feed across midnight — see
@@ -58,6 +73,8 @@ enum Harness {
                 result += ["-UIPreferredContentSizeCategoryName", category]
             }
             if let language { result += ["-AppleLanguages", "(\(language))"] }
+            if let homeOrder { result += ["-uiTestHomeOrder", homeOrder] }
+            if let logLink { result += ["-uiTestLogLink", logLink] }
             if reset { result.append("-uiTestResetStore") }
             if seedBaby { result.append("-uiTestSeedBaby") }
             if seedFixture { result.append("-uiTestSeedFixture") }
@@ -71,6 +88,11 @@ enum Harness {
             if joinedFeed { result.append("-uiTestJoinedFeed") }
             if feedEndedSixMinutesAgo { result.append("-uiTestFeedEndedSixMinutesAgo") }
             if seedMeds { result.append("-uiTestSeedMeds") }
+            if seedVaccines { result.append("-uiTestSeedVaccines") }
+            if openVaccine { result.append("-uiTestOpenVaccine") }
+            if runningPump { result.append("-uiTestRunningPump") }
+            if seedPumps { result.append("-uiTestSeedPumps") }
+            if openPump { result.append("-uiTestOpenPump") }
             if historySessions { result.append("-uiTestHistorySessions") }
             if readOnlyFamily { result.append("-uiTestReadOnlyFamily") }
             if ownerFamily { result.append("-uiTestOwnerFamily") }

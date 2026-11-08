@@ -108,6 +108,10 @@ echo "client proof: the iOS client created a family, minted caregiver and view-o
 # reached its last step. Its per-step lines are the proof; the last one must
 # be there.
 grep -q '^two-caregiver proof: step 24:' "$swift_log" || { echo "two-caregiver test did not run to completion" >&2; exit 1; }
+# The vaccination steps run inside the two-caregiver test and print their own lines.
+grep -q '^immunization proof: step 6:' "$swift_log" || { echo "the immunization steps did not run to completion" >&2; exit 1; }
+# The pumping suite runs in its own family and prints its own lines.
+grep -q '^pumping proof: step 6:' "$swift_log" || { echo "the pumping test did not run to completion" >&2; exit 1; }
 echo "two-caregiver proof: two phones built from the app's composition signed in with Apple through the identity adapter and shared one family through this server over TLS — import, snapshot, edits, deletes, timers both ways, a running-timer edit, relaunch, a live hint, History's session edits ($(grep -c '^two-caregiver proof:' "$swift_log") proof lines above)"
 
 # The owner's install day. The phone's own counts and session-link digests
@@ -126,6 +130,8 @@ SELECT 'babies='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' A
   ||' sleeps='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' AND kind=3 AND tombstoned_at IS NULL)
   ||' diapers='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' AND kind=4 AND tombstoned_at IS NULL)
   ||' supplements='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' AND kind=6 AND tombstoned_at IS NULL)
+  ||' immunizations='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' AND kind=9 AND tombstoned_at IS NULL)
+  ||' pumps='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' AND kind=10 AND tombstoned_at IS NULL)
   ||' timers='||(SELECT count(*) FROM care_entities WHERE family_id='FAMILY' AND kind=5 AND tombstoned_at IS NULL)
   ||' feed_links='||(SELECT md5(COALESCE(string_agg(id::text||'>'||COALESCE(session_id::text,'-'),',' ORDER BY id::text COLLATE "C"),''))
       FROM care_entities WHERE family_id='FAMILY' AND kind=2 AND tombstoned_at IS NULL)

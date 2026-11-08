@@ -64,10 +64,26 @@ for id in "${project_ids[@]}"; do
   }
 done
 
+# Live Activity push and wakes come only from push.yaml; without it the app
+# starts healthy with push off.
+app_id=$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=app")
+[[ -n $app_id ]]
+config_files=$(docker inspect --format '{{index .Config.Labels "com.docker.compose.project.config_files"}}' "$app_id")
+[[ ,$config_files, == *",$deploy_root/source/Server/deploy/unraid/push.yaml,"* ]] || {
+  echo "app was not composed with source/Server/deploy/unraid/push.yaml: $config_files" >&2
+  exit 1
+}
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' "$app_id" | grep -qx 'BT_LIVE_ACTIVITY_PUSH_ENABLED=true' || {
+  echo "app runs without BT_LIVE_ACTIVITY_PUSH_ENABLED=true" >&2
+  exit 1
+}
+
 tailscale_id=$(docker ps -q --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=tailscale")
 [[ -n $tailscale_id ]]
 docker exec "$tailscale_id" tailscale status --peers=false >/dev/null
-server_name=baby-sync.example-tailnet.ts.net
+# The node's own MagicDNS name: the name Serve holds the certificate for.
+server_name=$(docker exec "$tailscale_id" tailscale status --json --peers=false | jq -r '.Self.DNSName | rtrimstr(".")')
+[[ -n $server_name && $server_name != null ]]
 tailscale_ip=$(docker exec "$tailscale_id" tailscale ip -4)
 [[ -n $tailscale_ip ]]
 curl_flags=(--silent --show-error --connect-timeout 5 --max-time 15 --resolve "$server_name:443:$tailscale_ip" -o /dev/null -w '%{http_code}')
@@ -80,4 +96,4 @@ live_flags=(--http1.1 -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-W
   -H 'X-Baby-Tracker-Protocol: v1' -H 'X-Baby-Tracker-Capabilities: records-v1,live-hints-v1'
   -H 'Authorization: Bearer verify-unraid-deployment')
 [[ $(curl "${curl_flags[@]}" "${live_flags[@]}" "https://$server_name/v1/live") == 401 ]]
-echo "deployment proof: private HTTPS health/readiness 200; live socket upgrade reaches the app (401 for a bogus bearer); no host ports; unrelated container snapshot unchanged"
+echo "deployment proof: private HTTPS health/readiness 200; live socket upgrade reaches the app (401 for a bogus bearer); app composed with push.yaml, Live Activity push on; no host ports; unrelated container snapshot unchanged"

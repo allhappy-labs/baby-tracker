@@ -38,7 +38,7 @@ func TestUnraidDeploymentIsIsolatedAndPinned(t *testing.T) {
 	}
 
 	tailscale := compose.Services["tailscale"]
-	if tailscale.Image != "tailscale/tailscale:v1.98.3@sha256:854b77123b9536adae2e97f5a5fdb1790ed03438b911ab7f07780155e0af6ce2" {
+	if tailscale.Image != "tailscale/tailscale:v1.104.4@sha256:ed6480b33c6eb67c9cbd203ed42b9fb57e361986725b6856def71b7a3d9e276c" {
 		t.Fatalf("tailscale image is not immutable: %q", tailscale.Image)
 	}
 	for key, want := range map[string]string{
@@ -179,7 +179,7 @@ func TestUnraidServeConfigTerminatesHTTPSOnlyForBabySync(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(encoded)
-	for _, required := range []string{"baby-sync.example-tailnet.ts.net:443", "http://baby-tracker-sync-app-1:8080", `"HTTPS": true`} {
+	for _, required := range []string{"${TS_CERT_DOMAIN}:443", "http://baby-tracker-sync-app-1:8080", `"HTTPS": true`} {
 		if !strings.Contains(text, required) {
 			t.Errorf("serve config omits %q", required)
 		}
@@ -307,6 +307,25 @@ func TestUnraidVerifierSnapshotsStableUnrelatedContainerState(t *testing.T) {
 	for _, required := range []string{`ports:.HostConfig.PortBindings`, `networks:(.NetworkSettings.Networks | keys | sort)`} {
 		if !strings.Contains(text, required) {
 			t.Errorf("stable unrelated-container baseline omits %q", required)
+		}
+	}
+}
+
+func TestUnraidVerifierRequiresThePushOverlay(t *testing.T) {
+	encoded, err := os.ReadFile("verify-unraid-deployment.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(encoded)
+	// The 670dbba5 cutover composed the app without push.yaml; the verifier
+	// passed and Live Activity push stayed off until this check.
+	for _, required := range []string{
+		`com.docker.compose.project.config_files`,
+		`source/Server/deploy/unraid/push.yaml`,
+		`BT_LIVE_ACTIVITY_PUSH_ENABLED=true`,
+	} {
+		if !strings.Contains(text, required) {
+			t.Errorf("push overlay verification omits %q", required)
 		}
 	}
 }

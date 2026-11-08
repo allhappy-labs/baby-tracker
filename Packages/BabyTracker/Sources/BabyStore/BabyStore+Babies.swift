@@ -138,6 +138,8 @@ public extension BabyStore {
         if !(try context.fetch(FetchDescriptor<SupplementEntry>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.supplement) }
         if !(try context.fetch(FetchDescriptor<GrowthProfile>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.growthProfile) }
         if !(try context.fetch(FetchDescriptor<MeasurementCheckIn>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.measurement) }
+        if !(try context.fetch(FetchDescriptor<ImmunizationEntry>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.immunization) }
+        if !(try context.fetch(FetchDescriptor<PumpEntry>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.pump) }
         if !(try context.fetch(FetchDescriptor<ActiveTimer>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.activeTimer) }
         if !(try context.fetch(FetchDescriptor<ChangeLogEntry>(predicate: #Predicate { $0.realmKey == key }))).isEmpty { kinds.append(.changeLog) }
         return kinds

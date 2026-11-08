@@ -12,34 +12,29 @@ struct PendingInvitationRow: View {
     let invitation: PendingInvitation
     let onOpen: () -> Void
     let onRevoke: () -> Void
+    @Environment(\.dynamicTypeSize) private var typeSize
 
     var body: some View {
         Button(action: onOpen) {
-            HStack(spacing: 12) {
-                Image(systemName: PendingInvitationCopy.systemImage(for: invitation.role))
-                    .font(.body)
-                    .foregroundStyle(Palette.sleep)
-                    .frame(minWidth: 28)
-                    .accessibilityHidden(true)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(PendingInvitationCopy.title(for: invitation.role))
-                        .foregroundStyle(Palette.primaryText)
-                    Text(PendingInvitationCopy.expiry(invitation.expiresAt))
-                        .font(.subheadline)
-                        .foregroundStyle(Palette.secondaryText)
+            ListRow(
+                PendingInvitationCopy.title(for: invitation.role),
+                subtitle: PendingInvitationCopy.expiry(invitation.expiresAt),
+                accessory: .disclosure
+            ) {
+                // Not at the accessibility sizes: beside the title, the
+                // scaled glyph left it too narrow for "invitation" whole.
+                if !typeSize.isAccessibilitySize {
+                    Image(systemName: PendingInvitationCopy.systemImage(for: invitation.role))
+                        .font(.body)
+                        .foregroundStyle(Palette.sleep)
+                        .frame(minWidth: 28)
+                        .accessibilityHidden(true)
                 }
-                .fixedSize(horizontal: false, vertical: true)
-                Spacer(minLength: 0)
-                Image(systemName: "chevron.right")
-                    .font(.footnote.weight(.semibold))
-                    .foregroundStyle(Palette.secondaryText)
-                    .accessibilityHidden(true)
+            } trailing: {
+                EmptyView()
             }
-            .frame(minHeight: 44)
-            // Inside the label: a button's hit region is its label's content,
-            // and the Spacer is exactly the middle of the row.
-            .contentShape(Rectangle())
         }
+        .buttonStyle(.plain)
         .accessibilityIdentifier("family.pending.\(invitation.id.uuidString)")
         .swipeActions(edge: .trailing) {
             Button(PendingInvitationCopy.revoke, role: .destructive, action: onRevoke)
@@ -63,35 +58,18 @@ struct UnavailableInvitationSheet: View {
     let onClose: () -> Void
 
     var body: some View {
-        VStack(spacing: 0) {
-            SheetHeader(PendingInvitationCopy.unavailableTitle, cancelTitle: PendingInvitationCopy.close,
-                        cancelIdentifier: "invite.close", onCancel: onClose)
-            ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    Label(
-                        PendingInvitationCopy.title(for: invitation.role),
-                        systemImage: PendingInvitationCopy.systemImage(for: invitation.role)
-                    )
-                    .font(.headline)
-                    Text(PendingInvitationCopy.expiry(invitation.expiresAt))
-                        .font(.footnote)
-                        .foregroundStyle(Palette.secondaryText)
-                    Text(PendingInvitationCopy.unavailableMessage)
-                        .font(.callout)
-                        .fixedSize(horizontal: false, vertical: true)
-                        .accessibilityIdentifier("invite.unavailable")
-                    Button(role: .destructive) {
-                        onRevoke()
-                        onClose()
-                    } label: {
-                        Text(InviteSheetCopy.revoke).frame(maxWidth: .infinity, minHeight: 44)
-                    }
-                    .buttonStyle(.bordered)
-                    .accessibilityIdentifier("invite.revoke")
-                }
-                .padding()
-            }
-            .scrollBounceBehavior(.basedOnSize)
-        }
+        ConfirmSheet(
+            systemImage: PendingInvitationCopy.systemImage(for: invitation.role),
+            tint: Palette.sleep,
+            title: PendingInvitationCopy.title(for: invitation.role),
+            message: PendingInvitationCopy.expiry(invitation.expiresAt) + "\n\n" + PendingInvitationCopy.unavailableMessage,
+            confirm: SheetAction(InviteSheetCopy.revoke, identifier: "invite.revoke") {
+                onRevoke()
+                onClose()
+            },
+            isDestructive: true,
+            cancel: SheetAction(PendingInvitationCopy.close, identifier: "invite.close", action: onClose),
+            messageIdentifier: "invite.unavailable"
+        )
     }
 }

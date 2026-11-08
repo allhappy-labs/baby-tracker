@@ -1,6 +1,7 @@
 import Foundation
 import SwiftUI
 import BabyCore
+import BabyUI
 
 public enum AskCopy {
     public static let title = String(localized: "Ask", bundle: .module)
@@ -13,6 +14,8 @@ public enum AskCopy {
 public struct AskView: View {
     @State private var model: AskViewModel
     private let babyName: String
+    private let babyAvatar: BabyAvatar
+    private let onSwitchBaby: (() -> Void)?
     private let birthDate: Date
     private let volumeUnit: VolumeUnit
     private let onOpenSource: (AskSource) -> Void
@@ -21,10 +24,13 @@ public struct AskView: View {
     @State private var responseTask: Task<Void, Never>?
     @FocusState private var questionFocused: Bool
 
-    public init(model: AskViewModel, babyName: String, birthDate: Date, volumeUnit: VolumeUnit,
+    public init(model: AskViewModel, babyName: String, babyAvatar: BabyAvatar, birthDate: Date,
+                volumeUnit: VolumeUnit, onSwitchBaby: (() -> Void)? = nil,
                 onOpenSource: @escaping (AskSource) -> Void) {
         _model = State(wrappedValue: model)
         self.babyName = babyName
+        self.babyAvatar = babyAvatar
+        self.onSwitchBaby = onSwitchBaby
         self.birthDate = birthDate
         self.volumeUnit = volumeUnit
         self.onOpenSource = onOpenSource
@@ -32,68 +38,19 @@ public struct AskView: View {
 
     public var body: some View {
         NavigationStack {
-            ScrollViewReader { proxy in
-                ScrollView {
-                    LazyVStack(alignment: .leading, spacing: 24) {
-                        if model.turns.isEmpty && model.pendingQuestion == nil {
-                            emptyState
-                        }
-                        ForEach(Array(model.turns.enumerated()), id: \.element.id) { index, turn in
-                            VStack(alignment: .leading, spacing: 16) {
-                                userMessage(turn.question, id: "ask.message.user.\(index)")
-                                assistantMessage(turn, index: index)
-                            }
-                        }
-                        if let pending = model.pendingQuestion {
-                            userMessage(pending, id: "ask.message.pending")
-                            HStack(alignment: .top, spacing: 10) {
-                                assistantIcon
-                                if let streaming = model.streamingAnswer {
-                                    Text(AskViewModel.displayText(streaming))
-                                        .font(.body)
-                                        .frame(maxWidth: .infinity, alignment: .leading)
-                                        .accessibilityIdentifier("ask.streaming")
-                                } else {
-                                    ProgressView()
-                                    Text(String(localized: "Thinking…", bundle: .module))
-                                        .foregroundStyle(.secondary)
-                                }
-                            }
-                            .accessibilityIdentifier("ask.loading")
-                        }
-                        Color.clear.frame(height: 1).id("ask.bottom")
-                    }
-                    .frame(maxWidth: 680)
-                    .frame(maxWidth: .infinity)
-                    .padding(.horizontal, 16)
-                    .padding(.vertical, 20)
-                }
-                .scrollDismissesKeyboard(.interactively)
-                .onChange(of: model.turns.count) { _, _ in
-                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("ask.bottom", anchor: .bottom) }
-                }
-                .onChange(of: model.streamingAnswer) { _, _ in
-                    proxy.scrollTo("ask.bottom", anchor: .bottom)
-                }
-                .onChange(of: model.pendingQuestion) { _, pending in
-                    if pending != nil {
-                        withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("ask.bottom", anchor: .bottom) }
-                    }
-                }
-            }
-            .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+            ScreenScaffold(
+                header: .baby(name: babyName, avatar: babyAvatar, switcherID: "ask.babySwitcher",
+                              headingID: "ask.babyName", onSwitch: onSwitchBaby),
+                scrolls: false,
+                trailing: { newChatButton },
+                content: { conversation }
+            )
             .navigationTitle(AskCopy.title)
             #if os(iOS)
-            .navigationBarTitleDisplayMode(.inline)
+            // The header is drawn by the scaffold, so the bar would leave a
+            // tall empty band above it.
+            .toolbar(.hidden, for: .navigationBar)
             #endif
-            .toolbar {
-                Button { confirmingNewChat = true } label: {
-                    Image(systemName: "square.and.pencil")
-                }
-                .accessibilityLabel(AskCopy.newChat)
-                .accessibilityIdentifier("ask.newChat")
-                .disabled(model.turns.isEmpty && model.pendingQuestion == nil)
-            }
         }
         .task {
             model.updatePresentation(babyName: babyName, birthDate: birthDate, volumeUnit: volumeUnit)
@@ -113,56 +70,115 @@ public struct AskView: View {
             responseTask?.cancel()
             model.cancelPending()
         }
-        .alert(String(localized: "Delete this chat?", bundle: .module), isPresented: $confirmingNewChat) {
-            Button(String(localized: "Delete Chat", bundle: .module), role: .destructive) {
-                responseTask?.cancel()
-                do { try model.confirmNewChat() }
-                catch { loadError = String(localized: "Could not delete this chat.", bundle: .module) }
-            }
-            .accessibilityIdentifier("ask.confirmNewChat")
-            Button(String(localized: "Cancel", bundle: .module), role: .cancel) {}
-                .accessibilityIdentifier("ask.cancelNewChat")
-        } message: {
-            Text(String(localized: "This removes the conversation for this child from this device.", bundle: .module))
+        .confirmDelete(
+            isPresented: $confirmingNewChat,
+            title: String(localized: "Delete this chat?", bundle: .module),
+            deleteTitle: String(localized: "Delete Chat", bundle: .module),
+            keepTitle: String(localized: "Cancel", bundle: .module),
+            identifierPrefix: "ask",
+            message: String(localized: "This removes the conversation for this child from this device.", bundle: .module)
+        ) {
+            responseTask?.cancel()
+            do { try model.confirmNewChat() }
+            catch { loadError = String(localized: "Could not delete this chat.", bundle: .module) }
         }
     }
 
+    private var newChatButton: some View {
+        CircleIconButton(
+            systemImage: "square.and.pencil",
+            label: AskCopy.newChat,
+            identifier: "ask.newChat"
+        ) { confirmingNewChat = true }
+        .disabled(model.turns.isEmpty && model.pendingQuestion == nil)
+    }
+
+    private var conversation: some View {
+        ScrollViewReader { proxy in
+            ScrollView {
+                LazyVStack(alignment: .leading, spacing: Spacing.xl) {
+                    if model.turns.isEmpty && model.pendingQuestion == nil {
+                        emptyState
+                    }
+                    ForEach(Array(model.turns.enumerated()), id: \.element.id) { index, turn in
+                        VStack(alignment: .leading, spacing: Spacing.l) {
+                            userMessage(turn.question, id: "ask.message.user.\(index)")
+                            assistantMessage(turn, index: index)
+                        }
+                    }
+                    if let pending = model.pendingQuestion {
+                        userMessage(pending, id: "ask.message.pending")
+                        HStack(alignment: .top, spacing: Spacing.m) {
+                            assistantIcon
+                            if let streaming = model.streamingAnswer {
+                                Text(AskViewModel.displayText(streaming))
+                                    .textRole(.body)
+                                    .frame(maxWidth: .infinity, alignment: .leading)
+                                    .accessibilityIdentifier("ask.streaming")
+                            } else {
+                                ProgressView()
+                                Text(String(localized: "Thinking…", bundle: .module))
+                                    .textRole(.caption)
+                            }
+                        }
+                        .accessibilityIdentifier("ask.loading")
+                    }
+                    Color.clear.frame(height: 1).id("ask.bottom")
+                }
+                .frame(maxWidth: 680)
+                .frame(maxWidth: .infinity)
+                .padding(.horizontal, Spacing.l)
+                .padding(.vertical, Spacing.xl)
+            }
+            .scrollDismissesKeyboard(.interactively)
+            .onChange(of: model.turns.count) { _, _ in
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("ask.bottom", anchor: .bottom) }
+            }
+            .onChange(of: model.streamingAnswer) { _, _ in
+                proxy.scrollTo("ask.bottom", anchor: .bottom)
+            }
+            .onChange(of: model.pendingQuestion) { _, pending in
+                if pending != nil {
+                    withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo("ask.bottom", anchor: .bottom) }
+                }
+            }
+        }
+        .safeAreaInset(edge: .bottom, spacing: 0) { composer }
+    }
+
     private var emptyState: some View {
-        VStack(alignment: .leading, spacing: 18) {
-            Image(systemName: "sparkles")
-                .font(.title)
-                .foregroundStyle(.tint)
-                .accessibilityHidden(true)
-            Text(String(localized: "What's on your mind?", bundle: .module))
-                .font(.title2.weight(.semibold))
-            Text(String(format: String(localized: "Ask about %@’s care, or ask a general parenting question.", bundle: .module), babyName))
-                .foregroundStyle(.secondary)
-            VStack(alignment: .leading, spacing: 10) {
+        VStack(spacing: Spacing.l) {
+            EmptyState(
+                systemImage: "sparkles",
+                title: String(localized: "What's on your mind?", bundle: .module),
+                message: String(format: String(localized: "Ask about %@’s care, or ask a general parenting question.", bundle: .module), babyName)
+            )
+            VStack(alignment: .leading, spacing: Spacing.m) {
                 suggestion(AskCopy.handoff, id: "ask.suggestion.handoff")
                 suggestion(AskCopy.overnight, id: "ask.suggestion.overnight")
                 suggestion(AskCopy.insights, id: "ask.suggestion.insights")
             }
-            .padding(.top, 8)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(.top, 36)
+        .padding(.top, Spacing.xl)
     }
 
     private func suggestion(_ text: String, id: String) -> some View {
         Button {
             responseTask = Task { await model.submit(text) }
         } label: {
-            HStack(spacing: 12) {
+            HStack(spacing: Spacing.m) {
                 Text(text)
+                    .textRole(.body)
                     .multilineTextAlignment(.leading)
-                Spacer(minLength: 8)
+                Spacer(minLength: Spacing.s)
                 Image(systemName: "arrow.up.left")
                     .font(.caption.weight(.semibold))
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(Palette.secondaryText)
             }
-            .padding(.horizontal, 16)
-            .padding(.vertical, 13)
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 16))
+            .padding(.horizontal, Spacing.l)
+            .padding(.vertical, Spacing.m)
+            .background(Surface.card, in: RoundedRectangle(cornerRadius: Radius.card))
         }
         .buttonStyle(.plain)
         .accessibilityIdentifier(id)
@@ -172,10 +188,10 @@ public struct AskView: View {
         HStack {
             Spacer(minLength: 44)
             Text(question)
-                .font(.body)
-                .padding(.horizontal, 16)
-                .padding(.vertical, 12)
-                .background(Color.accentColor.opacity(0.22), in: RoundedRectangle(cornerRadius: 20))
+                .textRole(.body)
+                .padding(.horizontal, Spacing.l)
+                .padding(.vertical, Spacing.m)
+                .background(Surface.tint(Palette.sleep, .soft), in: RoundedRectangle(cornerRadius: Radius.card))
                 .accessibilityIdentifier(id)
         }
     }
@@ -183,38 +199,33 @@ public struct AskView: View {
     private var assistantIcon: some View {
         Image(systemName: "sparkles")
             .font(.caption.weight(.semibold))
-            .foregroundStyle(.tint)
+            .foregroundStyle(Palette.feed)
             .frame(width: 28, height: 28)
-            .background(.thinMaterial, in: Circle())
+            .background(Surface.card, in: Circle())
             .accessibilityHidden(true)
     }
 
     private func assistantMessage(_ turn: AskTurn, index: Int) -> some View {
-        HStack(alignment: .top, spacing: 10) {
+        HStack(alignment: .top, spacing: Spacing.m) {
             assistantIcon
-            VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: Spacing.m) {
                 if turn.answerKind == .general {
                     Text(String(localized: "General information · not from the log", bundle: .module))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .textRole(.caption)
                 }
                 Text(AskViewModel.displayText(turn.answer ?? ""))
-                    .font(.body)
+                    .textRole(.body)
                     .textSelection(.enabled)
                     .accessibilityIdentifier("ask.answer.\(index)")
                 let links = AskViewModel.linkedSources(turn.sources)
                 if !links.isEmpty {
                     ScrollView(.horizontal) {
-                        HStack(spacing: 8) {
+                        HStack(spacing: Spacing.s) {
                             ForEach(Array(links.enumerated()), id: \.offset) { sourceIndex, source in
                                 Button {
                                     onOpenSource(source)
                                 } label: {
-                                    Label(model.sourceLabel(source), systemImage: "arrow.up.right")
-                                        .font(.caption.weight(.medium))
-                                        .padding(.horizontal, 10)
-                                        .padding(.vertical, 7)
-                                        .background(.thinMaterial, in: Capsule())
+                                    Chip(model.sourceLabel(source), systemImage: "arrow.up.right", size: .small)
                                 }
                                 .buttonStyle(.plain)
                                 .accessibilityIdentifier("ask.source.\(sourceIndex)")
@@ -225,14 +236,12 @@ public struct AskView: View {
                 }
                 if links.isEmpty, let range = turn.queriedRange {
                     Text(model.rangeCaption(range))
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
+                        .textRole(.caption)
                         .accessibilityIdentifier("ask.range.\(index)")
                 }
                 if let answered = turn.answeredAt {
                     Text(answered.formatted(date: .abbreviated, time: .shortened))
-                        .font(.caption2)
-                        .foregroundStyle(.tertiary)
+                        .textRole(.caption)
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -241,50 +250,44 @@ public struct AskView: View {
     }
 
     private var composer: some View {
-        VStack(spacing: 7) {
+        VStack(spacing: Spacing.s) {
             if let error = model.errorMessage ?? loadError {
                 HStack {
-                    Text(error)
-                        .font(.caption)
-                        .foregroundStyle(.red)
+                    InlineError(error)
                         .accessibilityIdentifier("ask.error")
                     Spacer()
                     if !model.draft.isEmpty {
                         Button(String(localized: "Retry", bundle: .module), action: send)
                     }
                 }
-                .padding(.horizontal, 16)
+                .padding(.horizontal, Spacing.l)
             }
-            HStack(alignment: .bottom, spacing: 6) {
+            HStack(alignment: .bottom, spacing: Spacing.xs) {
                 TextField(String(localized: "Ask a question", bundle: .module), text: $model.draft, axis: .vertical)
                     .lineLimit(1...5)
-                    .font(.body)
+                    .textRole(.body)
                     .focused($questionFocused)
                     .submitLabel(.send)
                     .onSubmit(send)
                     .disabled(model.isLoading)
                     .accessibilityIdentifier("ask.question")
-                    .padding(.leading, 12)
-                    .padding(.vertical, 10)
-                Button(action: send) {
-                    Image(systemName: "arrow.up")
-                        .font(.body.weight(.bold))
-                        .foregroundStyle(canSend ? .white : .secondary)
-                        .frame(width: 38, height: 38)
-                        .background(canSend ? Color.accentColor : Color.secondary.opacity(0.2), in: Circle())
-                }
-                .buttonStyle(.plain)
-                .frame(width: 44, height: 44)
-                .accessibilityLabel(String(localized: "Send", bundle: .module))
-                .accessibilityIdentifier("ask.send")
+                    .padding(.leading, Spacing.m)
+                    .padding(.vertical, Spacing.m)
+                CircleIconButton(
+                    systemImage: "arrow.up",
+                    label: String(localized: "Send", bundle: .module),
+                    identifier: "ask.send",
+                    isProminent: canSend,
+                    action: send
+                )
                 .disabled(!canSend)
+                .padding(.trailing, Spacing.xs)
             }
-            .background(.thinMaterial, in: RoundedRectangle(cornerRadius: 22))
-            .padding(.horizontal, 12)
+            .background(Surface.card, in: RoundedRectangle(cornerRadius: Radius.card))
+            .padding(.horizontal, Spacing.l)
         }
-        .padding(.top, 8)
-        .padding(.bottom, 8)
-        .background(.bar)
+        .padding(.vertical, Spacing.s)
+        .background(Palette.ground)
     }
 
     private var canSend: Bool {

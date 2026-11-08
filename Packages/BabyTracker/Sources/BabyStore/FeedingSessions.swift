@@ -23,9 +23,10 @@ public enum FeedingSessionError: Error, Equatable {
     case differentBabies
     case alreadyOneSession
     case firstFeedCannotSeparate
-    /// Solids never join and are never joined — a rule enforced here, not
-    /// only in the suggestion/history layer above, so no caller can combine
-    /// a solids feed into a session by going straight to the store.
+    /// A session of solids alone never joins and is never joined — a rule
+    /// enforced here, not only in the suggestion/history layer above, so no
+    /// caller can combine one by going straight to the store. Solids join a
+    /// feed only by Add part (`addFeedPart`).
     case solidsNeverJoin
 }
 
@@ -62,7 +63,7 @@ public extension BabyStore {
             let groupIDs = Set(selected.map(\.effectiveFeedingSessionID))
             guard groupIDs.count > 1 else { throw FeedingSessionError.alreadyOneSession }
             let affected = feeds.filter { groupIDs.contains($0.effectiveFeedingSessionID) }
-            guard !affected.contains(where: { $0.kind == .solids }) else {
+            guard groupIDs.allSatisfy({ Self.hasMilk($0, in: affected) }) else {
                 throw FeedingSessionError.solidsNeverJoin
             }
             let target = affected.min(by: Self.feedOrder)!.effectiveFeedingSessionID

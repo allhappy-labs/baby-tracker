@@ -191,7 +191,7 @@ public struct SupplementSheet: View {
             EntryPanel(title: SupplementSheetCopy.title, icon: .meds, tint: Palette.meds, canSave: model.canLog,
                        identifierPrefix: "supplement", onCancel: onDone,
                        onSave: saveOrLog, onDelete: deleteAction, accessory: AnyView(addNameButton)) {
-                PanelSection {
+                CardSection {
                     if model.isAddingName {
                         if model.names.isEmpty { Text(SupplementSheetCopy.invitation) }
                         TextField(SupplementSheetCopy.name, text: $model.newName)
@@ -204,7 +204,7 @@ public struct SupplementSheet: View {
                     } else if model.showsPicker {
                         // Outside a Form a menu picker shows no label: the
                         // row names it.
-                        LabeledContent(LoggingL10n.text("Med")) {
+                        LabeledRow(LoggingL10n.text("Med")) {
                             Picker(LoggingL10n.text("Med"), selection: $model.selectedName) {
                                 ForEach(model.names, id: \.self) { Text($0).tag($0) }
                             }
@@ -217,7 +217,7 @@ public struct SupplementSheet: View {
                 } footer: {
                     if model.isAddingName && !model.canLog { Text(SupplementSheetCopy.validation) }
                 }
-                PanelSection {
+                CardSection {
                     EditTimeRow(SupplementSheetCopy.time, date: $model.when,
                                 latest: model.latestAllowedDate, identifier: "supplement.time")
                 }
@@ -225,7 +225,7 @@ public struct SupplementSheet: View {
                     DetailFieldRow(EditChromeCopy.note, text: $model.note, identifier: "supplement.note")
                 }
                 if let error = model.errorMessage {
-                    PanelSection { Text(error).foregroundStyle(.red).accessibilityIdentifier("supplement.error") }
+                    InlineError(error).accessibilityIdentifier("supplement.error")
                 }
             }
             .editLifecycle(isPresented: model.isEditing, revision: store.revision, isGone: model.isGone,
@@ -234,13 +234,10 @@ public struct SupplementSheet: View {
 
     /// Add a med name: at the header's right, where the toolbar had it.
     private var addNameButton: some View {
-        Button { model.addName(); nameFocused = true } label: {
-            Image(systemName: "plus").frame(width: 20, height: 20)
+        CircleIconButton(systemImage: "plus", label: SupplementSheetCopy.addName, identifier: "supplement.add") {
+            model.addName()
+            nameFocused = true
         }
-        .buttonStyle(.glass)
-        .controlSize(.large)
-        .accessibilityLabel(SupplementSheetCopy.addName)
-        .accessibilityIdentifier("supplement.add")
     }
 
     private func saveOrLog() {
